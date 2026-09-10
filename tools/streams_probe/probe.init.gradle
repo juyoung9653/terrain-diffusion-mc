@@ -1,0 +1,21 @@
+// Opt-in diagnostic source set. Pass this init script explicitly; production builds do not see it.
+gradle.projectsEvaluated {
+    def neoforge = gradle.rootProject.findProject(':neoforge')
+    if (neoforge != null) {
+        neoforge.sourceSets.main.java.srcDir(new File(gradle.rootProject.rootDir, 'tools/streams_probe/java'))
+        def probeDir = gradle.rootProject.findProperty('tdProbeDir')
+        if (probeDir != null) {
+            neoforge.extensions.getByName('neoForge').runs.named('server') {
+                gameDirectory = neoforge.file(probeDir)
+            }
+        }
+        neoforge.tasks.named('runServer') {
+            systemProperty 'td.streamsProbe', 'true'
+            maxHeapSize = '6G'
+            args 'nogui'
+            gradle.rootProject.properties.findAll { key, value -> key.startsWith('tdProbe.') }.each { key, value ->
+                systemProperty "td.streamsProbe.${key.substring('tdProbe.'.length())}", value.toString()
+            }
+        }
+    }
+}

@@ -1,0 +1,160 @@
+# Streams Reflowing integration probe
+
+Opt-in dedicated-server diagnostic for Minecraft 1.21.1 / NeoForge 21.1.249,
+Streams Reflowing 2.13.1 and the current Terrain Diffusion source tree. Normal
+builds do not include the diagnostic Java directory. Do not package a release
+with `probe.init.gradle` enabled.
+
+## Isolation and scope
+
+`prepare.py` copies only selected mod jars, configs and model assets from a Prism
+instance. It creates a fresh world below `build/streams-probe/`; existing run
+directories are refused. It never copies or edits the player's worlds. The
+server listens only on `127.0.0.1:25585`, disables structures and mob spawning,
+and sets spawn chunk radius to zero through the gated diagnostic subscriber.
+Run one GPU test server at a time.
+
+Preparation writes `eula=true` for the Minecraft development server. Use it only
+when authorized to run Minecraft under its EULA.
+
+```powershell
+python tools/streams_probe/prepare.py --source '<Prism instance>/minecraft' --name minimal-12345
+& tools/streams_probe/run.ps1 -Name minimal-12345 -GradleUserHome '<user>/.gradle'
+python tools/streams_probe/summarize.py build/streams-probe/minimal-12345
+```
+
+Add `--terralith` to preparation to copy the installed Terralith jar and the
+required Lithostitched jar (which embeds Apollib), plus the repository's existing
+generated compatibility datapack. Add `--c2me` for the installed parallel chunk
+generation mod. Use `--dry-floor 1`
+in a **separate new run** to remove the dry-biome stream floor as a limiting
+factor. That is an experimental control, not a recommended gameplay setting.
+
+For a causal same-terrain control, prepare a separate run with
+`--disable-waterways`, then pass the same `-Chunks '60,29;61,29;62,29;60,30'`
+to both runs. This bypasses route discovery and compares identical coordinates.
+Use `compare.py ENABLED CONTROL --output REPORT.json` to verify all sampled base
+heights and natural biomes match before attributing surface-water differences.
+`plot_comparison.py` exports a map from measured blocks, not a game screenshot.
+
+`--fixed-biome minecraft:desert` is a **synthetic biome experiment**: it keeps TD's
+terrain function but replaces the entire biome source with a fixed desert. It
+does not reproduce a naturally selected desert/ocean biome boundary. Interpret
+negative results cautiously because outlet biome conditions also change.
+
+`input-manifest.json` records selected jar/model hashes and the seed.
+`build.log` contains Gradle output. `logs/latest.log` contains game output.
+The probe emits compact `[TD-SR-PROBE]` JSON records and writes receipts to
+`world/td-streams-probe.jsonl` on completion.
+
+## Interpretation
+
+The probe searches for Streams-planned channel samples near the spawn, then
+generates a bounded set of FULL chunks through normal server generation. It
+records planned channels, actual water (including flowing water), surface
+biomes, and the generator's base height versus TD's tile-aligned heightfield.
+A run with no candidates is **incomplete**, not a compatibility failure. A
+successful server exit alone is not proof that Streams carved correctly.
+Read route and block-placement evidence together.
+
+For fixed-chunk diagnosis, pass `-PtdProbe.planAudit=true` directly to Gradle
+with the probe init script and an **absolute** `-PtdProbeDir` path. After each
+requested FULL chunk, this queries the already initialized Streams engine and
+writes `td-streams-probe-plan-audit-<x>-<z>.csv` in the world directory. Check
+`planAuditStatus` before interpreting it: an absent engine or reflection error
+is not a negative route result. `naturalPreCarveY` is the first-air boundary;
+`naturalGroundMinusPlanWater` subtracts one before comparing to planned water.
+`actualGroundY` is the separate post-generation ground measurement. These are
+post-generation plans, not a trace captured during the original carve call.
+
+Total water and water below the base-height boundary include underground water
+from other generation stages. The savanna control demonstrated this directly:
+the control contained *more total underground water* while having no surface
+water. Compare matched **surface** columns, not total water volume, to attribute
+a carved surface waterway.
+
+The TD pre-carve value is its density-zero boundary; the expected highest solid
+block is one lower. Runtime surface heightmaps and base-height queries have
+different conventions. Generated decorations and carving can change actual
+surface heights.
+
+The test disables normal spawn pre-generation and structures to isolate terrain
+and stream placement. It does not establish compatibility with all mods in the
+player's pack, structures, client rendering, or visually natural waterways.
+
+## Verified setup pitfalls
+
+- Streams 2.13.1 requires NeoForge >=21.1.173. The repository default 21.1.80
+  cannot load it; `run.ps1` overrides the version to the user's 21.1.249 without
+  changing project defaults.
+- Pass dotted Gradle properties as single quoted strings/argument-array entries
+  in PowerShell. An unquoted `-Pneoforge_version=21.1.249` was received as `21`,
+  producing a misleading Minecraft 1.21.11 classpath error.
+- Offline compilation may succeed while offline server launch fails because
+  server-only runtime dependencies have not been cached. The first run can
+  download these; later runs may use `-Offline`.
+- NeoForge can exit with a successful Gradle task after a mod-loading failure.
+  Require the probe's own completion receipt and actual chunk measurements.
+- With spawn radius zero, Streams may not yet have an engine at ServerStarted.
+  Route discovery initializes its normal lazy engine factory before querying it.
+
+## Verified result: natural savanna
+
+Tested 2026-09-10 using this working tree, seed `12345`, scale `2`, CUDA, and the
+installed Streams config (`wetnessDryFloor=0.02`). No production terrain code was
+changed for this test.
+
+- First route discovery selected chunks `(60,29)`, `(61,29)`, `(62,29)`, `(60,30)`.
+  Actual generation completed in 166.2 seconds measured from probe start, mostly
+  spent initializing/calibrating Streams terrain sampling.
+- Reloaded those saved chunks for detailed attribution, then generated the same
+  coordinates in a new world with Streams rivers/lakes disabled.
+- All 1,024 base heights and natural biome identities matched. Every sampled
+  natural biome was `minecraft:savanna`.
+- Surface water: **502 columns enabled, 0 disabled**. All 502 enabled columns
+  had water below the control's pre-carve terrain boundary. The control disables
+  rivers and lakes together, so this attributes the change to Streams waterways
+  collectively. It does not distinguish the river feature from the lake feature
+  or directly inspect control-block solidity at each enabled water position.
+- Representative route area: block X `960..1007`, Z `464..495`; only the four
+  named chunks were measured. This proves surface waterway generation works in
+  this combination; it does not establish global frequency or visual quality.
+
+Raw local evidence is under `build/streams-probe/`: `savanna-comparison.json`,
+`savanna-comparison.png`, each run's receipt/column CSV, and
+`minimal-12345/first-generation-receipt.jsonl` for the original planned-route
+samples. These generated artifacts are intentionally not versioned.
+
+## Additional isolated runs
+
+All runs use the current local TD source, not an independently verified copy of
+the TD jar in the player's instance. Streams is the installed 2.13.1 jar.
+
+| Run | Observed result |
+| --- | --- |
+| Terralith 2.6.2 + Lithostitched 1.8.0-beta.6 + existing surface compatibility pack | Four chunks completed; 477 surface-water columns; natural biome `terralith:mirage_isles` |
+| Same + C2ME 0.4.0-alpha.0.120 | Four chunks completed; 482 surface-water columns; planned routes overlapped actual surface water |
+| Synthetic fixed desert, original `wetnessDryFloor=0.02` | No route candidates within the bounded search; incomplete, not a crash |
+| Synthetic fixed desert, `wetnessDryFloor=1` | Four chunks completed; 521 surface-water columns; all 1,024 natural-biome samples desert |
+
+The desert pair changes only the copied dry-floor setting. It supports climate
+dryness as a cause of missing routes in that synthetic scenario, not a guarantee
+that every natural desert will gain a river. `1` was an experimental extreme.
+Terralith/C2ME runs establish sampled generation, not identical block placement
+between configurations or compatibility with the entire player modpack.
+
+Discovery-based runs call Streams' normal lazy engine factory before generating
+chunks. Fixed `-Chunks` runs skip both discovery and this explicit initialization;
+use a **fresh enabled world** with fixed coordinates to test ordinary chunk-driven
+initialization. Reopening an already generated world cannot establish that.
+
+`natural-init-12345` performed that fresh-world check at the four savanna chunks
+above: no route discovery or explicit engine initialization, completion in 144.0
+seconds, all 1,024 base heights/biomes matching the disabled control, and again
+**502 surface-water columns versus 0**. Evidence:
+`build/streams-probe/natural-init-comparison.json` and `.png`. Underground water
+counts differed from the discovery-based run; surface results matched. This
+supports ordinary chunk-driven placement without claiming full block determinism.
+
+Validation also passed Python compilation, PowerShell parsing, diagnostic Java
+compilation, and normal Java compilation without the probe init script.

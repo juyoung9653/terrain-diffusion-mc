@@ -1,9 +1,12 @@
 {
-  "required": false,
+  "required": true,
   "minVersion": "0.8",
   "package": "com.github.xandergos.terraindiffusionmc.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": [],
+  "plugin": "com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin",
+  "mixins": [
+    "StreamsStructureShieldMixin"
+  ],
   "injectors": {
     "defaultRequire": 1
   }

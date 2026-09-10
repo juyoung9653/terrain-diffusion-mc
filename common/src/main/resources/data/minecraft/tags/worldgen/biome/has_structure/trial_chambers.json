@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    "terrain-diffusion-mc:forest_sparse",
+    "terrain-diffusion-mc:taiga_sparse",
+    "terrain-diffusion-mc:snowy_taiga_sparse"
+  ]
+}
