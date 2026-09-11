@@ -221,6 +221,7 @@
       "minecraft:temperature"
     ],
     "high_altitude_note": "The source has absolute anchors from 0 through 319 but no y_above/y_below upper-bound predicate; above_preliminary_surface follows TD's preliminary surface.",
+    "minecraft_1_21_1_preliminary_density_validated": true,
     "td_bedrock_rule_preserved": true,
     "td_deepslate_rule_preserved": true,
     "td_noise_shape_preserved": true,

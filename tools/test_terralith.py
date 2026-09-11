@@ -33,11 +33,17 @@ def main():
     target.mkdir(parents=True, exist_ok=True)
     package = Path("com/github/xandergos/terraindiffusionmc/pipeline")
     sources = [ROOT / "common/src/main/java" / package / (name + ".java")
-               for name in ("FastNoiseLite", "TerralithBiomeClassifier", "BiomeClassifier")]
+               for name in ("FastNoiseLite", "TerralithBiomeClassifier", "BiomeClassifier", "MacroBiomeContext")]
     sources.append(ROOT / "common/src/test/java" / package / "TerralithBiomeClassifierTest.java")
+    sources.append(ROOT / "common/src/test/java" / package / "MacroBiomeContextTest.java")
+    world_package = Path("com/github/xandergos/terraindiffusionmc/world")
+    sources.append(ROOT / "common/src/main/java" / world_package / "LowlandCarvingGuard.java")
+    sources.append(ROOT / "common/src/test/java" / world_package / "LowlandCarvingGuardTest.java")
     run(javac, "--release", "21", "-encoding", "UTF-8", "-d", target, *sources)
     classpath = os.pathsep.join([str(target), str(ROOT / "common/src/main/resources")])
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifierTest", args.jar.resolve())
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.LowlandCarvingGuardTest")
     run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith/tests", "-v")
     run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith_integration", "-v")
     for inverse in (False, True):

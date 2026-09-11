@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.diagnostic;
 
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
+import com.mojang.serialization.JsonOps;
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
 import com.github.xandergos.terraindiffusionmc.world.river.RiverPreviewService;
@@ -14,7 +15,11 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
+import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
+import net.minecraft.world.level.levelgen.SurfaceRules;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.material.Fluids;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -132,6 +137,10 @@ public final class StreamsReflowingProbe {
                             writePlanAuditCsv(server, receipt);
                         }
                         writeColumnCsv(server, receipt);
+                        if (Boolean.getBoolean("td.streamsProbe.surfaceAudit")) {
+                            writeSurfaceAuditCsv(server, receipt);
+                            emit(receipts, receipt.surfaceAuditJson());
+                        }
                         completed.add(receipt);
                         if (!riverPreview) emit(receipts, receipt.json());
                         if (Boolean.getBoolean("td.streamsProbe.shieldAudit")) {
@@ -353,6 +362,7 @@ public final class StreamsReflowingProbe {
                 result.columns.add(new ColumnSnapshot(x, z, baseHeight, surface, topWaterY, groundY, naturalBiome));
             }
         }
+        if (Boolean.getBoolean("td.streamsProbe.surfaceAudit")) auditSurface(level, chunk, generator, result);
         result.sampleX = (chunkX << 4) + 8;
         result.sampleZ = (chunkZ << 4) + 8;
         result.baseHeight = generator.getBaseHeight(result.sampleX, result.sampleZ, Heightmap.Types.OCEAN_FLOOR_WG,
@@ -680,6 +690,86 @@ public final class StreamsReflowingProbe {
         }
     }
 
+    /** Reads saved chunk blocks/biomes and the generator's direct biome-source prediction; no Streams types are referenced. */
+    private static void auditSurface(ServerLevel level, LevelChunk chunk, ChunkGenerator generator, ChunkReceipt receipt) {
+        int minY = level.getMinBuildHeight(), maxY = level.getMaxBuildHeight();
+        receipt.surfaceRuleTrace = surfaceRuleTrace(level, generator);
+        for (int localZ=0; localZ<16; localZ++) for (int localX=0; localX<16; localX++) {
+            int x=(receipt.chunkX<<4)+localX, z=(receipt.chunkZ<<4)+localZ, topmost=minY-1, topSolid=minY-1, topWater=minY-1;
+            String topmostMaterial="minecraft:air";
+            for (int y=maxY-1; y>=minY; y--) {
+                var state=chunk.getBlockState(new BlockPos(x,y,z));
+                if (topmost < minY && !state.isAir()) { topmost=y; topmostMaterial=String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock())); }
+                if (topWater < minY && state.getFluidState().is(FluidTags.WATER)) topWater=y;
+                // Terrain-surface approximation: ignore foliage/log decoration and require a solid ground block.
+                if (topSolid < minY && state.isSolid() && !state.is(BlockTags.LEAVES) && !state.is(BlockTags.LOGS)) topSolid=y;
+                if (topmost >= minY && topSolid >= minY && topWater >= minY) break;
+            }
+            BlockPos pos=new BlockPos(x, Math.max(minY, topSolid), z);
+            String material=String.valueOf(net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(chunk.getBlockState(pos).getBlock()));
+            String actual=level.getBiome(pos).unwrapKey().map(ResourceKey::location)
+                    .map(id -> id.getNamespace()+":"+id.getPath()).orElse("unkeyed");
+            String predicted=generator.getBiomeSource().getNoiseBiome(x>>2, Math.max(minY,topSolid)>>2,z>>2,
+                    level.getChunkSource().randomState().sampler()).unwrapKey().map(ResourceKey::location)
+                    .map(id -> id.getNamespace()+":"+id.getPath()).orElse("unkeyed");
+            boolean mismatch=!actual.equals(predicted), grassBeach="minecraft:grass_block".equals(material) && "terralith:gravel_beach".equals(actual);
+            if (mismatch) receipt.surfaceBiomeMismatchColumns++;
+            if (grassBeach) receipt.grassInGravelBeachColumns++;
+            receipt.surfaceMaterialCounts.merge(material,1,Integer::sum);
+            receipt.surfaceAuditRows.add(x+","+z+","+topmost+","+csv(topmostMaterial)+","+topSolid+","+csv(material)+","+csv(actual)+","+csv(predicted)+","+topWater+","+mismatch+","+grassBeach);
+        }
+    }
+
+    private static String surfaceRuleTrace(ServerLevel level, ChunkGenerator generator) {
+        try {
+            String settingsId = "unknown";
+            try {
+                Object holder = generator.getClass().getMethod("generatorSettings").invoke(generator);
+                Object optional = holder.getClass().getMethod("unwrapKey").invoke(holder);
+                if (optional instanceof java.util.Optional<?> key && key.isPresent()) {
+                    Object location = key.get().getClass().getMethod("location").invoke(key.get());
+                    settingsId = String.valueOf(location);
+                }
+            } catch (ReflectiveOperationException ignored) { }
+            if ("unknown".equals(settingsId) || !settingsId.contains(":")) return "settings=unknown;resource_unresolved;"+runtimeSurfaceRuleTrace(level, generator);
+            String[] id = settingsId.split(":", 2);
+            String expected = id[0] + ":worldgen/noise_settings/" + id[1] + ".json";
+            var resources=level.getServer().getResourceManager().listResources("worldgen/noise_settings", path -> path.toString().equals(expected));
+            var resource=resources.get(net.minecraft.resources.ResourceLocation.parse(expected));
+            if (resource == null) return "settings="+settingsId+";expected="+expected+";resource_unresolved;"+runtimeSurfaceRuleTrace(level, generator);
+            try (var stream=resource.open()) {
+                String text=new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+                return "settings="+settingsId+";resource="+expected+";pack="+resource.sourcePackId()
+                        +";resource_contains_gravel_beach="+text.contains("terralith:gravel_beach")+";"+runtimeSurfaceRuleTrace(level, generator);
+            }
+        } catch (Exception e) { return "surface_rule_trace_unavailable:"+e.getClass().getSimpleName(); }
+    }
+
+    /** Runtime object trace detects modifications applied after a datapack resource was loaded. */
+    private static String runtimeSurfaceRuleTrace(ServerLevel level, ChunkGenerator generator) {
+        if (!(generator instanceof NoiseBasedChunkGenerator noise)) return "runtime_surface_rule=unavailable:not_noise_based";
+        try {
+            NoiseGeneratorSettings settings = noise.generatorSettings().value();
+            var result = SurfaceRules.RuleSource.CODEC.encodeStart(JsonOps.INSTANCE, settings.surfaceRule());
+            var json = result.getOrThrow();
+            String encoded = json.toString();
+            Path output = level.getServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                    .resolve("td-streams-probe-runtime-surface-rule.json");
+            Files.writeString(output, encoded, java.nio.charset.StandardCharsets.UTF_8);
+            return "runtime_surface_rule_json="+output.getFileName()+";runtime_contains_gravel_beach="+encoded.contains("terralith:gravel_beach");
+        } catch (Throwable t) { return "runtime_surface_rule=unavailable:"+t.getClass().getSimpleName(); }
+    }
+
+    private static void writeSurfaceAuditCsv(MinecraftServer server, ChunkReceipt receipt) {
+        Path output=server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                .resolve("td-streams-probe-surface-audit-"+receipt.chunkX+"-"+receipt.chunkZ+".csv");
+        List<String> lines=new ArrayList<>(receipt.surfaceAuditRows.size()+1);
+        lines.add("x,z,actualTopmostY,actualTopmostBlock,terrainTopSolidY,terrainTopSolidBlock,actualSavedTerrainBiome,directBiomeSourceTerrainBiome,actualTopWaterY,predictedActualMismatch,grassBlockInGravelBeach");
+        lines.addAll(receipt.surfaceAuditRows);
+        try { Files.write(output,lines); receipt.surfaceAuditCsvFile=output.getFileName().toString(); }
+        catch (IOException e) { receipt.surfaceAuditCsvFile="write_error:"+e.getClass().getSimpleName(); }
+    }
+
     /** CSV is assembled on the server task but written by the probe worker after the chunk request completes. */
     private static void writeColumnCsv(MinecraftServer server, ChunkReceipt receipt) {
         Path output = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
@@ -982,6 +1072,10 @@ public final class StreamsReflowingProbe {
         long waterBlocks, waterAboveSeaBlocks, waterReplacingSolid;
         int surfaceWaterColumns, desertColumns, savannaColumns, otherBiomeColumns;
         String plannedChannelSamples = "", representativeReplacingSolid, csvFile = "";
+        String surfaceAuditCsvFile = "", surfaceRuleTrace = "";
+        int surfaceBiomeMismatchColumns, grassInGravelBeachColumns;
+        final List<String> surfaceAuditRows = new ArrayList<>();
+        final Map<String, Integer> surfaceMaterialCounts = new LinkedHashMap<>();
         String planAuditStatus = "disabled", planAuditError = "", planAuditNaturalGroundMinusWaterRange = "", planAuditCsvFile = "";
         String riverPreviewStatus = "disabled", riverPreviewMissingCoordinates = "", riverPreviewCsvFile = "", riverPreviewLeakedBankCoordinates = "", riverPreviewObstructedWaterCoordinates = "";
         String riverTickAuditStatus = "disabled";
@@ -998,6 +1092,10 @@ public final class StreamsReflowingProbe {
         final Map<String, Integer> naturalBiomeColumns = new LinkedHashMap<>();
         final Map<String, Long> waterReplacingSolidByNaturalBiome = new LinkedHashMap<>();
         ChunkReceipt(int chunkX, int chunkZ, int seaLevel) { this.chunkX = chunkX; this.chunkZ = chunkZ; this.seaLevel = seaLevel; }
+        String surfaceAuditJson() { return StreamsReflowingProbe.json("surface_audit", "chunk", chunkX+","+chunkZ,
+                "grassInGravelBeachColumns", grassInGravelBeachColumns, "predictedActualMismatchColumns", surfaceBiomeMismatchColumns,
+                "materialCounts", map(surfaceMaterialCounts), "csv", surfaceAuditCsvFile, "surfaceRuleTrace", surfaceRuleTrace,
+                "method", "actual_chunk_block+saved_level_biome+direct_generator_biome_source"); }
         String json() { return StreamsReflowingProbe.json("chunk", "chunk", chunkX + "," + chunkZ, "sample", sampleX + "," + sampleZ,
                 "seaLevel", seaLevel, "waterBlocks", waterBlocks, "waterAboveSeaBlocks", waterAboveSeaBlocks,
                 "surfaceWaterColumns", surfaceWaterColumns, "biomes", "desert=" + desertColumns + ";savanna=" + savannaColumns + ";other=" + otherBiomeColumns,

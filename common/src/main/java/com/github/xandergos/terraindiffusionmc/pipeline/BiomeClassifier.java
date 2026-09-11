@@ -7,6 +7,16 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
  * Biome IDs match the Python server's _BIOME_ID mapping.
  */
 public final class BiomeClassifier {
+    /** Coherent Terralith-only inputs supplied from a haloed smooth-terrain read. */
+    public record TerralithContext(float[] elevation, float[] slope, float[] temperature,
+                                   float[] precipitation, float[] precipitationCv, boolean[] coastal) {
+        boolean validFor(int length) {
+            return elevation != null && slope != null && temperature != null && precipitation != null
+                    && precipitationCv != null && coastal != null && elevation.length >= length
+                    && slope.length >= length && temperature.length >= length && precipitation.length >= length
+                    && precipitationCv.length >= length && coastal.length >= length;
+        }
+    }
 
     // Fixed-seed noise instances (matching Python's module-level _TEMP_NOISE etc.)
     private static final FastNoiseLite TEMP_NOISE, TEMP_NOISE_FINE;
@@ -32,6 +42,17 @@ public final class BiomeClassifier {
         return fnl;
     }
 
+    /** The climate perturbations used by the vanilla classifier, exposed so a
+     * Terralith macro sample has the same units and thresholds. */
+    static float terralithTemperature(float raw, int row, int column) {
+        return raw + 0.4f * TEMP_NOISE.GetNoise(column, row)
+                + 0.2f * TEMP_NOISE_FINE.GetNoise(column, row);
+    }
+
+    static float terralithPrecipitation(float raw, int row, int column) {
+        return Math.max(0f, raw) * (1f + 0.2f * PRECIP_NOISE.GetNoise(column, row));
+    }
+
     // Biome IDs
     static final short PLAINS = 1, SNOWY_PLAINS = 3, DESERT = 5, SWAMP = 6;
     static final short FOREST = 8, TAIGA = 15, SNOWY_TAIGA = 16, SAVANNA = 17;
@@ -55,7 +76,7 @@ public final class BiomeClassifier {
      */
     public static short[] classify(float[] elev, float[] climate, int i0, int j0,
                                     float[] elevPadded, int H, int W, float pixelSizeM) {
-        return classifyInternal(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, null);
+        return classifyInternal(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, null, null);
     }
 
     /**
@@ -65,15 +86,22 @@ public final class BiomeClassifier {
     public static short[] classify(float[] elev, float[] climate, int i0, int j0,
                                    float[] elevPadded, int H, int W, float pixelSizeM,
                                    final short[] terralithOut) {
+        return classify(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, terralithOut, null);
+    }
+
+    /** Keeps vanilla classification local while Terralith consumes coherent haloed macro inputs. */
+    public static short[] classify(float[] elev, float[] climate, int i0, int j0,
+                                   float[] elevPadded, int H, int W, float pixelSizeM,
+                                   final short[] terralithOut, final TerralithContext terralithContext) {
         if (terralithOut == null || terralithOut.length < H * W) {
             throw new IllegalArgumentException("terralithOut must hold H * W entries");
         }
-        return classifyInternal(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, terralithOut);
+        return classifyInternal(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, terralithOut, terralithContext);
     }
 
     private static short[] classifyInternal(float[] elev, float[] climate, int i0, int j0,
                                              float[] elevPadded, int H, int W, float pixelSizeM,
-                                             short[] terralithOut) {
+                                             short[] terralithOut, TerralithContext terralithContext) {
         short[] out = new short[H * W];
         for (int i = 0; i < H * W; i++) out[i] = PLAINS;
 
@@ -253,9 +281,17 @@ public final class BiomeClassifier {
 
                 out[idx] = biome;
                 if (terralithOut != null) {
+                    boolean coherent = terralithContext != null && terralithContext.validFor(H * W);
+                    float terralithElevation = coherent ? terralithContext.elevation[idx] : elevVal;
+                    float terralithSlope = coherent ? terralithContext.slope[idx] : slope;
+                    float terralithTemp = coherent ? terralithContext.temperature[idx] : temp;
+                    float terralithPrecip = coherent ? terralithContext.precipitation[idx] : precip;
+                    float terralithCv = coherent ? terralithContext.precipitationCv[idx] : pCV;
                     terralithOut[idx] = TerralithBiomeClassifier.selectSurface(
                         (int) Math.floor((j0 + c) * pixelSizeM), (int) Math.floor((i0 + r) * pixelSizeM),
-                        biome, elevVal, slope, temp, precip, pCV);
+                        biome, elevVal, slope, terralithElevation, terralithSlope,
+                        terralithTemp, terralithPrecip, terralithCv,
+                        !coherent || terralithContext.coastal[idx]);
                 }
             }
         }

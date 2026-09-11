@@ -50,8 +50,33 @@ The older disabled-player audit proves only the Streams-disabled preview path.
 --jar PRODUCTION_JAR --output NEW_DIRECTORY --spawn X Y Z` stages **TD Streams
 Integrated 1.21.1**, containing world **TD Streams Rivers**. It requires successful
 enabled player, topology and tick receipts, preserves the native world data, and
-refuses an existing output or an enabled standalone preview. Generated instances
-and screenshots stay under `build/`; installation preserves prior instances.
+refuses an existing output or an enabled standalone preview.
+
+Use `--instance-name`, `--world-name`, and repeated `--client-mod PATH.jar` to
+stage a separately named repaired instance with Sodium and Xaero's World Map.
+Prepare its probe with `--c2me` to carry the same tested C2ME build into play.
+For natural existing shores, `allWaterBanks=0` skips the extra bank pass around
+non-Streams water; `customBanks=true` retains native Streams' own banks.
+
+For surface regressions, `-PtdProbe.surfaceAudit=true` records actual ground
+material, saved biome and direct biome-source output per column. The optional
+surface-rule trace records the active resource and decoded runtime rule. In the
+same-seed coastal fixture, use chunks `-75,7;-74,7;-75,8;-74,8`. Compare exposed
+water (`surfaceY == topWaterY`) separately from water underneath solid ground.
+Run causal controls in fresh worlds: a no-Streams control still reproduced the
+old small ponds, while a no-carvers control removed them. Do not attribute all
+water or sand in a Streams-enabled world to Streams.
+
+Generated instances and screenshots stay under `build/`; installation preserves prior instances.
+
+The coastal repair was checked on 1,024 matching columns: base heights were
+identical, exposed cave-water columns fell from 77 to zero, and underground
+water remained. Native Streams + C2ME repeated the zero-pond result and passed
+source/junction/terminal checks plus 100 ticks across 12 selected chunks. The
+native topology snapshot matched after restart. Actual client screenshots also
+confirmed gravel shore material, broader biome regions, native river banks,
+Sodium rendering and Xaero's map. This is bounded same-seed coverage, not a
+guarantee about every biome or seed.
 
 ### Verified native integration (2026-09-11)
 

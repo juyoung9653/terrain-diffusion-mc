@@ -264,14 +264,18 @@ public final class LocalTerrainProvider {
 
     private HeightmapData handle1x(int i1, int j1, int i2, int j2) {
         int H = i2 - i1, W = j2 - j1;
-
-        float[] elevPadded = pipeline.get(i1 - 1, j1 - 1, i2 + 1, j2 + 1, false)[0];
-        float[][] out = pipeline.get(i1, j1, i2, j2, true);
-        float[] elevFlat = out[0];
-        float[] climate  = out[1];
+        int halo = MacroBiomeContext.REGION_BLOCKS + 2 * 32 + MacroBiomeContext.COAST_BLOCKS + 2;
+        int hi0 = i1 - halo, hj0 = j1 - halo, hi2 = i2 + halo, hj2 = j2 + halo;
+        float[][] macro = pipeline.get(hi0, hj0, hi2, hj2, true);
+        int macroH = hi2 - hi0, macroW = hj2 - hj0;
+        float[] elevFlat = cropFlat(macro[0], i1 - hi0, j1 - hj0, H, W, macroH, macroW);
+        float[] elevPadded = cropFlat(macro[0], i1 - hi0 - 1, j1 - hj0 - 1, H + 2, W + 2, macroH, macroW);
+        float[] climate = cropClimate(macro[1], macroH, macroW, i1 - hi0, j1 - hj0, H, W);
+        BiomeClassifier.TerralithContext terralithContext = MacroBiomeContext.build(macro[0], macro[1],
+                hi0, hj0, macroH, macroW, 1, NATIVE_RESOLUTION, i1, j1, H, W);
 
         short[] terralithFlat = new short[H * W];
-        short[] biomeFlat = BiomeClassifier.classify(elevFlat, climate, i1, j1, elevPadded, H, W, NATIVE_RESOLUTION, terralithFlat);
+        short[] biomeFlat = BiomeClassifier.classify(elevFlat, climate, i1, j1, elevPadded, H, W, NATIVE_RESOLUTION, terralithFlat, terralithContext);
         return buildHeightmapData(elevFlat, biomeFlat, terralithFlat, H, W);
     }
 
@@ -289,14 +293,18 @@ public final class LocalTerrainProvider {
         int i2n = -Math.floorDiv(-i2, scale);
         int j2n = -Math.floorDiv(-j2, scale);
 
-        // 2-pixel native padding (1 for bilinear + 1 for slope)
+        // The expanded read supplies both the normal bilinear padding and the
+        // globally addressed Terralith context halo in one pipeline request.
         int i1p = i1n - 2, j1p = j1n - 2;
         int i2p = i2n + 2, j2p = j2n + 2;
         int nH = i2p - i1p, nW = j2p - j1p;
-
-        float[][] out = pipeline.get(i1p, j1p, i2p, j2p, true);
-        float[] elevNativeFlat    = out[0];
-        float[] climateNativeFlat = out[1];
+        int haloNative = (int) Math.ceil((192f + 2f) / scale) + 2;
+        int macroI0 = i1n - haloNative, macroJ0 = j1n - haloNative;
+        int macroI2 = i2n + haloNative, macroJ2 = j2n + haloNative;
+        int macroH = macroI2 - macroI0, macroW = macroJ2 - macroJ0;
+        float[][] macro = pipeline.get(macroI0, macroJ0, macroI2, macroJ2, true);
+        float[] elevNativeFlat = cropFlat(macro[0], i1p - macroI0, j1p - macroJ0, nH, nW, macroH, macroW);
+        float[] climateNativeFlat = cropClimate(macro[1], macroH, macroW, i1p - macroI0, j1p - macroJ0, nH, nW);
 
         // Bilinear upsample elevation: (nH, nW) → (nH*scale, nW*scale)
         float[][] elevNative2D = to2D(elevNativeFlat, nH, nW);
@@ -318,7 +326,9 @@ public final class LocalTerrainProvider {
         float[] elevOut = addElevationNoise(elevSmooth, elevPadded, i1, j1, H, W, pixelSizeM);
 
         short[] terralithFlat = new short[H * W];
-        short[] biomeFlat = BiomeClassifier.classify(elevSmooth, climate, i1, j1, elevPadded, H, W, pixelSizeM, terralithFlat);
+        BiomeClassifier.TerralithContext terralithContext = MacroBiomeContext.build(macro[0], macro[1],
+                macroI0, macroJ0, macroH, macroW, scale, pixelSizeM, i1, j1, H, W);
+        short[] biomeFlat = BiomeClassifier.classify(elevSmooth, climate, i1, j1, elevPadded, H, W, pixelSizeM, terralithFlat, terralithContext);
         return buildHeightmapData(elevOut, biomeFlat, terralithFlat, H, W);
     }
 
@@ -397,6 +407,22 @@ public final class LocalTerrainProvider {
                 out[r * W + c] = src[sr][Math.max(0, Math.min(srcW - 1, c0 + c))];
         }
         return out;
+    }
+
+    private static float[] cropFlat(float[] src, int r0, int c0, int h, int w, int srcH, int srcW) {
+        float[] result = new float[h * w];
+        for (int r = 0; r < h; r++) System.arraycopy(src, (r0 + r) * srcW + c0, result, r * w, w);
+        return result;
+    }
+
+    private static float[] cropClimate(float[] source, int sourceH, int sourceW, int r0, int c0, int h, int w) {
+        if (source == null) return null;
+        float[] result = new float[4 * h * w];
+        for (int channel = 0; channel < 4; channel++)
+            for (int r = 0; r < h; r++)
+                System.arraycopy(source, channel * sourceH * sourceW + (r0 + r) * sourceW + c0,
+                        result, channel * h * w + r * w, w);
+        return result;
     }
 
     private static float[][] to2D(float[] flat, int H, int W) {

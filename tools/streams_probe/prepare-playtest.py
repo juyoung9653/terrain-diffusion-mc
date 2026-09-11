@@ -21,12 +21,30 @@ def main():
     parser.add_argument("--probe", type=Path, required=True)
     parser.add_argument("--jar", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--instance-name", default="TD Streams Integrated 1.21.1")
+    parser.add_argument("--world-name", default="TD Streams Rivers")
+    parser.add_argument("--client-mod", type=Path, action="append", default=[],
+                        help="Additional compatible client jar to copy into the new instance")
     parser.add_argument("--spawn", type=int, nargs=3, required=True, metavar=("X", "Y", "Z"))
     args = parser.parse_args()
+    if not args.instance_name.strip() or any(c in args.instance_name for c in "\r\n"):
+        parser.error("instance-name must be a nonempty single line")
+    if not args.world_name.strip() or not re.fullmatch(r"[A-Za-z0-9 _-]+", args.world_name):
+        parser.error("world-name must contain only letters, digits, spaces, underscore or hyphen")
+    client_mods = [p.resolve(strict=True) for p in args.client_mod]
+    if len({p.name for p in client_mods}) != len(client_mods):
+        parser.error("client-mod filenames must be unique")
+    for mod in client_mods:
+        if not mod.is_file() or mod.suffix != ".jar" or not zipfile.is_zipfile(mod):
+            parser.error(f"invalid client jar: {mod.name}")
     source, probe, jar = (p.resolve(strict=True) for p in (args.source_instance, args.probe, args.jar))
     target = args.output.resolve()
     if target.exists():
         raise FileExistsError(target)
+    for mod in client_mods:
+        existing = probe / "mods" / mod.name
+        if (existing.exists() and digest(existing) != digest(mod)) or mod.name == jar.name:
+            raise ValueError(f"conflicting client jar: {mod.name}")
     manifest = json.loads((probe / "input-manifest.json").read_text())
     if manifest["waterwaysDisabled"]:
         raise ValueError("Native Streams must be enabled in the validated probe")
@@ -61,7 +79,7 @@ def main():
     target.mkdir(parents=True)
     shutil.copy2(source / "mmc-pack.json", target / "mmc-pack.json")
     (target / "instance.cfg").write_text(
-        "[General]\nConfigVersion=1.2\nInstanceType=OneSix\nname=TD Streams Integrated 1.21.1\niconKey=default\n"
+        f"[General]\nConfigVersion=1.2\nInstanceType=OneSix\nname={args.instance_name}\niconKey=default\n"
         "OverrideJavaLocation=true\nJavaPath=C:/Program Files/Java/jdk-21/bin/javaw.exe\n"
         "OverrideJavaArgs=true\nJvmArgs=-XX:+UseZGC -XX:+ZGenerational\n"
         "OverrideMemory=true\nMinMemAlloc=2048\nMaxMemAlloc=12288\n", encoding="utf-8")
@@ -72,17 +90,21 @@ def main():
         (game / "config/terrain-diffusion-mc.properties").write_text(
             td_config.rstrip() + "\n\nstreams.lazy_prefetch=true\n", encoding="utf-8")
     shutil.copy2(jar, game / "mods" / jar.name)
-    world = game / "saves/TD Streams Rivers"
+    for mod in client_mods:
+        installed = game / "mods" / mod.name
+        shutil.copy2(mod, installed)
+    world = game / "saves" / args.world_name
     shutil.copytree(probe / "world", world, ignore=shutil.ignore_patterns("session.lock", "level.dat_old"))
     nbt["patch_nbt"](world / "level.dat", {
-        ("Data", "LevelName"): "TD Streams Rivers", ("Data", "GameType"): 1,
+        ("Data", "LevelName"): args.world_name, ("Data", "GameType"): 1,
         ("Data", "allowCommands"): 1, ("Data", "SpawnX"): args.spawn[0],
         ("Data", "SpawnY"): args.spawn[1], ("Data", "SpawnZ"): args.spawn[2],
         ("Data", "GameRules", "spawnRadius"): "0", ("Data", "GameRules", "spawnChunkRadius"): "0",
     })
     (game / "options.txt").write_text("lang:ko_kr\nrenderDistance:8\nsimulationDistance:5\n", encoding="utf-8")
     receipt = {"jarSha256": digest(jar), "seed": manifest["seed"], "spawn": args.spawn,
-               "world": "TD Streams Rivers", "nativeStreams": True, "standalonePreview": False}
+               "world": args.world_name, "nativeStreams": True, "standalonePreview": False,
+               "clientMods": [{"file": p.name, "sha256": digest(p)} for p in client_mods]}
     (target / "playtest-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
     print(json.dumps(receipt))
 

@@ -27,11 +27,10 @@
     },
     "fluid_level_floodedness": 0,
     "fluid_level_spread": 0,
-    "initial_density_without_jaggedness": 0,
-    "lava": 0,
-    "preliminary_surface_level": {
+    "initial_density_without_jaggedness": {
       "type": "terrain-diffusion-mc:terrain_diffusion"
     },
+    "lava": 0,
     "ridges": 0,
     "temperature": 0,
     "vegetation": 0,

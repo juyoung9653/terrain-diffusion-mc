@@ -25,7 +25,7 @@ class GenerateCompatTest(unittest.TestCase):
         preset.parent.mkdir(parents=True)
         td_base = {"type": "minecraft:condition", "if_true": {"type": "minecraft:vertical_gradient", "random_name": "minecraft:bedrock_floor"}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:bedrock"}}}
         td_deep = {"type": "minecraft:condition", "if_true": {"type": "minecraft:vertical_gradient", "random_name": "minecraft:deepslate"}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:deepslate"}}}
-        noise.write_text(json.dumps({"sea_level": 63, "noise": {"min_y": -64, "height": 2032}, "noise_router": {"temperature": 0, "vegetation": 0}, "surface_rule": {"type": "minecraft:sequence", "sequence": [td_base, td_deep, {"type": "minecraft:block", "result_state": {"Name": "minecraft:dirt"}}]}}))
+        noise.write_text(json.dumps({"sea_level": 63, "noise": {"min_y": -64, "height": 2032}, "noise_router": {"temperature": 0, "vegetation": 0, "initial_density_without_jaggedness": {"type": "terrain-diffusion-mc:terrain_diffusion"}}, "surface_rule": {"type": "minecraft:sequence", "sequence": [td_base, td_deep, {"type": "minecraft:block", "result_state": {"Name": "minecraft:dirt"}}]}}))
         preset.write_text(json.dumps({"dimensions": {"minecraft:overworld": {"generator": {"biome_source": {"type": "terrain-diffusion-mc:terrain_diffusion"}}}, "minecraft:the_end": {"generator": {}}}}))
         jar = root / "terralith.jar"
         source_base = {"type": "minecraft:condition", "if_true": {"type": "minecraft:vertical_gradient", "random_name": "minecraft:bedrock_floor"}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:bedrock"}}}
@@ -67,6 +67,19 @@ class GenerateCompatTest(unittest.TestCase):
                 "deep_cave",
                 next(item["cave_category"] for item in inventory["biomes"] if item["id"] == "terralith:cave/deep_0"),
             )
+
+    def test_rejects_silently_ignored_newer_preliminary_surface_key(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            repo, jar = self.make_fixture(root)
+            path = repo / MODULE.TD_NOISE_SETTINGS
+            noise = json.loads(path.read_text())
+            noise["noise_router"]["preliminary_surface_level"] = noise["noise_router"]["initial_density_without_jaggedness"]
+            noise["noise_router"]["initial_density_without_jaggedness"] = 0
+            path.write_text(json.dumps(noise))
+            with self.assertRaisesRegex(ValueError, "1.21.1 requires TD initial_density"):
+                MODULE.build_pack(jar, repo, root / "pack")
+            self.assertFalse((root / "pack").exists())
 
     def test_rejects_zero_router_channel_predicate(self):
         with tempfile.TemporaryDirectory() as raw:

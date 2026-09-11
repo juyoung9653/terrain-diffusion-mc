@@ -9,7 +9,9 @@
     "ChunkGeneratorStructureStateMixin",
     "MinecraftServerMixin",
     "RiverPreviewBootstrapMixin",
-    "RiverPreviewCarverMixin"
+    "RiverPreviewCarverMixin",
+    "CarvingContextMixin",
+    "WorldCarverMixin"
   ],
   "client": [],
   "server": [],

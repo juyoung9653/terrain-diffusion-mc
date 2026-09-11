@@ -219,6 +219,12 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
     if not td_noise_path.is_file() or not td_preset_path.is_file():
         raise ValueError("repository TD noise settings or world preset is missing")
     td_noise = json.loads(td_noise_path.read_text(encoding="utf-8"))
+    # 1.21.1 reads this density field when evaluating above_preliminary_surface.
+    # The newer preliminary_surface_level key is silently ignored by its codec.
+    router = td_noise.get("noise_router", {})
+    if (router.get("initial_density_without_jaggedness") != {"type": "terrain-diffusion-mc:terrain_diffusion"}
+            or "preliminary_surface_level" in router):
+        raise ValueError("Minecraft 1.21.1 requires TD initial_density_without_jaggedness for Terralith surface rules")
     td_preset = json.loads(td_preset_path.read_text(encoding="utf-8"))
     if not jar_path.is_file():
         raise ValueError(f"JAR does not exist: {jar_path}")
@@ -287,6 +293,7 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
         },
         "validation": {
             "td_router_preserved": generated_noise["noise_router"] == td_noise["noise_router"],
+            "minecraft_1_21_1_preliminary_density_validated": True,
             "td_noise_shape_preserved": generated_noise["noise"] == td_noise["noise"],
             "td_sea_level_preserved": generated_noise["sea_level"] == td_noise["sea_level"],
             "td_bedrock_rule_preserved": generated_noise["surface_rule"]["sequence"][0] == td_bedrock,

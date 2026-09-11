@@ -267,6 +267,22 @@ to the preview world and must accompany any copy of that world.
 
 ## Terralith compatibility (1.21.1)
 
+Minecraft 1.21.1 reads `noise_router.initial_density_without_jaggedness` for its
+preliminary surface. It must use the TD density function. The newer
+`preliminary_surface_level` field is ignored on this version; leaving the former
+at zero prevents Terralith's `above_preliminary_surface` rules from applying
+(for example, gravel beaches become fallback grass). The compatibility generator
+checks this contract before writing the pack.
+
+Terralith land groups now use globally addressed, jittered 128-block regions;
+water remains local and beaches require smooth ocean terrain within 24 blocks.
+The diffusion elevation and vanilla biome classification remain local. A TD-only
+carver guard retains the upper eight solid blocks of lowlands from sea level to
+eight blocks above it, preventing flooded cave openings from peppering flat
+coasts. Deeper caves, higher cave entrances, and native Streams features remain
+enabled. These generation changes require fresh chunks; use a new same-seed
+world for comparison rather than mixing old and new generation.
+
 This branch provides an optional Terralith biome source for Terrain Diffusion worlds.
 It keeps the diffusion heightmap and places Terralith biomes in climate-appropriate,
 coherent regions. All 95 Terralith 2.6.2 biome IDs are represented, including 11

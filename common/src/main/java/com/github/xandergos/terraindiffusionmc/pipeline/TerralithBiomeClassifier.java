@@ -27,9 +27,38 @@ public final class TerralithBiomeClassifier {
     /** Selects a surface alternative. horizontal coordinates and elevation are physical terrain meters, not block coordinates. */
     public static short selectSurface(int blockX, int blockZ, short baseBiome, float elevationM,
                                       float slope, float temp, float precip, float pCv) {
+        return selectSurface(blockX, blockZ, baseBiome, elevationM, slope, temp, precip, pCv, true);
+    }
+
+    /**
+     * Selects from a coherent macro-terrain sample.  Callers that know the
+     * smooth ocean mask must pass it explicitly: a low flat inland basin is
+     * not a coast merely because it is below the old 120 m threshold.
+     */
+    public static short selectSurface(int blockX, int blockZ, short baseBiome, float elevationM,
+                                      float slope, float temp, float precip, float pCv, boolean coastal) {
+        return selectSurface(blockX, blockZ, baseBiome, elevationM, slope, elevationM, slope,
+                temp, precip, pCv, coastal);
+    }
+
+    /**
+     * Uses local smooth terrain for water and coast decisions, while broad
+     * regional terrain controls terrestrial group and candidate eligibility.
+     */
+    public static short selectSurface(int blockX, int blockZ, short baseBiome,
+                                      float localElevation, float localSlope,
+                                      float macroElevation, float macroSlope,
+                                      float temp, float precip, float pCv, boolean coastal) {
         if (Float.isNaN(temp)) return 0;
-        String group = group(blockX, blockZ, baseBiome, elevationM, slope, temp, precip, pCv);
-        return pick(group, temp, elevationM, slope, blockX, blockZ);
+        if (isVanillaOcean(baseBiome) || localElevation < 0) {
+            String water = localElevation >= -40 && temp >= 18 && localSlope <= .15f ? "estuary" : "ocean";
+            return pick(water, temp, localElevation, localSlope, blockX, blockZ);
+        }
+        if (coastal && localElevation <= 120 && localSlope < .45f)
+            return pick("coast", temp, localElevation, localSlope, blockX, blockZ);
+        float landElevation = Math.max(0f, macroElevation);
+        String group = group(blockX, blockZ, baseBiome, landElevation, macroSlope, temp, precip, pCv, false);
+        return pick(group, temp, landElevation, macroSlope, blockX, blockZ);
     }
 
     /** Returns a cave alternative only well below a non-ocean surface. */
@@ -39,12 +68,12 @@ public final class TerralithBiomeClassifier {
         return pickCave(blockX, blockY, blockZ);
     }
 
-    private static String group(int blockX, int blockZ, short base, float elevation, float slope, float temp, float precip, float pCv) {
+    private static String group(int blockX, int blockZ, short base, float elevation, float slope, float temp, float precip, float pCv, boolean coastal) {
         if (isVanillaOcean(base) || elevation < 0) {
             // Shallow warm water is an estuary proxy; no river channels are carved here.
             return elevation >= -40 && temp >= 18 && slope <= .15f ? "estuary" : "ocean";
         }
-        if (elevation <= 120 && slope < .45f) return "coast";
+        if (coastal && elevation <= 120 && slope < .45f) return "coast";
         if (slope >= .48f) return temp < 3 ? "cold_cliff" : "cliff";
         // Rare fantasy volcanic regions are a coordinate-coherent overlay, never per-block random.
         if (elevation > 400 && cellNoise(blockX, blockZ, 32768, 81421) > .88f) return "volcanic";
