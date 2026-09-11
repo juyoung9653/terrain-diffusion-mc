@@ -1,5 +1,8 @@
 # Finite river preview
 
+The active integration direction is [native Streams with TD terrain](../streams_probe/README.md).
+This standalone experiment remains available to preserve existing preview worlds.
+
 Opt-in experimental river generation for a **new Terrain Diffusion Overworld**.
 This is a bounded basin preview, not yet a river system for the entire infinite
 world. Normal worlds keep the existing terrain and Streams behavior.

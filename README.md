@@ -253,10 +253,13 @@ The terrain diversity far outpaces the biome diversity and there's a real opport
 
 Normal worlds use the separately installed **Streams Reflowing** mod for its
 river generation and flowing-water behavior. This repository supplies biome
-compatibility and a structure shield; it does not embed or port the entire
-Streams mod.
+compatibility, a structure shield, and a NeoForge integration for Streams 2.13.1 that defers
+speculative watershed prefetch on TD terrain. Streams retains its native river
+shape, sources, confluences, outlets, vegetation and water flow. See the
+[Streams integration setup and validation](tools/streams_probe/README.md).
+The Streams mod is installed separately.
 
-The optional [finite river preview](tools/river_planner/README.md) is a separate
+The older experimental [finite river preview](tools/river_planner/README.md) is a separate
 Terrain Diffusion river planner and carver. It requires Streams river/lake
 generation and world structures disabled. It uses Minecraft water and does not
 port Streams' custom flowing-water system. Its persisted terrain cache belongs

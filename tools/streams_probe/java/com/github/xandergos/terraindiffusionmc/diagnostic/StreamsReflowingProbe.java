@@ -75,7 +75,11 @@ public final class StreamsReflowingProbe {
             ServerLevel level = server.overworld();
             auditCustomBiomes(level, receipts);
             if (Boolean.getBoolean("td.streamsProbe.playerPrefetchAudit")) {
-                auditDisabledPlayerPrefetch(server, level, receipts);
+                if ("enabled".equalsIgnoreCase(System.getProperty("td.streamsProbe.playerPrefetchMode", "disabled"))) {
+                    auditEnabledPlayerPrefetch(server, level, receipts);
+                } else {
+                    auditDisabledPlayerPrefetch(server, level, receipts);
+                }
             }
             if (Boolean.getBoolean("td.streamsProbe.registryOnly")) {
                 if (Boolean.getBoolean("td.streamsProbe.nonTdShieldCheck")) {
@@ -92,7 +96,8 @@ public final class StreamsReflowingProbe {
                     "requestTimeoutSeconds", config.timeoutSeconds, "routeSearchRadius", config.routeSearchRadius));
             boolean riverPreview = Boolean.getBoolean("td.streamsProbe.riverPreview");
             List<RouteCandidate> candidates = config.fixedCandidates.isEmpty()
-                    ? (riverPreview ? discoverRiverPreviewCandidates(level, config, receipts) : discoverRoutes(level, config, receipts))
+                    ? (riverPreview ? discoverRiverPreviewCandidates(level, config, receipts)
+                    : (Boolean.getBoolean("td.streamsProbe.streamsTopologyAudit") ? discoverTopologyCandidates(level, config, receipts) : discoverRoutes(level, config, receipts)))
                     : config.fixedCandidates;
             if (!config.fixedCandidates.isEmpty()) {
                 emit(receipts, json("route_discovery", "status", "fixed_candidates_no_streams_route_query",
@@ -101,6 +106,13 @@ public final class StreamsReflowingProbe {
             if (candidates.isEmpty()) {
                 terminal = "incomplete";
                 emit(receipts, json("route_discovery", "status", "no_route_candidates;no_chunks_generated"));
+                if (Boolean.getBoolean("td.streamsProbe.streamsTopologyAudit")) {
+                    NativeTopologyAudit missing = new NativeTopologyAudit();
+                    missing.error = "native_roles_missing_in_bounded_region";
+                    writeNativeTopologyReceipt(server, missing);
+                    emit(receipts, missing.json(false, -1, -1));
+                    emit(receipts, json("streams_tick_audit", "status", "failed", "startTick", -1, "targetTick", -1, "endTick", -1, "selectedChunkCount", 0, "tickableChunkCount", 0));
+                }
             }
             List<ChunkReceipt> completed = new ArrayList<>();
             for (RouteCandidate candidate : candidates) {
@@ -134,6 +146,25 @@ public final class StreamsReflowingProbe {
                         // A timed-out generation task can still occupy the server executor: do not queue more work.
                         break;
                     }
+            }
+            if (Boolean.getBoolean("td.streamsProbe.streamsTopologyAudit") && !completed.isEmpty()) {
+                List<ChunkPos> newlyForced = server.submit(() -> forceTickAuditChunks(level, completed))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                tickAuditForcedChunks.addAll(newlyForced);
+                Tickability tickability = awaitTickableChunks(server, level, completed, 60_000L);
+                long startTick = tickability.tick;
+                NativeTopologyAudit before = server.submit(() -> auditNativeStreamsTopology(level, completed)).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                Tickability afterTicks = tickability.tickableCount == completed.size()
+                        ? awaitServerTicks(server, level, completed, startTick + 100, 30_000L) : tickability;
+                NativeTopologyAudit topology = server.submit(() -> auditNativeStreamsTopology(level, completed)).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                topology.pre100Snapshot = before.canonical();
+                writeNativeTopologyReceipt(server, topology);
+                boolean ticksPassed = tickability.tickableCount == completed.size() && afterTicks.tick >= startTick + 100;
+                emit(receipts, json("streams_tick_audit", "status", ticksPassed ? "passed" : "failed", "startTick", startTick,
+                        "targetTick", startTick + 100, "endTick", afterTicks.tick, "selectedChunkCount", completed.size(),
+                        "tickableChunkCount", tickability.tickableCount));
+                emit(receipts, topology.json(ticksPassed, startTick, afterTicks.tick));
+                if (!topology.passed || !ticksPassed || "mismatch".equals(topology.restartStatus) || topology.restartStatus.startsWith("io_error")) terminal = "incomplete";
             }
             if (riverPreview) {
                 // Run only after every requested FULL chunk is complete, so neighboring generation order is settled.
@@ -394,6 +425,92 @@ public final class StreamsReflowingProbe {
                 "firstTick", firstTick, "lastTick", previousTick, "engineInitialized", false));
     }
 
+    /** Enabled-mode counterpart: invoke Streams' real player tick without assuming engine state. */
+    private static void auditEnabledPlayerPrefetch(MinecraftServer server, ServerLevel level,
+                                                   List<String> receipts) throws Exception {
+        Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen");
+        Method engineIfPresent = worldgen.getMethod("engineIfPresent", ServerLevel.class);
+        Class<?> prefetcher = Class.forName("dev.streamsreflowing.worldgen.StreamPrefetcher");
+        Method tick = prefetcher.getMethod("onServerTick", MinecraftServer.class);
+        Method laneDiag = prefetcher.getMethod("laneDiag");
+        long originBefore = policyCounter("skippedOriginWarmups"), playerBefore = policyCounter("skippedPlayerPrefetches"),
+                unloadedFlowBefore = policyCounter("skippedUnloadedFlowGrids");
+        boolean engineBefore = engineIfPresent.invoke(null, level) != null;
+        long initStart = System.nanoTime();
+        // Cold calibration can take minutes. Deliberately initialize from the diagnostic worker before measuring player ticks.
+        if (!engineBefore) {
+            Method create = worldgen.getMethod("engine", net.minecraft.world.level.WorldGenLevel.class);
+            create.invoke(null, level);
+        }
+        long initMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initStart);
+        int playerX = integerProperty("td.streamsProbe.topologyCenterX", level.getSharedSpawnPos().getX());
+        int playerZ = integerProperty("td.streamsProbe.topologyCenterZ", level.getSharedSpawnPos().getZ());
+        var player = server.submit(() -> {
+            var result = new net.minecraft.server.level.ServerPlayer(server, level,
+                    new com.mojang.authlib.GameProfile(java.util.UUID.fromString("00000000-0000-0000-0000-000000000123"), "TDPrefetchProbe"),
+                    net.minecraft.server.level.ClientInformation.createDefault());
+            result.setPos(playerX + 0.5, 64, playerZ + 0.5);
+            return result;
+        }).get(30, TimeUnit.SECONDS);
+        int firstTick = server.submit(server::getTickCount).get(2, TimeUnit.SECONDS);
+        int previous = -1, checks = 0, steadyChecks = 0;
+        long maxLatencyMs = 0, deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+        // Keep the temporary player visible to the registered handler across real ticks. The first 60 ticks
+        // intentionally exercise Streams' cold-join guard; the following 40 are the steady player path.
+        server.submit(() -> { level.players().add(player); return null; }).get(2, TimeUnit.SECONDS);
+        try {
+            while (checks < 100 && System.nanoTime() < deadline) {
+                final int last = previous;
+                long begin = System.nanoTime();
+                int observed = server.submit(() -> {
+                    int now = server.getTickCount();
+                    if (now == last) return -1;
+                    player.tickCount++; // no connection/player-list registration: only the native cold-join age gate.
+                    try { tick.invoke(null, server); } // covers a second legitimate handler phase; never alters Streams' J.
+                    catch (ReflectiveOperationException e) { throw new IllegalStateException("Could not exercise Streams player tick", e); }
+                    return now;
+                }).get(2, TimeUnit.SECONDS);
+                maxLatencyMs = Math.max(maxLatencyMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - begin));
+                if (observed >= 0) {
+                    previous = observed;
+                    checks++;
+                    if (player.tickCount >= 60) steadyChecks++;
+                }
+                Thread.sleep(50);
+            }
+        } finally {
+            server.submit(() -> { level.players().remove(player); return null; }).get(2, TimeUnit.SECONDS);
+        }
+        boolean engineAfter = engineIfPresent.invoke(null, level) != null;
+        String lanes;
+        try { lanes = String.valueOf(laneDiag.invoke(null)); } catch (ReflectiveOperationException e) { lanes = "unavailable:" + e.getClass().getSimpleName(); }
+        long originAfter = policyCounter("skippedOriginWarmups"), playerAfter = policyCounter("skippedPlayerPrefetches"),
+                unloadedFlowAfter = policyCounter("skippedUnloadedFlowGrids");
+        boolean policyAvailable = originBefore >= 0 && playerBefore >= 0 && originAfter >= 0 && playerAfter >= 0;
+        boolean passed = checks == 100 && steadyChecks >= 40 && previous > firstTick && engineAfter && policyAvailable
+                && originAfter > 0 && playerAfter > playerBefore;
+        emit(receipts, json("player_prefetch_audit", "mode", "enabled", "status", passed ? "passed" : "failed",
+                "checks", checks, "startupChecks", checks - steadyChecks, "steadyChecks", steadyChecks, "playerTickCount", player.tickCount,
+                "firstTick", firstTick, "lastTick", previous, "engineBefore", engineBefore,
+                "engineAfter", engineAfter, "nativeEngineInitMs", initMs, "maxServerTaskLatencyMs", maxLatencyMs, "laneDiag", lanes,
+                "policyCountersAvailable", policyAvailable,
+                "skippedOriginWarmupsDelta", counterDelta(originBefore, originAfter), "skippedPlayerPrefetchesDelta", counterDelta(playerBefore, playerAfter),
+                "skippedUnloadedFlowGridsBefore", unloadedFlowBefore, "skippedUnloadedFlowGridsAfter", unloadedFlowAfter,
+                "skippedUnloadedFlowGridsDelta", counterDelta(unloadedFlowBefore, unloadedFlowAfter)));
+        if (!passed) throw new IllegalStateException("Enabled player prefetch audit did not complete 60 startup and 40 steady ticks");
+    }
+
+    private static long counterDelta(long before, long after) { return before >= 0 && after >= 0 ? after - before : -1; }
+
+    /** Optional compatibility policy: diagnostics work before the policy class is compiled. */
+    private static long policyCounter(String methodName) {
+        try {
+            Class<?> policy = Class.forName("com.github.xandergos.terraindiffusionmc.compat.streams.StreamsTerrainPolicy", false,
+                    StreamsReflowingProbe.class.getClassLoader());
+            return ((Number) policy.getMethod(methodName).invoke(null)).longValue();
+        } catch (Throwable ignored) { return -1; }
+    }
+
     private static List<RouteCandidate> discoverRoutes(ServerLevel level, Config config, List<String> receipts) {
         List<RouteCandidate> result = new ArrayList<>();
         try {
@@ -447,6 +564,99 @@ public final class StreamsReflowingProbe {
         return result;
     }
 
+    /** Bounded native graph search. ColumnPlan distance fields are deliberately not used as graph roles. */
+    private static List<RouteCandidate> discoverTopologyCandidates(ServerLevel level, Config config, List<String> receipts) {
+        List<RouteCandidate> result = new ArrayList<>();
+        try {
+            NativeGraphSelection selected = selectNativeGraph(level, config);
+            for (NativePoint point : selected.points()) if (point != null) {
+                ChunkPos pos = new ChunkPos(new BlockPos(point.x, 0, point.z));
+                if (result.stream().noneMatch(c -> c.chunkX == pos.x && c.chunkZ == pos.z))
+                    result.add(new RouteCandidate(pos.x, pos.z, -1, Integer.MIN_VALUE, "native_graph:" + point.provenance));
+            }
+            emit(receipts, json("streams_topology_discovery", "status", selected.complete() ? "bounded_native_graph" : "roles_missing",
+                    "center", selected.centerX + "," + selected.centerZ, "radius", selected.radius, "networks", selected.networks,
+                    "nodes", selected.nodes, "source", selected.value(selected.source), "junction", selected.value(selected.junction),
+                    "outlet", selected.value(selected.outlet), "flow", selected.value(selected.flow), "chunks", result.size(), "error", selected.error));
+        } catch (Throwable t) { emit(receipts, json("streams_topology_discovery", "status", "unavailable", "error", t.getClass().getSimpleName(), "message", safe(t.getMessage()))); }
+        return result;
+    }
+
+    private static NativeGraphSelection selectNativeGraph(ServerLevel level, Config config) throws Exception {
+        int centerX = integerProperty("td.streamsProbe.topologyCenterX", config.centerX * 16 + 8);
+        int centerZ = integerProperty("td.streamsProbe.topologyCenterZ", config.centerZ * 16 + 8);
+        int radius = Math.max(16, Math.min(1024, integerProperty("td.streamsProbe.topologyRadius", 512)));
+        NativeGraphSelection out = new NativeGraphSelection(centerX, centerZ, radius);
+        Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen");
+        Object engine = worldgen.getMethod("engineIfPresent", ServerLevel.class).invoke(null, level);
+        if (engine == null) engine = worldgen.getMethod("engine", net.minecraft.world.level.WorldGenLevel.class).invoke(null, level);
+        Method platesNear = engine.getClass().getMethod("platesNear", double.class, double.class, double.class);
+        Object[] plates = (Object[]) platesNear.invoke(engine, (double) centerX, (double) centerZ, (double) radius);
+        Map<String, GraphNode> nodes = new LinkedHashMap<>();
+        java.util.HashSet<String> seenSegments = new java.util.HashSet<>();
+        // `platesNear` is bounded by radius; retain at most 64 networks so this diagnostic cannot expand into a world scan.
+        for (int plateIndex = 0; plateIndex < Math.min(64, plates.length); plateIndex++) {
+            Object plate = plates[plateIndex];
+            Object network = engine.getClass().getMethod("networkFor", plate.getClass()).invoke(engine, plate);
+            if (network == null) continue;
+            out.networks++;
+            for (Object segment : (List<?>) network.getClass().getMethod("segments").invoke(network)) {
+                double x1=endpoint(segment,"x1"), z1=endpoint(segment,"z1"), x2=endpoint(segment,"x2"), z2=endpoint(segment,"z2");
+                String segmentKey = nodeKey(x1,z1) + ">" + nodeKey(x2,z2);
+                if (!seenSegments.add(segmentKey)) continue; // overlapping plate networks expose the same native segment.
+                // Streams' RiverSegment x1/z1 -> x2/z2 is treated as its native upstream-to-downstream direction;
+                // source/terminal ColumnPlan flags below verify the two directed endpoint roles.
+                addGraphNode(nodes, x1, z1, true); addGraphNode(nodes, x2, z2, false);
+            }
+        }
+        out.nodes = nodes.size();
+        List<GraphNode> orderedNodes = nodes.values().stream().sorted(java.util.Comparator
+                .comparingDouble((GraphNode n) -> Math.hypot(n.x - centerX, n.z - centerZ))
+                .thenComparingDouble(n -> n.x).thenComparingDouble(n -> n.z)).toList();
+        for (GraphNode node : orderedNodes) {
+            if (node.inDegree == 0 && node.outDegree > 0 && out.source == null)
+                out.source = nativePlanNear(engine, node, "source", "native_graph_indegree0_source");
+            if (node.outDegree == 0 && node.inDegree > 0 && out.outlet == null)
+                out.outlet = nativePlanNear(engine, node, "terminal", "native_graph_outdegree0_terminal");
+            if (node.inDegree >= 2 && node.outDegree > 0 && out.junction == null)
+                out.junction = nativePlanNear(engine, node, "any", "native_graph_indegree" + node.inDegree + "_outdegree" + node.outDegree + "_junction");
+        }
+        // A wet interior plan with fluid direction validates native flow independently of a headwater endpoint.
+        for (GraphNode node : orderedNodes) if (out.flow == null) out.flow = nativePlanNear(engine, node, "flow", "native_graph_flow_sample");
+        if (!out.complete()) out.error = "verified_native_roles_missing;degree1/degree3 graph nodes are retained but never relabelled";
+        return out;
+    }
+
+    private static double endpoint(Object segment, String accessor) throws Exception {
+        return ((Number) segment.getClass().getMethod(accessor).invoke(segment)).doubleValue();
+    }
+    private static String nodeKey(double x, double z) { return Math.round(x * 16.0) + "," + Math.round(z * 16.0); } // 1/16-block epsilon.
+    private static void addGraphNode(Map<String, GraphNode> nodes, double x, double z, boolean outgoing) {
+        GraphNode node = nodes.computeIfAbsent(nodeKey(x, z), ignored -> new GraphNode(x, z));
+        if (outgoing) node.outDegree++; else node.inDegree++;
+    }
+    private static NativePoint nativePlanNear(Object engine, GraphNode node, String required, String provenance) throws Exception {
+        Method plan = engine.getClass().getMethod("plan", int.class, int.class);
+        Class<?> cp = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
+        Method inChannel = cp.getMethod("inChannel"), waterY = cp.getMethod("waterSurfaceY"), bedY = cp.getMethod("bedY");
+        Method source = cp.getMethod("source"), terminal = cp.getMethod("terminal"), flowX = cp.getMethod("fluidFlowDirX"), flowZ = cp.getMethod("fluidFlowDirZ");
+        int cx = (int) Math.round(node.x), cz = (int) Math.round(node.z);
+        for (int r = 0; r <= 16; r++) for (int dz = -r; dz <= r; dz++) for (int dx = -r; dx <= r; dx++) {
+            if (Math.max(Math.abs(dx), Math.abs(dz)) != r) continue;
+            Object value = plan.invoke(engine, cx + dx, cz + dz);
+            if (!(Boolean) inChannel.invoke(value)) continue;
+            boolean isSource = (Boolean) source.invoke(value), isTerminal = (Boolean) terminal.invoke(value);
+            double fx = ((Number) flowX.invoke(value)).doubleValue(), fz = ((Number) flowZ.invoke(value)).doubleValue();
+            if (("source".equals(required) && !isSource) || ("terminal".equals(required) && !isTerminal)
+                    || ("flow".equals(required) && Math.abs(fx) + Math.abs(fz) <= 1.0e-6)) continue;
+            return new NativePoint(cx + dx, cz + dz, ((Number) waterY.invoke(value)).intValue(), ((Number) bedY.invoke(value)).intValue(), fx, fz,
+                    provenance + ";node=" + node.x + "," + node.z + ";in=" + node.inDegree + ";out=" + node.outDegree);
+        }
+        return null;
+    }
+
+    private static int integerProperty(String key, int fallback) { try { return Integer.parseInt(System.getProperty(key, String.valueOf(fallback))); } catch (NumberFormatException ignored) { return fallback; } }
+
     private static List<RouteCandidate> discoverRiverPreviewCandidates(ServerLevel level, Config config, List<String> receipts) {
         List<ChunkPos> chunks = RiverPreviewService.diagnosticChunks(level, config.maxChunks);
         List<RouteCandidate> candidates = chunks.stream()
@@ -483,6 +693,35 @@ public final class StreamsReflowingProbe {
         } catch (IOException e) {
             receipt.csvFile = "write_error:" + e.getClass().getSimpleName();
         }
+    }
+
+    /** Re-select from the same bounded native graph after FULL generation, then read only its selected blocks. */
+    private static NativeTopologyAudit auditNativeStreamsTopology(ServerLevel level, List<ChunkReceipt> receipts) {
+        NativeTopologyAudit audit = new NativeTopologyAudit();
+        try {
+            Config config = Config.read();
+            NativeGraphSelection selected = selectNativeGraph(level, config);
+            audit.source = selected.source; audit.junction = selected.junction; audit.outlet = selected.outlet; audit.flow = selected.flow;
+            audit.graphProvenance = "networks=" + selected.networks + ";nodes=" + selected.nodes + ";radius=" + selected.radius;
+            audit.error = selected.error;
+            audit.validate(level);
+        } catch (Throwable t) { audit.error = t.getClass().getSimpleName() + ":" + safe(t.getMessage()); }
+        return audit;
+    }
+
+    private static void writeNativeTopologyReceipt(MinecraftServer server, NativeTopologyAudit audit) {
+        Path path = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("td-streams-native-topology-audit.txt");
+        String current = audit.canonical();
+        try {
+            if (Files.exists(path)) {
+                String previous = Files.readString(path);
+                audit.restartStatus = previous.equals(current) ? "matched" : "mismatch";
+                return; // Preserve the first successful baseline for diagnosis.
+            }
+            if (!audit.passed) { audit.restartStatus = "not_saved_failed"; return; }
+            Files.writeString(path, current);
+            audit.restartStatus = "saved";
+        } catch (IOException e) { audit.restartStatus = "io_error:" + e.getClass().getSimpleName(); }
     }
 
     /**
@@ -794,6 +1033,70 @@ public final class StreamsReflowingProbe {
             riverPreviewObstructedWaterColumns = riverPreviewObstructedWaterBlockCount = 0;
             riverPreviewObstructedWaterCoordinates = "";
         }
+    }
+
+    private static final class GraphNode {
+        final double x, z; int inDegree, outDegree;
+        GraphNode(double x, double z) { this.x=x; this.z=z; }
+    }
+    private static final class NativeGraphSelection {
+        final int centerX, centerZ, radius; int networks, nodes; String error = "";
+        NativePoint source, junction, outlet, flow;
+        NativeGraphSelection(int centerX, int centerZ, int radius) { this.centerX=centerX; this.centerZ=centerZ; this.radius=radius; }
+        boolean complete() { return source != null && junction != null && outlet != null && flow != null; }
+        NativePoint[] points() { return new NativePoint[] { source, junction, outlet, flow }; }
+        String value(NativePoint p) { return p == null ? "missing" : p.canonical(); }
+    }
+    private static final class NativeTopologyAudit {
+        NativePoint source, junction, outlet, flow;
+        String error = "", restartStatus = "not_written", pre100Snapshot = "", graphProvenance = "";
+        boolean passed;
+        void validate(ServerLevel level) {
+            if (source != null) source.readRole(level); if (junction != null) junction.readRole(level);
+            if (outlet != null) outlet.readRole(level); if (flow != null) flow.readFlowColumn(level, 64);
+            passed = source != null && junction != null && outlet != null && flow != null
+                    && source.valid && junction.valid && outlet.valid && flow.valid && flow.flowNonZero;
+        }
+        String canonical() { return "source=" + value(source) + "\njunction=" + value(junction) + "\noutlet=" + value(outlet)
+                + "\nflow=" + value(flow) + "\ngraph=" + graphProvenance + "\n"; }
+        private static String value(NativePoint p) { return p == null ? "missing" : p.canonical(); }
+        String json(boolean ticksAdvanced, long start, long end) { return StreamsReflowingProbe.json("streams_topology_audit", "status", passed && ticksAdvanced && !"mismatch".equals(restartStatus) && !restartStatus.startsWith("io_error") ? "passed" : "failed", "error", error,
+                "source", value(source), "junction", value(junction), "outlet", value(outlet), "flow", value(flow), "graphProvenance", graphProvenance,
+                "pre100Snapshot", pre100Snapshot, "restartStatus", restartStatus, "post100TicksAdvanced", ticksAdvanced, "startTick", start, "endTick", end); }
+    }
+    private static final class NativePoint {
+        final int x, z, waterY, bedY; final double flowX, flowZ; final String provenance;
+        boolean water, bedSolid, flowNonZero, valid, waterColumnContinuous, physicalBedSolid;
+        int physicalBedY = Integer.MIN_VALUE, waterColumnDepth;
+        String waterBlock = "", bedBlock = "", physicalBedBlock = "";
+        NativePoint(int x, int z, int waterY, int bedY, double flowX, double flowZ, String provenance) {
+            this.x=x; this.z=z; this.waterY=waterY; this.bedY=bedY; this.flowX=flowX; this.flowZ=flowZ; this.provenance=provenance;
+        }
+        /** Exact native-plan water/bed evidence for source, confluence and terminal roles. */
+        void readRole(ServerLevel level) {
+            var waterState = level.getBlockState(new BlockPos(x, waterY, z)); var bedState = level.getBlockState(new BlockPos(x, bedY, z));
+            water = waterState.getFluidState().is(FluidTags.WATER); bedSolid = bedState.isSolid(); flowNonZero = Math.abs(flowX)+Math.abs(flowZ)>1.0e-6;
+            valid = water && bedSolid; waterBlock = String.valueOf(waterState); bedBlock = String.valueOf(bedState);
+        }
+        /** Flow channels may be carved below ColumnPlan.bedY by native features; prove a bounded, hole-free physical column instead. */
+        void readFlowColumn(ServerLevel level, int maximumDepth) {
+            readRole(level); // Retain planned-bed evidence separately from the physical bed.
+            flowNonZero = Double.isFinite(flowX) && Double.isFinite(flowZ) && Math.abs(flowX)+Math.abs(flowZ)>1.0e-6;
+            physicalBedY = Integer.MIN_VALUE; physicalBedSolid = false; physicalBedBlock = "";
+            waterColumnDepth = water ? 1 : 0;
+            waterColumnContinuous = water;
+            for (int depth = 1; waterColumnContinuous && depth <= maximumDepth; depth++) {
+                int y = waterY - depth; if (y < level.getMinBuildHeight()) { waterColumnContinuous = false; break; }
+                var state = level.getBlockState(new BlockPos(x, y, z));
+                if (state.getFluidState().is(FluidTags.WATER)) { waterColumnDepth = depth + 1; continue; }
+                physicalBedY = y; physicalBedSolid = state.isSolid(); physicalBedBlock = String.valueOf(state);
+                waterColumnContinuous = physicalBedSolid; break;
+            }
+            valid = water && flowNonZero && waterColumnContinuous && physicalBedSolid;
+        }
+        String canonical() { return x+","+z+","+waterY+","+bedY+","+water+","+bedSolid+","+flowNonZero+","+flowX+","+flowZ+","+provenance+","+waterBlock+","+bedBlock
+                + ",physicalBed="+physicalBedY+","+physicalBedSolid+","+waterColumnDepth+","+waterColumnContinuous+","+physicalBedBlock; }
+        public String toString() { return canonical(); }
     }
 
     private record RouteCandidate(int chunkX, int chunkZ, int channelColumns, int waterSurfaceY, String samples) {}

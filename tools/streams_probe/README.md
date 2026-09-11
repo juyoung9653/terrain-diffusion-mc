@@ -5,6 +5,84 @@ Streams Reflowing 2.13.1 and the current Terrain Diffusion source tree. Normal
 builds do not include the diagnostic Java directory. Do not package a release
 with `probe.init.gradle` enabled.
 
+## Native Streams integration
+
+The active river implementation is **Streams Reflowing 2.13.1**, with Terrain
+Diffusion providing the base terrain. Keep Streams rivers, lakes, vegetation and
+water-flow settings enabled. The separate finite TD preview must be disabled in
+this world; existing preview worlds retain their own configuration and saves.
+
+The NeoForge integration defaults `streams.lazy_prefetch=true` in
+`terrain-diffusion-mc.properties`. Version-gated hooks skip only the native origin
+warmup and speculative player plate/radius submissions on TD terrain. Native
+engine creation, terrain sampling, network generation, carving and flow-tail
+updates remain enabled. Background flow grids are admitted only for already
+loaded TD chunks; foreground generation/urgent flow callers remain untouched.
+Other biome sources retain Streams' normal behavior.
+Demanded new watersheds still need computation; this is not instant generation.
+
+Streams performs its own cold terrain calibration before origin warmup. Preserve
+the same world's `streamsreflowing/minecraft_overworld/fastcal-v10.txt` and native
+network store on restart. Do not transplant calibration between seeds or changed
+TD model settings: its native header does not fingerprint the TD model/seed.
+
+For the enabled integration audit, prepare from a Streams-enabled instance and
+pass these quoted Gradle arguments through `probe.init.gradle`:
+
+```text
+-PtdProbe.playerPrefetchAudit=true
+-PtdProbe.playerPrefetchMode=enabled
+-PtdProbe.streamsTopologyAudit=true
+-PtdProbe.topologyCenterX=-1425
+-PtdProbe.topologyCenterZ=8
+-PtdProbe.topologyRadius=512
+```
+
+Those coordinates refer to the Terralith fixture seed `6187795302574383407`.
+The topology search is bounded and reports missing source/junction/outlet roles
+as a failed audit. It identifies directed native segment endpoints and joins,
+then verifies nearby native plans and actual water/bed blocks;
+the native tick audit waits for ticking chunks before 100 server ticks. Run the
+same probe world again for the immutable successful topology baseline check.
+The older disabled-player audit proves only the Streams-disabled preview path.
+
+`prepare-playtest.py --source-instance PRISM_INSTANCE --probe COMPLETED_PROBE
+--jar PRODUCTION_JAR --output NEW_DIRECTORY --spawn X Y Z` stages **TD Streams
+Integrated 1.21.1**, containing world **TD Streams Rivers**. It requires successful
+enabled player, topology and tick receipts, preserves the native world data, and
+refuses an existing output or an enabled standalone preview. Generated instances
+and screenshots stay under `build/`; installation preserves prior instances.
+
+### Verified native integration (2026-09-11)
+
+The Terralith fixture above passed generation and a same-world restart with all
+four native Streams generation/flow switches enabled and the standalone preview
+disabled. Four selected FULL chunks became tickable and passed another 100 ticks.
+Native graph roles and actual water/solid beds were verified at source
+`(-1447,64)`, confluence `(-1432,96)` and terminal `(-1416,224)` (X,Z).
+The flow sample `(-1425,8)` had two contiguous water blocks above clay at Y=76;
+its native planned bed Y=77 was itself water, so the diagnostic records a bounded
+physical-bed check separately from exact planned-bed checks at the three roles.
+The immutable topology snapshot matched after restart.
+
+The enabled-player audit observed 100 actual server ticks, including 41 checks
+past the native cold-join age gate. On the final restart it recorded 33 skipped
+player submissions and 486 skipped unloaded background grids, with queue/active
+builds both zero and maximum server-task response of 15 ms. These are bounded
+fixture measurements, not a guarantee of frame rate or instant new-area loading.
+Native cold calibration took 173 seconds on the initial run; the same world's
+persisted calibration reduced engine initialization to 17 ms on the final run.
+
+The production JAR was also opened in the separate Prism instance and its native
+source, confluence and terminal were inspected with Minecraft F2 screenshots:
+`build/visual-review/native-{source,junction,outlet}.png`. Newly requested terrain
+continued loading after teleporting. A tagged item placed in the audited flow
+column moved from X/Z `-1425.50/7.95` to `-1429.11/6.88` over 25 seconds in the
+native plan's flow direction; it was removed after the check. This verifies
+physical movement in the sampled stream, not all streams or entity types.
+Runtime receipts and logs are in
+`build/streams-integration/`; generated evidence is intentionally unversioned.
+
 ## Isolation and scope
 
 `prepare.py` copies only selected mod jars, configs and model assets from a Prism

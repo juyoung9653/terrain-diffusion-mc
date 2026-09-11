@@ -8,9 +8,12 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 import java.util.List;
 import java.util.Set;
 
-/** Applies the private-method mixin only to the bytecode layout audited for Streams 2.13.1. */
+/** Applies compatibility hooks only to the bytecode layout audited for Streams 2.13.1. */
 public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlugin {
-    private static final String MIXIN = "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin";
+    private static final Set<String> AUDITED_MIXINS = Set.of(
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenPrefetchMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin");
 
     @Override
     public void onLoad(String mixinPackage) {
@@ -23,7 +26,7 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
-        return !MIXIN.equals(mixinClassName) || hasAuditedStreamsVersion();
+        return !AUDITED_MIXINS.contains(mixinClassName) || hasAuditedStreamsVersion();
     }
 
     private static boolean hasAuditedStreamsVersion() {

@@ -50,6 +50,11 @@ public final class TerrainDiffusionConfig {
         return readInt("explorer.port", DEFAULT_EXPLORER_PORT);
     }
 
+    /** Keep Streams' speculative watershed work off TD's serialized inference queue. */
+    public static boolean streamsLazyPrefetch() {
+        return readBoolean("streams.lazy_prefetch", true);
+    }
+
     /** Whether to validate SHA-256 for pre-existing local model files before use. */
     public static boolean validateModel() {
         return readBoolean("validate_model", DEFAULT_VALIDATE_MODEL);

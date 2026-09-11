@@ -5,7 +5,9 @@
   "compatibilityLevel": "JAVA_21",
   "plugin": "com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin",
   "mixins": [
-    "StreamsStructureShieldMixin"
+    "StreamsStructureShieldMixin",
+    "StreamsWorldgenPrefetchMixin",
+    "StreamsPlayerPrefetchMixin"
   ],
   "injectors": {
     "defaultRequire": 1
