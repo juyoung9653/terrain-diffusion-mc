@@ -25,6 +25,16 @@ def main():
     heights = np.array([float(r["ground"]) for r in dem]).reshape(len(zs), len(xs))
     lines = [[(int(r["x1"]), int(r["z1"])), (int(r["x2"]), int(r["z2"]))] for r in segments]
     widths = [max(.7, float(r["halfWidth1"]) / 2) for r in segments]
+    if (args.world / "td-river-preview-curves.csv").is_file():
+        from collections import defaultdict
+        paths = defaultdict(list)
+        for row in rows("td-river-preview-curves.csv"):
+            paths[row["source"]].append(row)
+        lines, widths = [], []
+        for path in paths.values():
+            for a, b in zip(path, path[1:]):
+                lines.append([(float(a["x"]), float(a["z"])), (float(b["x"]), float(b["z"]))])
+                widths.append(max(.7, float(a["halfWidth"]) / 2))
     audited = [r for p in sorted(args.world.glob("td-river-preview-audit-*.csv")) for r in rows(p.name)]
     fig, axes = plt.subplots(1, 2, figsize=(13, 6))
     for ax in axes:

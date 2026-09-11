@@ -17,7 +17,7 @@ import java.util.zip.GZIPInputStream;
 
 /**
  * Replays one exported river preview without Minecraft or terrain generation.
- * Usage: ReplayPreview DEM.csv td-river-preview-ground.bin.gz [minCatchmentArea] [segments.csv]
+ * Usage: ReplayPreview DEM.csv td-river-preview-ground.bin.gz [minCatchmentArea] [segments.csv] [natural]
  */
 public final class ReplayPreview {
     private static final int MAGIC = 0x54445231; // TDR1
@@ -28,20 +28,34 @@ public final class ReplayPreview {
     private ReplayPreview() { }
 
     public static void main(String[] args) throws Exception {
-        if (args.length < 2 || args.length > 4) {
-            throw new IllegalArgumentException("usage: ReplayPreview DEM.csv ground.bin.gz [minCatchmentArea] [segments.csv]");
+        if (args.length < 2 || args.length > 5) {
+            throw new IllegalArgumentException("usage: ReplayPreview DEM.csv ground.bin.gz [minCatchmentArea] [segments.csv] [natural]");
         }
         double threshold = args.length >= 3 ? finitePositive(args[2], "minCatchmentArea") : 65536.0;
-        Path output = args.length == 4 ? Path.of(args[3]) : Path.of("replay-segments.csv");
+        Path output = args.length >= 4 ? Path.of(args[3]) : Path.of("replay-segments.csv");
         CsvGrid csv = readCsv(Path.of(args[0]));
         FullGround full = readGround(Path.of(args[1]));
         validateCoverage(csv, full);
 
         DrainagePlanner.Plan plan = DrainagePlanner.plan(csv.originX, csv.originZ, csv.spacing, csv.width, csv.height,
                 csv.ground, csv.runoff, new DrainagePlanner.Settings(62, threshold, 1, 1), csv.ocean);
-        RiverGeometry.Geometry geometry = RiverGeometry.build(plan, 6, full::groundAt);
+        RiverGeometry.Geometry geometry = args.length == 5 && "natural".equals(args[4])
+                ? RiverGeometry.buildNatural(plan, 6, full::groundAt) : RiverGeometry.build(plan, 6, full::groundAt);
         Metrics metrics = inspect(plan, geometry, full);
         writeSegments(output, geometry.segments());
+        StringBuilder curves = new StringBuilder("source,target,index,x,z,water,halfWidth\n");
+        for (var segment : geometry.segments()) {
+            int index = 0;
+            for (var point : geometry.path(segment)) curves.append(segment.source()).append(',').append(segment.target())
+                    .append(',').append(index++).append(',').append(point.x()).append(',').append(point.z())
+                    .append(',').append(point.water()).append(',').append(point.width()).append('\n');
+        }
+        Files.writeString(output.resolveSibling(output.getFileName() + ".curves.csv"), curves);
+        System.out.println("curvedReaches=" + geometry.segments().stream().filter(s -> {
+            double length = Math.hypot(s.x2() - s.x1(), s.z2() - s.z1());
+            return length > 0 && geometry.path(s).stream().anyMatch(p -> Math.abs(
+                    (s.x2() - s.x1()) * (p.z() - s.z1()) - (s.z2() - s.z1()) * (p.x() - s.x1())) / length > .25);
+        }).count());
         System.out.printf(Locale.ROOT,
                 "{\"segments\":%d,\"confluences\":%d,\"aboveSeaSegments\":%d,\"maxFullWidth\":%.6f,\"maxActualCut\":%d,\"invalidEndpoints\":%d,\"leakingSides\":%d,\"seaLevelContacts\":%d,\"inlandLeakSamples\":%s,\"wetSamples\":%d,\"scanTruncated\":%s,\"rejectedSegments\":%d,\"output\":\"%s\"}%n",
                 geometry.segments().size(), metrics.confluences, metrics.aboveSeaSegments, metrics.maxFullWidth,
@@ -130,7 +144,6 @@ public final class ReplayPreview {
         for (RiverGeometry.Segment segment : geometry.segments()) {
             inbound.merge(segment.target(), 1, Integer::sum);
             if (segment.water1() > 62 || segment.water2() > 62) aboveSea++;
-            maxWidth = Math.max(maxWidth, Math.max(segment.width1(), segment.width2()) * 2.0);
             if (!full.contains(segment.x1(), segment.z1()) || !full.contains(segment.x2(), segment.z2())
                     || !retainedChainReachesOcean(plan, segment.source(), retained)) invalid++;
         }
@@ -140,13 +153,17 @@ public final class ReplayPreview {
         List<LeakSample> inlandSamples = new ArrayList<>();
         scan:
         for (RiverGeometry.Segment segment : geometry.segments()) {
-            int radius = (int) Math.ceil(Math.max(segment.width1(), segment.width2()));
-            int minX = Math.min(segment.x1(), segment.x2()) - radius, maxX = Math.max(segment.x1(), segment.x2()) + radius;
-            int minZ = Math.min(segment.z1(), segment.z2()) - radius, maxZ = Math.max(segment.z1(), segment.z2()) + radius;
+            var path = geometry.path(segment);
+            int radius = (int) Math.ceil(path.stream().mapToDouble(RiverGeometry.PathPoint::width).max().orElseThrow()) + 1;
+            int minX = (int) Math.floor(path.stream().mapToDouble(RiverGeometry.PathPoint::x).min().orElseThrow()) - radius;
+            int maxX = (int) Math.ceil(path.stream().mapToDouble(RiverGeometry.PathPoint::x).max().orElseThrow()) + radius;
+            int minZ = (int) Math.floor(path.stream().mapToDouble(RiverGeometry.PathPoint::z).min().orElseThrow()) - radius;
+            int maxZ = (int) Math.ceil(path.stream().mapToDouble(RiverGeometry.PathPoint::z).max().orElseThrow()) + radius;
             for (int z = minZ; z <= maxZ; z++) for (int x = minX; x <= maxX; x++) {
                 if (++samples > MAX_WET_SAMPLES) { truncated = true; break scan; }
                 RiverGeometry.Column wet = geometry.column(x, z);
                 if (wet.waterY() == Integer.MIN_VALUE) continue;
+                maxWidth = Math.max(maxWidth, wet.halfWidth() * 2.0);
                 maxCut = Math.max(maxCut, wet.originalGroundY() - wet.groundY());
                 for (int[] d : CARDINAL) {
                     RiverGeometry.Column side = geometry.column(x + d[0], z + d[1]);

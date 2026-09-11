@@ -4,6 +4,7 @@ import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.mojang.serialization.JsonOps;
 import net.minecraft.resources.RegistryOps;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
+import com.github.xandergos.terraindiffusionmc.pipeline.FastNoiseLite;
 import com.github.xandergos.terraindiffusionmc.platform.PlatformPaths;
 import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
 import net.minecraft.core.BlockPos;
@@ -36,6 +37,14 @@ import java.util.concurrent.FutureTask;
 public final class RiverPreviewService {
     private static final Logger LOG = LoggerFactory.getLogger("terrain-diffusion-mc/rivers");
     private static final Map<ServerLevel, FutureTask<Preview>> PLANS = new ConcurrentHashMap<>();
+    private static final FastNoiseLite SEDIMENT = sedimentNoise();
+    private static final int[][] CARDINAL = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+
+    private static FastNoiseLite sedimentNoise() {
+        var noise = new FastNoiseLite(72839);
+        noise.SetFrequency(0.065f);
+        return noise;
+    }
 
     private RiverPreviewService() { }
 
@@ -71,7 +80,7 @@ public final class RiverPreviewService {
         double[] ground = new double[n * n], runoff = new double[n * n];
         boolean[] ocean = new boolean[n * n];
         Path cachePath = level.getServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
-                .resolve("td-river-preview-cache-v1.bin.gz");
+                .resolve(settings.cacheFileName());
         var cacheKey = new RiverPreviewCache.Key(settings.version(), settings.seed(), settings.scale(),
                 settings.originX(), settings.originZ(), settings.size(), settings.spacing(),
                 settings.minCatchment(), settings.maxFillDepth(), settings.maxCut());
@@ -118,7 +127,9 @@ public final class RiverPreviewService {
         }
         DrainagePlanner.Plan drainage = DrainagePlanner.plan(settings.originX(), settings.originZ(), settings.spacing(),
                 n, n, ground, runoff, new DrainagePlanner.Settings(62, settings.minCatchment(), 1, settings.maxFillDepth()), ocean);
-        RiverGeometry.Geometry geometry = RiverGeometry.build(drainage, settings.maxCut(), sampler);
+        RiverGeometry.Geometry geometry = settings.version() == 1
+                ? RiverGeometry.build(drainage, settings.maxCut(), sampler)
+                : RiverGeometry.buildNatural(drainage, settings.maxCut(), sampler);
         Preview result = new Preview(settings, drainage, geometry, sampler, runoff, ocean);
         LOG.info("River preview planned {} segments, drainage={}, elapsedMs={}", geometry.segments().size(),
                 drainage.diagnostics(), (System.nanoTime() - started) / 1_000_000);
@@ -164,6 +175,28 @@ public final class RiverPreviewService {
                 var biome = level.getChunkSource().getGenerator().getBiomeSource().getNoiseBiome(
                         x >> 2, c.originalGroundY() >> 2, z >> 2, level.getChunkSource().randomState().sampler());
                 boolean sandy = !biome.value().hasPrecipitation();
+                var surface = (sandy ? Blocks.SAND : wet ? Blocks.GRAVEL : Blocks.GRASS_BLOCK).defaultBlockState();
+                if (settings.version() >= 2) {
+                    float sediment = SEDIMENT.GetNoise(x, z);
+                    if (wet) {
+                        surface = (sandy || sediment > .23 ? Blocks.SAND
+                                : sediment < -.25 ? Blocks.CLAY : Blocks.GRAVEL).defaultBlockState();
+                    } else {
+                        var original = chunk.getBlockState(block.set(x, c.originalGroundY(), z));
+                        if (original.is(net.minecraft.tags.BlockTags.DIRT) || original.is(Blocks.GRAVEL)
+                                || original.is(Blocks.SAND) || original.is(Blocks.RED_SAND)) surface = original;
+                        // Sparse gravel bars extend inland in coherent patches. A bright,
+                        // one-block sand rim around every reach reads as an artificial curb.
+                        if (sediment > .12) {
+                            int nearbyWater = Integer.MIN_VALUE;
+                            int barWidth = sediment > .3 ? 3 : 2;
+                            for (int[] side : CARDINAL)
+                                nearbyWater = Math.max(nearbyWater, plan.geometry.column(x + side[0] * barWidth, z + side[1] * barWidth).waterY());
+                            if (nearbyWater != Integer.MIN_VALUE && c.groundY() <= nearbyWater + 1)
+                                surface = (sandy ? Blocks.SAND : Blocks.GRAVEL).defaultBlockState();
+                        }
+                    }
+                }
                 // Clear through the actual pre-feature surface as well as the
                 // snapshot top. CUDA +/-1 variation must not leave a lid above
                 // cached water. All active banks/bed lining are restored to the
@@ -171,8 +204,10 @@ public final class RiverPreviewService {
                 int clearTop = Math.min(chunk.getMaxBuildHeight() - 1, Math.max(c.originalGroundY(),
                         chunk.getHeight(Heightmap.Types.OCEAN_FLOOR_WG, x & 15, z & 15)));
                 for (int y = Math.max(chunk.getMinBuildHeight(), c.sealY()); y <= clearTop; y++) {
-                    var state = y < c.groundY() ? Blocks.STONE.defaultBlockState()
-                            : y == c.groundY() ? (sandy ? Blocks.SAND : wet ? Blocks.GRAVEL : Blocks.GRASS_BLOCK).defaultBlockState()
+                    var fill = settings.version() >= 2 && y >= c.groundY() - 2
+                            ? (wet ? Blocks.GRAVEL : sandy ? Blocks.SANDSTONE : Blocks.DIRT) : Blocks.STONE;
+                    var state = y < c.groundY() ? fill.defaultBlockState()
+                            : y == c.groundY() ? surface
                             : wet && y <= c.waterY() ? Blocks.WATER.defaultBlockState() : Blocks.AIR.defaultBlockState();
                     chunk.setBlockState(block.set(x, y, z), state, false);
                 }
@@ -208,6 +243,16 @@ public final class RiverPreviewService {
         for (var s : preview.geometry.segments()) lines.add(s.source() + "," + s.target() + "," + s.x1() + "," + s.z1() + ","
                 + s.x2() + "," + s.z2() + "," + s.water1() + "," + s.water2() + "," + s.width1() + "," + s.width2());
         Files.write(path, lines);
+        if (preview.settings.version() >= 2) {
+            List<String> curves = new ArrayList<>();
+            curves.add("source,target,index,x,z,water,halfWidth");
+            for (var s : preview.geometry.segments()) {
+                int pointIndex = 0;
+                for (var point : preview.geometry.path(s)) curves.add(s.source() + "," + s.target() + "," + pointIndex++
+                        + "," + point.x() + "," + point.z() + "," + point.water() + "," + point.width());
+            }
+            Files.write(path.resolveSibling("td-river-preview-curves.csv"), curves);
+        }
         List<String> dem = new ArrayList<>();
         dem.add("x,z,ground,drainage,renderedCatchment,terminal,channel,runoff,ocean");
         var d = preview.drainage;

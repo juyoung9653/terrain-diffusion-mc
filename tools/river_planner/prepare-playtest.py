@@ -68,21 +68,9 @@ def nbt_fields(raw):
     return fields
 
 
-def prepare_world(path):
+def patch_nbt(path, changes):
     raw = gzip.decompress(path.read_bytes())
     fields = nbt_fields(raw)
-    assert fields[("Data", "WorldGenSettings", "generate_features")][3] == 0
-    assert ("Data", "Player") not in fields, "Use a dedicated probe world without a player"
-    changes = {
-        ("Data", "LevelName"): "TD River Preview",
-        ("Data", "GameType"): 1,
-        ("Data", "allowCommands"): 1,
-        ("Data", "SpawnX"): -540,
-        ("Data", "SpawnY"): 64,
-        ("Data", "SpawnZ"): -96,
-        ("Data", "GameRules", "spawnRadius"): "0",
-        ("Data", "GameRules", "spawnChunkRadius"): "0",
-    }
     patches = []
     for key, value in changes.items():
         kind, start, end, _ = fields[key]
@@ -100,6 +88,22 @@ def prepare_world(path):
     # must survive the edit exactly.
     assert all(result[key][3] == value[3] for key, value in fields.items() if key not in changes)
     path.write_bytes(gzip.compress(raw))
+
+
+def prepare_world(path):
+    fields = nbt_fields(gzip.decompress(path.read_bytes()))
+    assert fields[("Data", "WorldGenSettings", "generate_features")][3] == 0
+    assert ("Data", "Player") not in fields, "Use a dedicated probe world without a player"
+    patch_nbt(path, {
+        ("Data", "LevelName"): "TD River Preview",
+        ("Data", "GameType"): 1,
+        ("Data", "allowCommands"): 1,
+        ("Data", "SpawnX"): -540,
+        ("Data", "SpawnY"): 64,
+        ("Data", "SpawnZ"): -96,
+        ("Data", "GameRules", "spawnRadius"): "0",
+        ("Data", "GameRules", "spawnChunkRadius"): "0",
+    })
 
 
 def sha256(path):
@@ -136,7 +140,11 @@ def main():
     manifest = json.loads((probe / "input-manifest.json").read_text())
     assert manifest["terralith"] and manifest["waterwaysDisabled"]
     assert manifest["seed"] == 6187795302574383407, "Spawn uses this audited seed"
-    assert (probe / "world/td-river-preview-cache-v1.bin.gz").is_file()
+    state = nbt_fields(gzip.decompress((probe / "world/data/terrain_diffusion_river_preview.dat").read_bytes()))
+    version = state[("data", "version")][3]
+    assert version in (1, 2)
+    cache = f"td-river-preview-cache-v{version}.bin.gz"
+    assert (probe / "world" / cache).is_file()
     with zipfile.ZipFile(jar) as archive:
         names = archive.namelist()
         assert any(name.endswith("RiverPreviewService.class") for name in names)
@@ -159,7 +167,6 @@ def main():
                     ignore=shutil.ignore_patterns("session.lock", "*.csv", "*.jsonl", "level.dat_old"))
     prepare_world(world / "level.dat")
     (game / "options.txt").write_text("lang:ko_kr\nrenderDistance:8\nsimulationDistance:5\n", encoding="utf-8")
-    cache = "td-river-preview-cache-v1.bin.gz"
     assert sha256(world / cache) == sha256(probe / "world" / cache)
     receipt = {"jar": jar.name, "jarSha256": sha256(jar), "cacheSha256": sha256(world / cache),
                "instance": target.name, "world": "TD River Preview", "spawn": [-540, 64, -96],

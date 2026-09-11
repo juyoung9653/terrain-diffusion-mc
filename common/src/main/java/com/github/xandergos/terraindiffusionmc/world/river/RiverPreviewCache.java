@@ -31,7 +31,8 @@ public final class RiverPreviewCache {
     public record Key(int version, long seed, int scale, int originX, int originZ, int size, int spacing,
                       int minCatchment, int maxFillDepth, int maxCut) {
         public Key {
-            if (version != FORMAT_VERSION) {
+            // Algorithm identity is independent of the unchanged binary input format.
+            if (version != 1 && version != 2) {
                 throw new IllegalArgumentException("Unsupported river preview cache key version: " + version);
             }
             if (scale < 1 || scale > 6) {

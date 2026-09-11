@@ -23,6 +23,14 @@ public final class RiverPreviewCacheTest {
         require(Arrays.equals(data.runoff(), loaded.runoff()), "round-trip runoff");
         require(Arrays.equals(data.ocean(), loaded.ocean()), "round-trip ocean");
         require(Arrays.equals(data.fullGround(), loaded.fullGround()), "round-trip full ground");
+        RiverPreviewCache.Key naturalKey = new RiverPreviewCache.Key(2, 12345L, 2, -256, -256,
+                256, 8, 1024, 1, 6);
+        expectIOException(() -> RiverPreviewCache.read(cache, naturalKey));
+        Path naturalCache = directory.resolve("natural.tdrp.gz");
+        RiverPreviewCache.write(naturalCache, new RiverPreviewCache.Data(naturalKey,
+                data.ground(), data.runoff(), data.ocean(), data.fullGround()));
+        require(RiverPreviewCache.read(naturalCache, naturalKey).key().version() == 2, "natural version round-trip");
+        expectIOException(() -> RiverPreviewCache.read(naturalCache, key));
 
         double[] extracted = loaded.ground();
         extracted[0] = -99;

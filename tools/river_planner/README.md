@@ -22,7 +22,7 @@ world. Normal worlds keep the existing terrain and Streams behavior.
   not rewrite an existing preview world's settings.
 - Before the first carved chunk, persist settings and atomically publish exact
   DEM, runoff, ocean mask and full-resolution ground in
-  `td-river-preview-cache-v1.bin.gz`. Rebuild geometry from that immutable input
+  `td-river-preview-cache-v2.bin.gz` (V1 worlds retain their V1 cache). Rebuild geometry from that immutable input
   on restart. Missing/corrupt/mismatched caches in existing preview worlds fail
   closed; a cache without matching enabled settings is also rejected.
 - Restore active banks and bed to cached heights and clear through the actual
@@ -72,7 +72,8 @@ heights. Compile `ReplayPreview.java` with `DrainagePlanner.java` and
 java -cp BUILD_DIR ReplayPreview WORLD/td-river-preview-dem.csv WORLD/td-river-preview-ground.bin.gz 65536 replay-segments.csv
 ```
 
-Replay uses sea level 62, fill budget 1 and cut budget 6. It supports the default
+Append `natural` after the output path to replay V2 geometry. Replay uses sea
+level 62, fill budget 1 and cut budget 6. It supports the default
 4096-block snapshot, counts retained connections to actual ocean roots, and
 separates inland lateral leaks from sea-level water contacts. This avoids another
 GPU terrain run for every geometry change. It does not replace actual Minecraft
@@ -128,7 +129,8 @@ both before- and after-tick observations.
 ### Opening the prepared playtest
 
 In Prism Launcher select **TD River Preview 1.21.1**, then open the singleplayer
-world **TD River Preview**. The copied, cached Terralith test world starts in
+world **TD Natural Rivers** for V2 geometry; **TD River Preview** retains V1.
+The copied, cached Terralith test world starts in
 creative mode near audited river water at `-540 64 -96`, with commands enabled.
 Use `/tp @s -540 80 -96` to return to this area. The instance uses Java 21,
 NeoForge 21.1.249, the CUDA build and a 12 GiB heap limit. Initial model loading
@@ -161,9 +163,37 @@ Copy the resulting directory into Prism's `instances` directory while Prism is
 closed. Existing output directories are refused. Generated instances, models
 and saves belong under `build/` and are not committed.
 
+### V2 geometry and comparison
+
+New enabled preview worlds use shared junction tangents, cubic curves and
+continuous width variation. A bounded one-block world-space edge field breaks
+parallel banks; spatial indexing and containment checks include that margin.
+Terrain and cardinal-bank checks constrain displacement and
+fall back to straight reaches when necessary. Wet beds use spatially coherent
+sand/gravel/clay patches; shallow banks retain soil rather than exposed stone.
+Existing V1 worlds retain their original geometry and materials, including
+new chunks, so installing the updated JAR does not change their river seams.
+
+`prepare-comparison-world.py --source PROBE_WORLD --output NEW_WORLD --mode natural`
+creates a separate chunk-empty V2 comparison world from the cached V1 fixture.
+It preserves terrain input bytes and refuses existing output or player worlds.
+Use `--mode streams` with a separate Streams-enabled instance for the reference.
+The fixed spawn is specific to seed `6187795302574383407`.
+
+V2 runtime validation on this fixture covered 12 chunks before and after 100
+ticks: no missing water/bed, blocked channels or lateral bank leaks. The player
+prefetch check passed across 40 ticks. These checks establish containment and
+loading behavior, not aesthetic quality. Compare actual F2 screenshots in game;
+desktop screen capture may show a stale OpenGL frame on this Windows setup.
+V2 exports `td-river-preview-curves.csv`; the plot tool draws these actual paths.
+The final fixture replay retained 154 reaches and 6 joins, with zero inland
+bank leaks and maximum cut 6. The client restart reproduced the cache, plan and
+curve CSV bytes exactly. Actual before/after and close-range F2 captures plus
+build/test/runtime receipts are under `build/visual-review/`.
+
 ### Generation constraints
 
-- Piecewise linear D8 paths are an initial geometry; smooth meanders and large
+- Curves still follow a D8 drainage network; large-scale meanders and broad
   floodplains need further refinement. Relative runoff is not a physical model
   of discharge, erosion, sediment, or seasonal water balance.
 - Rejection can reduce network coverage. It is preferable to terminating rivers

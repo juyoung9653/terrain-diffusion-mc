@@ -18,7 +18,7 @@ public record RiverPreviewSettings(
         int maxFillDepth,
         int maxCut
 ) {
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
     public static final int DEFAULT_ORIGIN = -2048;
     public static final int DEFAULT_SIZE = 4096;
     public static final int DEFAULT_SPACING = 32;
@@ -27,17 +27,21 @@ public record RiverPreviewSettings(
     public static final int DEFAULT_MAX_CUT = 6;
 
     public RiverPreviewSettings {
-        if (version != 0 && version != VERSION) {
+        if (version < 0 || version > VERSION) {
             throw new IllegalArgumentException("Unsupported river preview settings version: " + version);
         }
-        if (enabled && version != VERSION) {
-            throw new IllegalArgumentException("Enabled river preview settings must use version " + VERSION);
+        if (enabled && version == 0) {
+            throw new IllegalArgumentException("Enabled river preview settings must have an algorithm version");
         }
         if (scale < 1 || scale > WorldScaleManager.MAX_SCALE) {
             throw new IllegalArgumentException("River preview scale must be from 1 through "
                     + WorldScaleManager.MAX_SCALE + ": " + scale);
         }
         validateBounds(originX, originZ, size, spacing, minCatchment, maxFillDepth, maxCut);
+    }
+
+    public String cacheFileName() {
+        return "td-river-preview-cache-v" + version + ".bin.gz";
     }
 
     public static RiverPreviewSettings uninitialized() {

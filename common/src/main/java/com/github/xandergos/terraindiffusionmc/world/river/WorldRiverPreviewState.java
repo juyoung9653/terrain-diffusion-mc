@@ -74,7 +74,7 @@ public final class WorldRiverPreviewState extends SavedData {
     }
 
     /**
-     * Must run on the server thread before spawn preparation. A saved version-1
+     * Must run on the server thread before spawn preparation. A saved versioned
      * state is immutable; only a newly created world may consume JVM settings.
      */
     public static void initialize(ServerLevel level, boolean newWorld) {
@@ -89,9 +89,9 @@ public final class WorldRiverPreviewState extends SavedData {
 
         WorldRiverPreviewState state = level.getDataStorage().computeIfAbsent(TYPE, DATA_NAME);
         boolean freshState = state.settings.version() == 0;
-        boolean cacheExists = java.nio.file.Files.exists(level.getServer()
-                .getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
-                .resolve("td-river-preview-cache-v1.bin.gz"));
+        var worldPath = level.getServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT);
+        boolean cacheExists = java.nio.file.Files.exists(worldPath.resolve("td-river-preview-cache-v1.bin.gz"))
+                || java.nio.file.Files.exists(worldPath.resolve("td-river-preview-cache-v2.bin.gz"));
         if (cacheExists && (freshState || !state.settings.enabled())) {
             throw new IllegalStateException("River cache exists without matching enabled settings; restore the world backup");
         }
