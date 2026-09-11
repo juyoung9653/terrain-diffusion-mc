@@ -1,0 +1,6 @@
+{
+  "pack": {
+    "description": "Terrain Diffusion optional Terralith surface compatibility (requires Terralith + Lithostitched)",
+    "pack_format": 48
+  }
+}

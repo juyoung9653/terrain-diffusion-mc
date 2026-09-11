@@ -16,6 +16,9 @@ gradle.projectsEvaluated {
             gradle.rootProject.properties.findAll { key, value -> key.startsWith('tdProbe.') }.each { key, value ->
                 systemProperty "td.streamsProbe.${key.substring('tdProbe.'.length())}", value.toString()
             }
+            gradle.rootProject.properties.findAll { key, value -> key.startsWith('tdRiver.') }.each { key, value ->
+                systemProperty "td.rivers.${key.substring('tdRiver.'.length())}", value.toString()
+            }
         }
     }
 }

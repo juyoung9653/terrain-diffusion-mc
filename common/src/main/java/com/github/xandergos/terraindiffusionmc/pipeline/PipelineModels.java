@@ -21,7 +21,7 @@ public final class PipelineModels implements AutoCloseable {
 
     private static volatile PipelineModels INSTANCE;
     private static volatile CountDownLatch loadDone;
-    private static volatile boolean loadStarted;
+    private static boolean loadStarted;
     private static volatile Throwable loadFailure;
 
     private final OnnxModel coarseModel;
@@ -32,35 +32,50 @@ public final class PipelineModels implements AutoCloseable {
     public static synchronized void load() {
         if (INSTANCE != null) return;
         if (loadStarted) return;
+        // A failed native runtime cannot be recovered by immediately trying the
+        // same load again. Keep its cause available to every caller for this JVM.
+        if (loadFailure != null) return;
         loadStarted = true;
-        loadFailure = null;
-        loadDone = new CountDownLatch(1);
+        CountDownLatch completion = new CountDownLatch(1);
+        loadDone = completion;
         Thread t = new Thread(() -> {
             try {
                 LOG.info("Loading terrain-diffusion ML models (background)...");
                 long start = System.currentTimeMillis();
-                INSTANCE = new PipelineModels();
+                PipelineModels models = new PipelineModels();
                 long elapsed = System.currentTimeMillis() - start;
+                completeLoad(completion, models, null);
                 LOG.info("Terrain-diffusion ML models loaded in {} ms", elapsed);
             } catch (Throwable e) {
-                loadFailure = e;
-                loadStarted = false;
+                completeLoad(completion, null, e);
                 LOG.error("Failed to load terrain-diffusion models", e);
-            } finally {
-                loadDone.countDown();
             }
         }, "terrain-diffusion-models");
         t.setDaemon(true);
         t.start();
     }
 
+    /** Completes exactly the load attempt that owns {@code completion}. */
+    private static void completeLoad(CountDownLatch completion, PipelineModels models, Throwable failure) {
+        synchronized (PipelineModels.class) {
+            if (failure == null) {
+                INSTANCE = models;
+            } else {
+                loadFailure = failure;
+            }
+            loadStarted = false;
+            completion.countDown();
+        }
+    }
+
     /** Blocks until models are loaded (or load failed). Starts load if not started. */
     public static void awaitLoad() {
+        CountDownLatch latch;
         synchronized (PipelineModels.class) {
             if (INSTANCE != null) return;
             if (!loadStarted) load();
+            latch = loadDone;
         }
-        CountDownLatch latch = loadDone;
         if (latch != null) {
             try {
                 if (!latch.await(10, TimeUnit.MINUTES)) {
@@ -71,7 +86,8 @@ public final class PipelineModels implements AutoCloseable {
                 throw new RuntimeException("Interrupted waiting for terrain-diffusion models", e);
             }
         }
-        if (INSTANCE == null) {
+        synchronized (PipelineModels.class) {
+            if (INSTANCE != null) return;
             Throwable failureCause = loadFailure;
             if (failureCause != null) {
                 throw new IllegalStateException("Failed to load terrain-diffusion models", failureCause);
@@ -96,17 +112,20 @@ public final class PipelineModels implements AutoCloseable {
     public OnnxModel getDecoderModel() { return decoderModel; }
 
     @Override
-    public synchronized void close() {
-        if (INSTANCE != this) return;
-        LOG.info("Closing terrain-diffusion ML models");
-        try {
-            coarseModel.close();
-            baseModel.close();
-            decoderModel.close();
-        } finally {
-            INSTANCE = null;
-            loadStarted = false;
-            loadFailure = null;
+    public void close() {
+        synchronized (PipelineModels.class) {
+            if (INSTANCE != this) return;
+            LOG.info("Closing terrain-diffusion ML models");
+            try {
+                coarseModel.close();
+                baseModel.close();
+                decoderModel.close();
+            } finally {
+                INSTANCE = null;
+                loadStarted = false;
+                loadFailure = null;
+                loadDone = null;
+            }
         }
     }
 }

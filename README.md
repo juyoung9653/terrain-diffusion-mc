@@ -190,8 +190,135 @@ cd onnxruntime
 
 The built jar appears in `java/build/`. Rename it to `onnxruntime-dml.jar` and place it in `libs/` in this repository.
 
+### Native runtime startup failures
+
+If world creation reports `Terrain-diffusion models did not load`, inspect the
+first `Failed to load terrain-diffusion models` entry in `logs/latest.log`.
+An `UnsatisfiedLinkError` for `onnxruntime.dll` happens before model inference;
+changing biome packs or `inference.device` cannot fix that native library load.
+Failed model loading is retained for the process lifetime to preserve the original
+cause and prevent repeated background retries. Restart Minecraft after fixing it.
+
+The Windows build uses the local DirectML runtime, while the CUDA build uses
+ONNX Runtime GPU 1.20.0. On NVIDIA systems with CUDA 12.x and cuDNN 9.x on `PATH`,
+build `./gradlew :neoforge:build -PuseCuda=true` and replace the Windows mod JAR
+with the CUDA JAR. Keep only one Terrain Diffusion mod JAR installed. See the
+[CUDA runtime requirements](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#requirements).
+The CPU build (`-PuseCpu=true`) is also available for diagnosis.
+
+Before launching Minecraft, test the exact runtime JAR with Java 21:
+
+```text
+java -cp "path/to/onnxruntime_gpu-1.20.0.jar" tools/onnx/RuntimeSmokeTest.java CUDA
+```
+
+Use `CPU` or `DML` with the corresponding runtime JAR. This checks native loading,
+session creation and a small addition inference; it does not validate full terrain
+models, world generation, or in-game performance.
+
+### Structure search during world creation
+
+Before spawn chunks are prepared, Minecraft computes concentric structure rings.
+The vanilla preferred-biome search samples a 57-by-57 quart grid per stronghold
+candidate. With Terrain Diffusion, repeatedly querying these points can fetch
+large terrain tiles and contend with concurrent searches for the shared cache.
+
+Terrain Diffusion skips only this ring-relocation call, returning no preferred
+biome so Minecraft retains the original ring position. It submits no coarse or
+exact terrain work for relocation. Merely bounding each search to a few tiles was
+insufficient: many distant structure candidates still required minutes of AI work.
+
+Actual terrain, surface and cave biome generation remain unchanged. A structure's
+separate biome-validity rules still apply. Other worlds retain their normal ring
+search. Ordinary biome searches, including `/locate biome`, remain available and
+can still be expensive because they query AI terrain on demand.
+
+The upstream Terrain Diffusion source disables both horizontal and 3D biome search
+globally. Do not restore those global null-return overrides just to fix startup;
+the narrow ring callsite avoids also disabling player-requested biome searches.
+The experimental coarse-ranked helpers remain unused by ring placement.
+
+Run `python tools/test_ring_relocation.py --java-home "path/to/jdk-21"` to check
+that the actual redirect submits no terrain work for Terrain Diffusion and forwards
+other biome sources unchanged. This model-free test uses engine API stubs; build
+against Minecraft and verify a fresh world for actual loader and timing behavior.
+
 ## Note For Mod Developers
 
 While modifying the AI terrain itself is quite complex, the integration with Minecraft biomes is extremely simple. The model outputs elevation + 4 climate variables, and this is converted to Minecraft biomes with hand-written rules. This is the most immediate way to improve the quality of the terrain and is relatively easy, but takes time to get realistic. The entire biome classifier is [only 250 lines](https://github.com/xandergos/terrain-diffusion-mc/blob/master/src/main/java/com/github/xandergos/terraindiffusionmc/pipeline/BiomeClassifier.java).
 
 The terrain diversity far outpaces the biome diversity and there's a real opportunity to close that gap. I'm hoping someone goes crazy with it.
+
+## River generation modes (1.21.1)
+
+Normal worlds use the separately installed **Streams Reflowing** mod for its
+river generation and flowing-water behavior. This repository supplies biome
+compatibility and a structure shield; it does not embed or port the entire
+Streams mod.
+
+The optional [finite river preview](tools/river_planner/README.md) is a separate
+Terrain Diffusion river planner and carver. It requires Streams river/lake
+generation and world structures disabled. It uses Minecraft water and does not
+port Streams' custom flowing-water system. Its persisted terrain cache belongs
+to the preview world and must accompany any copy of that world.
+
+## Terralith compatibility (1.21.1)
+
+This branch provides an optional Terralith biome source for Terrain Diffusion worlds.
+It keeps the diffusion heightmap and places Terralith biomes in climate-appropriate,
+coherent regions. All 95 Terralith 2.6.2 biome IDs are represented, including 11
+underground biomes selected by depth. Their vegetation and carvers come from the
+installed Terralith mod. Floating islands, spires, craters, and other distinctive
+terrain shapes are deferred; selecting their biome does not reproduce their shape.
+
+Use the matching Minecraft 1.21.1 loader builds of Terrain Diffusion, Terralith
+2.6.2, and Lithostitched (Terralith requires at least 1.7.7). For NeoForge, build
+Terrain Diffusion with Java 21 using `./gradlew :neoforge:build -PuseDml=true`.
+The Windows variant also requires the existing `libs/onnxruntime-dml.jar`.
+
+Enable the generated pack in
+`compat/terralith/terrain-diffusion-terralith-surface` **when creating a new world**,
+then select the **Terrain Diffusion** world type. The pack supplies the surface
+rules and enables `terralith: true` in that preset's biome-source settings. Put it
+above the source packs in the data-pack priority list. Terralith and Lithostitched
+remain required: the compatibility pack does not bundle their biomes or features.
+
+The option is saved in the world's biome-source codec. Existing worlds default to
+disabled; installing Terralith alone does not switch their biome selector. Do not
+add this pack to an existing world expecting seamless conversion of old chunks,
+or remove the required mods from a Terralith-enabled world. A missing required
+biome fails at registry loading rather than silently changing new terrain.
+
+For maintenance, use `python tools/terralith/generate_compat.py --help` to regenerate
+the pack from a local Terralith JAR. The generated inventory and audit describe
+source references and retained height assumptions. Tune biome distribution in the
+classifier's resource table, not by adding per-biome Java branches. Check exact
+95-ID coverage, synthetic selection reachability, negative-coordinate/tile
+continuity, underground depth guards, resource references, and feature-order
+cycles before testing new seeds in Minecraft. Synthetic checks do not establish
+that every biome occurs in every seed or that its scenery looks correct.
+
+The table is `common/src/main/resources/terralith-biomes.tsv` (tab-separated).
+Surface elevation thresholds and horizontal regions use physical terrain meters;
+the 8192-meter regions are roughly 546 blocks wide at scale 2. Underground region
+coordinates and cave elevation thresholds use Minecraft blocks. Low coastal land
+hosts island-themed biomes; warm shallow water is an estuary proxy for `warm_river`.
+These proxies do not detect island connectivity or generate river channels.
+
+Run the focused checks from the repository root (replace the JAR argument):
+
+```text
+python -B tools/test_terralith.py --jar "path/to/Terralith_1.21.1_v2.6.2_Neoforge.jar"
+```
+
+Use `--java-home` for a specific JDK and `--vanilla` for a vanilla 1.21.1 client JAR
+outside the default Gradle cache. This runs the standalone Java selector checks,
+generator regression tests, and feature-order checks in both mod resource orders.
+It needs no inference models. An actual game launch remains necessary to validate
+NeoForge/Lithostitched hooks, terrain generation and appearance together.
+
+The explorer's climate map still shows the original broad biome classification;
+use in-game biome information and `/locate biome terralith:<name>` to inspect the
+actual biome. Searches can be expensive because they request diffusion terrain.
+Visual acceptance should cover coasts, dry/wet transitions, snowy mountains and
+underground vegetation, at the intended world scale.

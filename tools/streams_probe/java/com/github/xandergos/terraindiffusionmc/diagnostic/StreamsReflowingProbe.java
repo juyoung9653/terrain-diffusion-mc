@@ -3,16 +3,19 @@ package com.github.xandergos.terraindiffusionmc.diagnostic;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
+import com.github.xandergos.terraindiffusionmc.world.river.RiverPreviewService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.world.level.material.Fluids;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
@@ -65,6 +68,7 @@ public final class StreamsReflowingProbe {
     private static void run(MinecraftServer server) {
         Config config = Config.read();
         List<String> receipts = new ArrayList<>();
+        List<ChunkPos> tickAuditForcedChunks = new ArrayList<>();
         long started = System.nanoTime();
         String terminal = "success";
         try {
@@ -83,8 +87,10 @@ public final class StreamsReflowingProbe {
             emit(receipts, json("start", "center", config.centerX + "," + config.centerZ,
                     "centerSource", config.centerExplicit ? "property" : "shared_spawn", "maxChunks", config.maxChunks,
                     "requestTimeoutSeconds", config.timeoutSeconds, "routeSearchRadius", config.routeSearchRadius));
+            boolean riverPreview = Boolean.getBoolean("td.streamsProbe.riverPreview");
             List<RouteCandidate> candidates = config.fixedCandidates.isEmpty()
-                    ? discoverRoutes(level, config, receipts) : config.fixedCandidates;
+                    ? (riverPreview ? discoverRiverPreviewCandidates(level, config, receipts) : discoverRoutes(level, config, receipts))
+                    : config.fixedCandidates;
             if (!config.fixedCandidates.isEmpty()) {
                 emit(receipts, json("route_discovery", "status", "fixed_candidates_no_streams_route_query",
                         "candidates", candidates.size(), "candidateSummary", candidates.toString()));
@@ -93,6 +99,7 @@ public final class StreamsReflowingProbe {
                 terminal = "incomplete";
                 emit(receipts, json("route_discovery", "status", "no_route_candidates;no_chunks_generated"));
             }
+            List<ChunkReceipt> completed = new ArrayList<>();
             for (RouteCandidate candidate : candidates) {
                     final int chunkX = candidate.chunkX;
                     final int chunkZ = candidate.chunkZ;
@@ -110,7 +117,8 @@ public final class StreamsReflowingProbe {
                             writePlanAuditCsv(server, receipt);
                         }
                         writeColumnCsv(server, receipt);
-                        emit(receipts, receipt.json());
+                        completed.add(receipt);
+                        if (!riverPreview) emit(receipts, receipt.json());
                         if (Boolean.getBoolean("td.streamsProbe.shieldAudit")) {
                             emit(receipts, server.submit(() -> auditShield(level, chunkX, chunkZ))
                                     .get(config.timeoutSeconds, TimeUnit.SECONDS));
@@ -124,10 +132,68 @@ public final class StreamsReflowingProbe {
                         break;
                     }
             }
+            if (riverPreview) {
+                // Run only after every requested FULL chunk is complete, so neighboring generation order is settled.
+                for (ChunkReceipt receipt : completed) {
+                    server.submit(() -> auditRiverPreview(level, receipt)).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                    writeRiverPreviewCsv(server, receipt);
+                    emit(receipts, receipt.json());
+                }
+                if (Boolean.getBoolean("td.streamsProbe.riverTickAudit") && !completed.isEmpty()) {
+                    List<ChunkPos> newlyForced = server.submit(() -> forceTickAuditChunks(level, completed))
+                            .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                    tickAuditForcedChunks.addAll(newlyForced);
+                    Tickability tickability = awaitTickableChunks(server, level, completed, 60_000L);
+                    emit(receipts, json("river_tick_audit", "status", tickability.tickableCount == completed.size() ? "tickable" : "not_tickable",
+                            "tickableChunkCount", tickability.tickableCount, "selectedChunkCount", completed.size(), "forcedAdded", newlyForced.size(),
+                            "observedTick", tickability.tick));
+                    if (tickability.tickableCount != completed.size()) {
+                        terminal = "incomplete";
+                    } else {
+                        long startTick = server.submit(() -> scheduleRiverPreviewWaterTicks(level, completed)).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                        emit(receipts, json("river_tick_audit", "status", "scheduled", "startTick", startTick,
+                                "targetTick", startTick + 100, "chunks", completed.size()));
+                        Tickability afterTicks = awaitServerTicks(server, level, completed, startTick + 100, 30_000L);
+                        if (afterTicks.tick < startTick + 100 || afterTicks.tickableCount != completed.size()) {
+                            terminal = "incomplete";
+                            emit(receipts, json("river_tick_audit", "status", "timeout", "startTick", startTick,
+                                    "targetTick", startTick + 100, "observedTick", afterTicks.tick, "tickableChunkCount", afterTicks.tickableCount));
+                        } else {
+                            long endTick = server.submit(() -> {
+                                for (ChunkReceipt receipt : completed) auditRiverPreview(level, receipt);
+                                return (long) server.getTickCount();
+                            }).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                            boolean failedExpectation = false;
+                            for (ChunkReceipt receipt : completed) {
+                                receipt.riverTickAuditStartTick = startTick;
+                                receipt.riverTickAuditEndTick = endTick;
+                                receipt.riverTickAuditStatus = "re_audited_after_100_ticks";
+                                writeRiverPreviewCsv(server, receipt);
+                                emit(receipts, receipt.json());
+                                failedExpectation |= receipt.riverPreviewMissingWater > 0 || receipt.riverPreviewMissingBedSolid > 0
+                                        || receipt.riverPreviewLeakedBankColumns > 0 || receipt.riverPreviewObstructedWaterColumns > 0;
+                            }
+                            emit(receipts, json("river_tick_audit", "status", failedExpectation ? "expectation_missing" : "passed",
+                                    "startTick", startTick, "endTick", endTick));
+                            if (failedExpectation) terminal = "incomplete";
+                        }
+                    }
+                }
+            }
         } catch (Throwable t) {
             terminal = "error";
             emit(receipts, json("fatal", "error", t.getClass().getName(), "message", safe(t.getMessage())));
         } finally {
+            if (!tickAuditForcedChunks.isEmpty()) {
+                try {
+                    int released = server.submit(() -> unforceTickAuditChunks(server.overworld(), tickAuditForcedChunks))
+                            .get(15, TimeUnit.SECONDS);
+                    emit(receipts, json("river_tick_audit", "status", "unforced", "released", released));
+                } catch (Exception e) {
+                    terminal = "incomplete";
+                    emit(receipts, json("river_tick_audit", "status", "unforce_error", "error", e.getClass().getSimpleName(), "message", safe(e.getMessage())));
+                }
+            }
             emit(receipts, json("complete", "status", terminal, "elapsedMs",
                     TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started),
                     "surfaceConvention", "tdPreCarveIsDensityZeroBoundary;expectedTopSolid=preCarve-1;baseHeightIsComparedToBoundary"));
@@ -327,6 +393,17 @@ public final class StreamsReflowingProbe {
         return result;
     }
 
+    private static List<RouteCandidate> discoverRiverPreviewCandidates(ServerLevel level, Config config, List<String> receipts) {
+        List<ChunkPos> chunks = RiverPreviewService.diagnosticChunks(level, config.maxChunks);
+        List<RouteCandidate> candidates = chunks.stream()
+                .map(pos -> new RouteCandidate(pos.x, pos.z, -1, Integer.MIN_VALUE, "river_preview"))
+                .toList();
+        emit(receipts, json("river_preview_candidates", "status", candidates.isEmpty() ? "empty" : "ready",
+                "tdRiversPreview", Boolean.getBoolean("td.rivers.preview"), "maximum", config.maxChunks,
+                "candidates", candidates.size(), "candidateSummary", candidates.toString()));
+        return candidates;
+    }
+
     private static void emit(List<String> receipts, String receipt) { LOG.info(PREFIX + receipt); receipts.add(receipt); }
 
     private static void writeReceipts(MinecraftServer server, List<String> receipts) {
@@ -421,6 +498,155 @@ public final class StreamsReflowingProbe {
         }
     }
 
+    /** Server-thread read after all FULL requests; no further generation or preview planning occurs here. */
+    private static void auditRiverPreview(ServerLevel level, ChunkReceipt receipt) {
+        receipt.clearRiverPreviewAudit();
+        int expectedWater = 0, actualWater = 0, bedSolid = 0, expectedBedSolid = 0, missingBedSolid = 0, active = 0, leakedBankColumns = 0;
+        int obstructedWaterColumns = 0, obstructedWaterBlockCount = 0;
+        List<String> missingCoordinates = new ArrayList<>();
+        List<String> leakedBankCoordinates = new ArrayList<>();
+        List<String> obstructedWaterCoordinates = new ArrayList<>();
+        for (ColumnSnapshot snapshot : receipt.columns) {
+            RiverPreviewService.Column expected = RiverPreviewService.column(level, snapshot.x, snapshot.z);
+            boolean expectedActive = expected.active();
+            int groundY = expected.groundY();
+            int waterY = expected.waterY();
+            boolean expectsWater = expectedActive && waterY > groundY;
+            boolean actualFluid = false;
+            if (expectedActive) active++;
+            if (expectsWater) {
+                expectedWater++;
+                actualFluid = level.getBlockState(new BlockPos(snapshot.x, waterY, snapshot.z)).getFluidState().is(FluidTags.WATER);
+                if (actualFluid) actualWater++;
+                else if (missingCoordinates.size() < 16) missingCoordinates.add(snapshot.x + "," + waterY + "," + snapshot.z);
+            }
+            boolean actualBedSolid = groundY >= level.getMinBuildHeight() && groundY < level.getMaxBuildHeight()
+                    && level.getBlockState(new BlockPos(snapshot.x, groundY, snapshot.z)).isSolid();
+            if (expectsWater) {
+                expectedBedSolid++;
+                if (actualBedSolid) bedSolid++;
+                else missingBedSolid++;
+            }
+            boolean obstructedWater = false;
+            if (expectsWater) {
+                // Bound the roof check to the planned water's immediate pre-feature terrain interval;
+                // this deliberately excludes canopy above the original ground, though vegetation in this interval can still be a false positive.
+                int highestCheckY = Math.min(level.getMaxBuildHeight() - 1, Math.max(expected.originalGroundY(), waterY + 1));
+                for (int y = Math.max(level.getMinBuildHeight(), waterY + 1); y <= highestCheckY; y++) {
+                    if (level.getBlockState(new BlockPos(snapshot.x, y, snapshot.z)).blocksMotion()) {
+                        obstructedWater = true;
+                        obstructedWaterBlockCount++;
+                    }
+                }
+                if (obstructedWater) {
+                    obstructedWaterColumns++;
+                    if (obstructedWaterCoordinates.size() < 16) obstructedWaterCoordinates.add(snapshot.x + "," + waterY + "," + snapshot.z);
+                }
+            }
+            boolean leakedBankFluid = false;
+            if (expectedActive && waterY == Integer.MIN_VALUE && groundY < expected.originalGroundY()) {
+                int highestCheckY = Math.min(level.getMaxBuildHeight() - 1, expected.originalGroundY() + 1);
+                for (int y = Math.max(level.getMinBuildHeight(), groundY + 1); y <= highestCheckY; y++) {
+                    if (!level.getBlockState(new BlockPos(snapshot.x, y, snapshot.z)).getFluidState().isEmpty()) {
+                        leakedBankFluid = true;
+                        break;
+                    }
+                }
+                if (leakedBankFluid) {
+                    leakedBankColumns++;
+                    if (leakedBankCoordinates.size() < 16) leakedBankCoordinates.add(snapshot.x + "," + snapshot.z);
+                }
+            }
+            receipt.riverPreviewRows.add(snapshot.x + "," + snapshot.z + "," + expectedActive + "," + groundY + "," + waterY + ","
+                    + expected.originalGroundY() + "," + expected.halfWidth() + "," + actualFluid + "," + actualBedSolid + "," + leakedBankFluid + "," + obstructedWater);
+        }
+        receipt.riverPreviewStatus = "post_full_expectation_audit";
+        receipt.riverPreviewActiveColumns = active;
+        receipt.riverPreviewExpectedWater = expectedWater;
+        receipt.riverPreviewActualWater = actualWater;
+        receipt.riverPreviewMissingWater = expectedWater - actualWater;
+        receipt.riverPreviewBedSolid = bedSolid;
+        receipt.riverPreviewExpectedBedSolid = expectedBedSolid;
+        receipt.riverPreviewMissingBedSolid = missingBedSolid;
+        receipt.riverPreviewMissingCoordinates = String.join(";", missingCoordinates);
+        receipt.riverPreviewLeakedBankColumns = leakedBankColumns;
+        receipt.riverPreviewLeakedBankCoordinates = String.join(";", leakedBankCoordinates);
+        receipt.riverPreviewObstructedWaterColumns = obstructedWaterColumns;
+        receipt.riverPreviewObstructedWaterBlockCount = obstructedWaterBlockCount;
+        receipt.riverPreviewObstructedWaterCoordinates = String.join(";", obstructedWaterCoordinates);
+    }
+
+    /** Called on the server thread after the first preview audit; it does not load chunks. */
+    private static List<ChunkPos> forceTickAuditChunks(ServerLevel level, List<ChunkReceipt> receipts) {
+        List<ChunkPos> added = new ArrayList<>();
+        for (ChunkReceipt receipt : receipts) {
+            if (level.setChunkForced(receipt.chunkX, receipt.chunkZ, true)) added.add(new ChunkPos(receipt.chunkX, receipt.chunkZ));
+        }
+        return added;
+    }
+
+    private static int unforceTickAuditChunks(ServerLevel level, List<ChunkPos> chunks) {
+        int released = 0;
+        for (ChunkPos chunk : chunks) if (level.setChunkForced(chunk.x, chunk.z, false)) released++;
+        return released;
+    }
+
+    private static long scheduleRiverPreviewWaterTicks(ServerLevel level, List<ChunkReceipt> receipts) {
+        for (ChunkReceipt receipt : receipts) for (ColumnSnapshot snapshot : receipt.columns) {
+            RiverPreviewService.Column expected = RiverPreviewService.column(level, snapshot.x, snapshot.z);
+            if (expected.active() && expected.waterY() > expected.groundY()) {
+                level.scheduleTick(new BlockPos(snapshot.x, expected.waterY(), snapshot.z), Fluids.WATER, 1);
+            }
+        }
+        return level.getServer().getTickCount();
+    }
+
+    /** The probe worker waits here; every tickability read is a tiny server submission. */
+    private static Tickability awaitTickableChunks(MinecraftServer server, ServerLevel level, List<ChunkReceipt> receipts,
+                                                     long timeoutMillis) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            Tickability status = server.submit(() -> tickability(level, receipts)).get(10, TimeUnit.SECONDS);
+            if (status.tickableCount == receipts.size()) return status;
+            Thread.sleep(50L);
+        }
+        return server.submit(() -> tickability(level, receipts)).get(10, TimeUnit.SECONDS);
+    }
+
+    private static Tickability awaitServerTicks(MinecraftServer server, ServerLevel level, List<ChunkReceipt> receipts,
+                                                 long targetTick, long timeoutMillis) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            Tickability status = server.submit(() -> tickability(level, receipts)).get(10, TimeUnit.SECONDS);
+            if (status.tick >= targetTick && status.tickableCount == receipts.size()) return status;
+            Thread.sleep(50L);
+        }
+        return server.submit(() -> tickability(level, receipts)).get(10, TimeUnit.SECONDS);
+    }
+
+    private static Tickability tickability(ServerLevel level, List<ChunkReceipt> receipts) {
+        int tickable = 0;
+        for (ChunkReceipt receipt : receipts) {
+            BlockPos center = new BlockPos((receipt.chunkX << 4) + 8, level.getMinBuildHeight(), (receipt.chunkZ << 4) + 8);
+            if (level.isPositionEntityTicking(center) && level.getChunkSource().isPositionTicking(ChunkPos.asLong(receipt.chunkX, receipt.chunkZ))) tickable++;
+        }
+        return new Tickability(level.getServer().getTickCount(), tickable);
+    }
+
+    private static void writeRiverPreviewCsv(MinecraftServer server, ChunkReceipt receipt) {
+        Path output = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                .resolve("td-river-preview-audit-" + receipt.chunkX + "-" + receipt.chunkZ + ".csv");
+        List<String> lines = new ArrayList<>(receipt.riverPreviewRows.size() + 1);
+        lines.add("x,z,expectedActive,expectedGroundY,expectedWaterY,expectedOriginalGroundY,expectedHalfWidth,actualFluidAtExpectedWater,actualBedSolidAtExpectedGround,leakedBankFluid,obstructedWater");
+        lines.addAll(receipt.riverPreviewRows);
+        try {
+            Files.write(output, lines);
+            receipt.riverPreviewCsvFile = output.getFileName().toString();
+        } catch (IOException e) {
+            receipt.riverPreviewCsvFile = "write_error:" + e.getClass().getSimpleName();
+        }
+    }
+
     private static String json(String event, Object... kv) {
         StringBuilder b = new StringBuilder("{\"event\":\"").append(safe(event)).append('\"');
         for (int i = 0; i < kv.length; i += 2) b.append(",\"").append(safe(String.valueOf(kv[i])))
@@ -464,10 +690,18 @@ public final class StreamsReflowingProbe {
         int surfaceWaterColumns, desertColumns, savannaColumns, otherBiomeColumns;
         String plannedChannelSamples = "", representativeReplacingSolid, csvFile = "";
         String planAuditStatus = "disabled", planAuditError = "", planAuditNaturalGroundMinusWaterRange = "", planAuditCsvFile = "";
+        String riverPreviewStatus = "disabled", riverPreviewMissingCoordinates = "", riverPreviewCsvFile = "", riverPreviewLeakedBankCoordinates = "", riverPreviewObstructedWaterCoordinates = "";
+        String riverTickAuditStatus = "disabled";
         int planAuditChannelColumns;
+        int riverPreviewActiveColumns, riverPreviewExpectedWater, riverPreviewActualWater, riverPreviewMissingWater, riverPreviewBedSolid,
+                riverPreviewExpectedBedSolid, riverPreviewMissingBedSolid;
+        int riverPreviewLeakedBankColumns;
+        int riverPreviewObstructedWaterColumns, riverPreviewObstructedWaterBlockCount;
+        long riverTickAuditStartTick = -1, riverTickAuditEndTick = -1;
         final List<String> csvRows = new ArrayList<>();
         final List<String> planAuditRows = new ArrayList<>();
         final List<ColumnSnapshot> columns = new ArrayList<>();
+        final List<String> riverPreviewRows = new ArrayList<>();
         final Map<String, Integer> naturalBiomeColumns = new LinkedHashMap<>();
         final Map<String, Long> waterReplacingSolidByNaturalBiome = new LinkedHashMap<>();
         ChunkReceipt(int chunkX, int chunkZ, int seaLevel) { this.chunkX = chunkX; this.chunkZ = chunkZ; this.seaLevel = seaLevel; }
@@ -481,10 +715,34 @@ public final class StreamsReflowingProbe {
                 "planAuditStatus", planAuditStatus, "planAuditChannelColumns", planAuditChannelColumns,
                 "planAuditNaturalGroundMinusWaterRange", planAuditNaturalGroundMinusWaterRange, "planAuditCsv", planAuditCsvFile,
                 "planAuditError", planAuditError,
+                "riverPreviewStatus", riverPreviewStatus, "riverPreviewActiveColumns", riverPreviewActiveColumns,
+                "riverPreviewExpectedWater", riverPreviewExpectedWater, "riverPreviewActualWater", riverPreviewActualWater,
+                "riverPreviewMissingWater", riverPreviewMissingWater, "riverPreviewBedSolid", riverPreviewBedSolid,
+                "riverPreviewExpectedBedSolid", riverPreviewExpectedBedSolid, "riverPreviewMissingBedSolid", riverPreviewMissingBedSolid,
+                "riverPreviewMissingCoordinates", riverPreviewMissingCoordinates, "riverPreviewLeakedBankColumns", riverPreviewLeakedBankColumns,
+                "riverPreviewLeakedBankCoordinates", riverPreviewLeakedBankCoordinates, "riverPreviewCsv", riverPreviewCsvFile,
+                "riverPreviewObstructedWaterColumns", riverPreviewObstructedWaterColumns,
+                "riverPreviewObstructedWaterBlockCount", riverPreviewObstructedWaterBlockCount,
+                "riverPreviewObstructedWaterCoordinates", riverPreviewObstructedWaterCoordinates,
+                "riverPreviewObstructionConstraint", "motion_blocking_from_water_plus_1_through_original_ground;vegetation_in_interval_may_be_false_positive",
+                "riverTickAuditStatus", riverTickAuditStatus, "riverTickAuditStartTick", riverTickAuditStartTick,
+                "riverTickAuditEndTick", riverTickAuditEndTick,
                 "baseHeightOceanFloorWG", baseHeight, "tdPreCarveBoundary", preCarve, "baseMinusPreCarve", baseMinusPreCarve,
                 "tdExpectedTopSolid", preCarve - 1); }
+        void clearRiverPreviewAudit() {
+            riverPreviewRows.clear();
+            riverPreviewStatus = "disabled";
+            riverPreviewMissingCoordinates = "";
+            riverPreviewActiveColumns = riverPreviewExpectedWater = riverPreviewActualWater = riverPreviewMissingWater = 0;
+            riverPreviewBedSolid = riverPreviewExpectedBedSolid = riverPreviewMissingBedSolid = 0;
+            riverPreviewLeakedBankColumns = 0;
+            riverPreviewLeakedBankCoordinates = "";
+            riverPreviewObstructedWaterColumns = riverPreviewObstructedWaterBlockCount = 0;
+            riverPreviewObstructedWaterCoordinates = "";
+        }
     }
 
     private record RouteCandidate(int chunkX, int chunkZ, int channelColumns, int waterSurfaceY, String samples) {}
     private record ColumnSnapshot(int x, int z, int baseHeight, int surfaceY, int topWaterY, int groundY, String naturalBiome) {}
+    private record Tickability(long tick, int tickableCount) {}
 }

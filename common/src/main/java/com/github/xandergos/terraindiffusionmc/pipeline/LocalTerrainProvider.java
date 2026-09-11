@@ -47,12 +47,18 @@ public final class LocalTerrainProvider {
     public static final class HeightmapData {
         public final short[][] heightmap;
         public final short[][] biomeIds;
+        public final short[][] terralithBiomeIds;
         public final int width;
         public final int height;
 
         public HeightmapData(short[][] heightmap, short[][] biomeIds, int width, int height) {
+            this(heightmap, biomeIds, null, width, height);
+        }
+
+        public HeightmapData(short[][] heightmap, short[][] biomeIds, short[][] terralithBiomeIds, int width, int height) {
             this.heightmap = heightmap;
             this.biomeIds  = biomeIds;
+            this.terralithBiomeIds = terralithBiomeIds;
             this.width     = width;
             this.height    = height;
         }
@@ -146,6 +152,18 @@ public final class LocalTerrainProvider {
      */
     public static FloatTensor getPipelineCoarse(int ci0, int cj0, int ci1, int cj1) throws Exception {
         return submitToInferenceThread(() -> getInstance().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
+    }
+
+    /** Coarse-only hint batch. Exact terrain is still fetched for every accepted search result. */
+    public static CoarseBiomeHints getCoarseBiomeHints(int minX, int minZ, int maxX, int maxZ, int scale)
+            throws Exception {
+        int nativePerCell = 32 * WorldPipelineModelConfig.latentCompression();
+        int blocksPerCell = nativePerCell * scale;
+        int cx0 = Math.floorDiv(minX, blocksPerCell), cz0 = Math.floorDiv(minZ, blocksPerCell);
+        int cx1 = Math.floorDiv(maxX, blocksPerCell) + 1, cz1 = Math.floorDiv(maxZ, blocksPerCell) + 1;
+        FloatTensor data = getPipelineCoarse(cz0 - 1, cx0 - 1, cz1 + 1, cx1 + 1);
+        return new CoarseBiomeHints(data, cx0, cz0, cx1 - cx0, cz1 - cz0,
+                blocksPerCell, nativePerCell * NATIVE_RESOLUTION);
     }
 
     /**
@@ -252,8 +270,9 @@ public final class LocalTerrainProvider {
         float[] elevFlat = out[0];
         float[] climate  = out[1];
 
-        short[] biomeFlat = BiomeClassifier.classify(elevFlat, climate, i1, j1, elevPadded, H, W, NATIVE_RESOLUTION);
-        return buildHeightmapData(elevFlat, biomeFlat, H, W);
+        short[] terralithFlat = new short[H * W];
+        short[] biomeFlat = BiomeClassifier.classify(elevFlat, climate, i1, j1, elevPadded, H, W, NATIVE_RESOLUTION, terralithFlat);
+        return buildHeightmapData(elevFlat, biomeFlat, terralithFlat, H, W);
     }
 
     // =========================================================================
@@ -298,8 +317,9 @@ public final class LocalTerrainProvider {
 
         float[] elevOut = addElevationNoise(elevSmooth, elevPadded, i1, j1, H, W, pixelSizeM);
 
-        short[] biomeFlat = BiomeClassifier.classify(elevSmooth, climate, i1, j1, elevPadded, H, W, pixelSizeM);
-        return buildHeightmapData(elevOut, biomeFlat, H, W);
+        short[] terralithFlat = new short[H * W];
+        short[] biomeFlat = BiomeClassifier.classify(elevSmooth, climate, i1, j1, elevPadded, H, W, pixelSizeM, terralithFlat);
+        return buildHeightmapData(elevOut, biomeFlat, terralithFlat, H, W);
     }
 
     // =========================================================================
@@ -385,15 +405,17 @@ public final class LocalTerrainProvider {
         return a;
     }
 
-    private static HeightmapData buildHeightmapData(float[] elevFlat, short[] biomeFlat, int H, int W) {
+    private static HeightmapData buildHeightmapData(float[] elevFlat, short[] biomeFlat, short[] terralithFlat, int H, int W) {
         short[][] heightmap = new short[H][W];
         short[][] biomeIds  = new short[H][W];
+        short[][] terralithBiomeIds = new short[H][W];
         for (int r = 0; r < H; r++)
             for (int c = 0; c < W; c++) {
                 float e = elevFlat[r * W + c];
                 heightmap[r][c] = (short) Math.max(-32768, Math.min(32767, (int) Math.floor(e)));
                 biomeIds[r][c]  = biomeFlat[r * W + c];
+                terralithBiomeIds[r][c] = terralithFlat[r * W + c];
             }
-        return new HeightmapData(heightmap, biomeIds, W, H);
+        return new HeightmapData(heightmap, biomeIds, terralithBiomeIds, W, H);
     }
 }

@@ -55,10 +55,37 @@ public final class BiomeClassifier {
      */
     public static short[] classify(float[] elev, float[] climate, int i0, int j0,
                                     float[] elevPadded, int H, int W, float pixelSizeM) {
+        return classifyInternal(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, null);
+    }
+
+    /**
+     * Classifies vanilla biomes and writes an independent Terralith alternative for every pixel.
+     * The returned vanilla array is identical to {@link #classify(float[], float[], int, int, float[], int, int, float)}.
+     */
+    public static short[] classify(float[] elev, float[] climate, int i0, int j0,
+                                   float[] elevPadded, int H, int W, float pixelSizeM,
+                                   final short[] terralithOut) {
+        if (terralithOut == null || terralithOut.length < H * W) {
+            throw new IllegalArgumentException("terralithOut must hold H * W entries");
+        }
+        return classifyInternal(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, terralithOut);
+    }
+
+    private static short[] classifyInternal(float[] elev, float[] climate, int i0, int j0,
+                                             float[] elevPadded, int H, int W, float pixelSizeM,
+                                             short[] terralithOut) {
         short[] out = new short[H * W];
         for (int i = 0; i < H * W; i++) out[i] = PLAINS;
 
         if (climate == null || climate.length < 4 * H * W) {
+            if (terralithOut != null) {
+                for (int r = 0; r < H; r++) for (int c = 0; c < W; c++) {
+                    int idx = r * W + c;
+                    terralithOut[idx] = TerralithBiomeClassifier.selectSurface(
+                        (int) Math.floor((j0 + c) * pixelSizeM), (int) Math.floor((i0 + r) * pixelSizeM),
+                        PLAINS, elev[idx], 0f, Float.NaN, 0f, 0f);
+                }
+            }
             return out;
         }
 
@@ -225,6 +252,11 @@ public final class BiomeClassifier {
                 }
 
                 out[idx] = biome;
+                if (terralithOut != null) {
+                    terralithOut[idx] = TerralithBiomeClassifier.selectSurface(
+                        (int) Math.floor((j0 + c) * pixelSizeM), (int) Math.floor((i0 + r) * pixelSizeM),
+                        biome, elevVal, slope, temp, precip, pCV);
+                }
             }
         }
         return out;

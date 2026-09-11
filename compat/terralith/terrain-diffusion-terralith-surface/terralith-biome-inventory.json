@@ -1,0 +1,1902 @@
+{
+  "biomes": [
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "cave_extra_underground"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 25
+      },
+      "id": "terralith:alpha_islands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.75,
+        "has_precipitation": true,
+        "temperature": 0.0
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "cave_extra_underground"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 25
+      },
+      "id": "terralith:alpha_islands_winter"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": -0.2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:alpine_grove"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.1,
+        "has_precipitation": true,
+        "temperature": 0.45
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 50
+      },
+      "id": "terralith:alpine_highlands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.9,
+        "has_precipitation": true,
+        "temperature": 0.95
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 50
+      },
+      "id": "terralith:amethyst_canyon"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.9,
+        "has_precipitation": true,
+        "temperature": 0.95
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:amethyst_rainforest"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 47
+      },
+      "id": "terralith:ancient_sands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.1,
+        "has_precipitation": false,
+        "temperature": 1.6
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:arid_highlands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:ashen_savanna"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:basalt_cliffs"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.2,
+        "has_precipitation": true,
+        "temperature": 0.22
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 43
+      },
+      "id": "terralith:birch_taiga"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:blooming_plateau"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:blooming_valley"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.2,
+        "has_precipitation": false,
+        "temperature": 1.2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:brushland"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 47
+      },
+      "id": "terralith:bryce_canyon"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.45
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 52
+      },
+      "id": "terralith:caldera"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 42
+      },
+      "id": "terralith:cave/andesite_caves"
+    },
+    {
+      "cave_category": "deep_cave",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 0.6
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 38
+      },
+      "id": "terralith:cave/deep_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 41
+      },
+      "id": "terralith:cave/diorite_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": 0.8
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:cave/frostfire_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 54
+      },
+      "id": "terralith:cave/fungal_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 42
+      },
+      "id": "terralith:cave/granite_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 45
+      },
+      "id": "terralith:cave/infested_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": true,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 36
+      },
+      "id": "terralith:cave/mantle_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": 0.8
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:canyon",
+            "minecraft:cave_extra_underground"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 54
+      },
+      "id": "terralith:cave/thermal_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 42
+      },
+      "id": "terralith:cave/tuff_caves"
+    },
+    {
+      "cave_category": "cave",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 45
+      },
+      "id": "terralith:cave/underground_jungle"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.25
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:cloud_forest"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": true,
+        "temperature": 0.14
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:cold_shrubland"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:deep_warm_ocean"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 50
+      },
+      "id": "terralith:desert_canyon"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:desert_oasis"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 51
+      },
+      "id": "terralith:desert_spires"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": 0.1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 36
+      },
+      "id": "terralith:emerald_peaks"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.2,
+        "has_precipitation": true,
+        "temperature": 0.36
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 55
+      },
+      "id": "terralith:forested_highlands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 1.1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 10,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:fractured_savanna"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 49
+      },
+      "id": "terralith:frozen_cliffs"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 40
+      },
+      "id": "terralith:glacial_chasm"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 0.4
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 40
+      },
+      "id": "terralith:granite_cliffs"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": 0.8
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 44
+      },
+      "id": "terralith:gravel_beach"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0.14
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 45
+      },
+      "id": "terralith:gravel_desert"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.6,
+        "has_precipitation": true,
+        "temperature": 0.3
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 53
+      },
+      "id": "terralith:haze_mountain"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": 0.4
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 51
+      },
+      "id": "terralith:highlands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": 0.8
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:hot_shrubland"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.9,
+        "has_precipitation": true,
+        "temperature": 0.14
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 52
+      },
+      "id": "terralith:ice_marsh"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.9,
+        "has_precipitation": true,
+        "temperature": 0.95
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 41
+      },
+      "id": "terralith:jungle_mountains"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 44
+      },
+      "id": "terralith:lavender_forest"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:lavender_valley"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 53
+      },
+      "id": "terralith:lush_desert"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.4
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 51
+      },
+      "id": "terralith:lush_valley"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 49
+      },
+      "id": "terralith:mirage_isles"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 45
+      },
+      "id": "terralith:moonlight_grove"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:moonlight_valley"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.9,
+        "has_precipitation": true,
+        "temperature": 0.8
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 53
+      },
+      "id": "terralith:orchid_swamp"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 39
+      },
+      "id": "terralith:painted_mountains"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 47
+      },
+      "id": "terralith:red_oasis"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.9,
+        "has_precipitation": true,
+        "temperature": 0.95
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 41
+      },
+      "id": "terralith:rocky_jungle"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": false,
+        "temperature": 0.3
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 41
+      },
+      "id": "terralith:rocky_mountains"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": true,
+        "temperature": 0.14
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 50
+      },
+      "id": "terralith:rocky_shrubland"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 53
+      },
+      "id": "terralith:sakura_grove"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 54
+      },
+      "id": "terralith:sakura_valley"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 50
+      },
+      "id": "terralith:sandstone_valley"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:savanna_badlands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:savanna_slopes"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": 0.1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 36
+      },
+      "id": "terralith:scarlet_mountains"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.4
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 51
+      },
+      "id": "terralith:shield"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": -0.5,
+        "has_precipitation": true,
+        "temperature": 0.4
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 45
+      },
+      "id": "terralith:shield_clearing"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 1.2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:shrubland"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.13
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 51
+      },
+      "id": "terralith:siberian_grove"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 1.2,
+        "has_precipitation": false,
+        "temperature": 0.13
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 50
+      },
+      "id": "terralith:siberian_taiga"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 53
+      },
+      "id": "terralith:skylands_autumn"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 58
+      },
+      "id": "terralith:skylands_spring"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 55
+      },
+      "id": "terralith:skylands_summer"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0.2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 52
+      },
+      "id": "terralith:skylands_winter"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 51
+      },
+      "id": "terralith:snowy_badlands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:snowy_cherry_grove"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.2,
+        "has_precipitation": true,
+        "temperature": 0.1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 57
+      },
+      "id": "terralith:snowy_maple_forest"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 54
+      },
+      "id": "terralith:snowy_shield"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": -0.5,
+        "has_precipitation": true,
+        "temperature": 0.4
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 45
+      },
+      "id": "terralith:steppe"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 0.7
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 47
+      },
+      "id": "terralith:stony_spires"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.2,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 55
+      },
+      "id": "terralith:temperate_highlands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.9,
+        "has_precipitation": true,
+        "temperature": 0.95
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 47
+      },
+      "id": "terralith:tropical_jungle"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": -0.5,
+        "has_precipitation": true,
+        "temperature": 0.4
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 45
+      },
+      "id": "terralith:valley_clearing"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 42
+      },
+      "id": "terralith:volcanic_crater"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 1
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 38
+      },
+      "id": "terralith:volcanic_peaks"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.5,
+        "has_precipitation": true,
+        "temperature": 0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:warm_river"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 52
+      },
+      "id": "terralith:warped_mesa"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 0.4
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:white_cliffs"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0,
+        "has_precipitation": false,
+        "temperature": 2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 47
+      },
+      "id": "terralith:white_mesa"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.3,
+        "has_precipitation": true,
+        "temperature": 0.2
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 46
+      },
+      "id": "terralith:windswept_spires"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": -0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 57
+      },
+      "id": "terralith:wintry_forest"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.4,
+        "has_precipitation": true,
+        "temperature": -0.5
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 57
+      },
+      "id": "terralith:wintry_lowlands"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.24775
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 60
+      },
+      "id": "terralith:yellowstone"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.375
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 48
+      },
+      "id": "terralith:yosemite_cliffs"
+    },
+    {
+      "cave_category": "surface",
+      "climate": {
+        "downfall": 0.8,
+        "has_precipitation": true,
+        "temperature": 0.25
+      },
+      "features": {
+        "carvers": {
+          "air": [
+            "minecraft:cave",
+            "minecraft:cave_extra_underground",
+            "minecraft:canyon"
+          ]
+        },
+        "generation_steps": 11,
+        "placed_feature_count": 49
+      },
+      "id": "terralith:yosemite_lowlands"
+    }
+  ]
+}
