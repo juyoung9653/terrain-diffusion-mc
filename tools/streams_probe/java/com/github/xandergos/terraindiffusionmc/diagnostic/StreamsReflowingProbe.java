@@ -74,6 +74,9 @@ public final class StreamsReflowingProbe {
         try {
             ServerLevel level = server.overworld();
             auditCustomBiomes(level, receipts);
+            if (Boolean.getBoolean("td.streamsProbe.playerPrefetchAudit")) {
+                auditDisabledPlayerPrefetch(server, level, receipts);
+            }
             if (Boolean.getBoolean("td.streamsProbe.registryOnly")) {
                 if (Boolean.getBoolean("td.streamsProbe.nonTdShieldCheck")) {
                     emit(receipts, server.submit(() -> auditNonTdShield(level)).get(config.timeoutSeconds, TimeUnit.SECONDS));
@@ -338,6 +341,57 @@ public final class StreamsReflowingProbe {
             throw new IllegalStateException("Terrain Diffusion heightmap unavailable");
         }
         return HeightConverter.convertToMinecraftHeight(data.heightmap[z - blockStartZ][x - blockStartX]);
+    }
+
+    /** Exercise Streams' real player-triggered tick path, absent in a headless chunk-only probe. */
+    private static void auditDisabledPlayerPrefetch(MinecraftServer server, ServerLevel level,
+                                                   List<String> receipts) throws Exception {
+        Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen");
+        Method engine = worldgen.getMethod("engineIfPresent", ServerLevel.class);
+        Method tick = Class.forName("dev.streamsreflowing.worldgen.StreamPrefetcher")
+                .getMethod("onServerTick", MinecraftServer.class);
+        var player = server.submit(() -> {
+            var result = new net.minecraft.server.level.ServerPlayer(server, level,
+                    new com.mojang.authlib.GameProfile(java.util.UUID.fromString(
+                            "00000000-0000-0000-0000-000000000123"), "TDPrefetchProbe"),
+                    net.minecraft.server.level.ClientInformation.createDefault());
+            result.setPos(-540.5, 64, -95.5);
+            return result;
+        }).get(30, TimeUnit.SECONDS);
+        int firstTick = server.submit(server::getTickCount).get(30, TimeUnit.SECONDS);
+        int previousTick = -1;
+        int checks = 0;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
+        while (checks < 40 && System.nanoTime() < deadline) {
+            final int last = previousTick;
+            int observed = server.submit(() -> {
+                int now = server.getTickCount();
+                if (now == last) return -1;
+                try {
+                    if (engine.invoke(null, level) != null) throw new IllegalStateException("Streams engine already initialized");
+                    // No network connection or persistent player registration is needed:
+                    // this entry point reads only the level player list and position.
+                    level.players().add(player);
+                    try {
+                        tick.invoke(null, server);
+                    } finally {
+                        level.players().remove(player);
+                    }
+                    if (engine.invoke(null, level) != null) throw new IllegalStateException("Disabled player flow initialized Streams engine");
+                } catch (ReflectiveOperationException failure) {
+                    throw new IllegalStateException("Could not exercise Streams player tick", failure);
+                }
+                return now;
+            }).get(60, TimeUnit.SECONDS);
+            if (observed >= 0) {
+                previousTick = observed;
+                checks++;
+            }
+            Thread.sleep(50);
+        }
+        if (checks != 40 || previousTick <= firstTick) throw new IllegalStateException("Player prefetch audit did not advance ticks");
+        emit(receipts, json("player_prefetch_audit", "status", "passed", "checks", checks,
+                "firstTick", firstTick, "lastTick", previousTick, "engineInitialized", false));
     }
 
     private static List<RouteCandidate> discoverRoutes(ServerLevel level, Config config, List<String> receipts) {

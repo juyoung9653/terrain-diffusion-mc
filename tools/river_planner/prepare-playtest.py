@@ -9,6 +9,7 @@ import gzip
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import struct
 import zipfile
@@ -106,6 +107,19 @@ def sha256(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def disable_streams_water_work(path):
+    # Disabling carving alone still leaves player-triggered vanilla-river flow
+    # active, which initializes the Streams engine and prefetches TD terrain.
+    content = path.read_text(encoding="utf-8")
+    for key in ("generateStreams", "generateLakes", "vanillaWaterFlow", "flowVanillaRivers"):
+        content, count = re.subn(
+            rf"(?m)^([ \t]*{key}[ \t]*=[ \t]*)(?:true|false)[ \t]*$",
+            lambda match: match[1] + "false", content)
+        if count != 1:
+            raise ValueError(f"Expected exactly one Streams setting: {key}")
+    path.write_text(content, encoding="utf-8")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-instance", type=Path, required=True)
@@ -138,6 +152,7 @@ def main():
     game = target / "minecraft"
     for folder in ("mods", "config", "terrain-diffusion-models"):
         shutil.copytree(probe / folder, game / folder)
+    disable_streams_water_work(game / "config/streamsreflowing-common.toml")
     shutil.copy2(jar, game / "mods" / jar.name)
     world = game / "saves/TD River Preview"
     shutil.copytree(probe / "world", world,
@@ -149,7 +164,7 @@ def main():
     receipt = {"jar": jar.name, "jarSha256": sha256(jar), "cacheSha256": sha256(world / cache),
                "instance": target.name, "world": "TD River Preview", "spawn": [-540, 64, -96],
                "creative": True, "commands": True, "structures": False,
-               "newWorldPreviewFlag": False, "sourceSeed": manifest["seed"]}
+               "newWorldPreviewFlag": False, "streamsWaterFlow": False, "sourceSeed": manifest["seed"]}
     (target / "playtest-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(receipt, indent=2))
 

@@ -132,7 +132,22 @@ world **TD River Preview**. The copied, cached Terralith test world starts in
 creative mode near audited river water at `-540 64 -96`, with commands enabled.
 Use `/tp @s -540 80 -96` to return to this area. The instance uses Java 21,
 NeoForge 21.1.249, the CUDA build and a 12 GiB heap limit. Initial model loading
-can take time. Streams waterways and structures are disabled in this test.
+can take time. Streams waterways, vanilla-water current processing and structures
+are disabled in this test.
+
+If chunks remain blank after joining and the log shows
+`streamsreflowing-prefetch` or `streamsreflowing-sampler` requesting TD terrain,
+check `[water] flowVanillaRivers=false` and `vanillaWaterFlow=false` in
+`config/streamsreflowing-common.toml`. Streams 2.13.1 still initializes its flow
+engine for nearby players when only `generateStreams` and `generateLakes` are
+disabled. The playtest preparation tool disables all four options. Restart the
+game after changing them to discard already queued terrain work.
+
+The headless probe needs `-PtdProbe.playerPrefetchAudit=true` to cover this
+player-triggered path: it invokes Streams' actual tick handler with a temporary
+player entry across 40 advancing server ticks and requires the engine to stay
+uninitialized. Follow it with chunk and water-tick audits; a no-player probe
+alone does not establish interactive loading performance.
 
 The instance has no global preview-enable flag: open the supplied world to
 inspect the new rivers. Creating an ordinary world does not enable the preview.
