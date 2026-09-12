@@ -34,13 +34,14 @@ def main():
     package = Path("com/github/xandergos/terraindiffusionmc/pipeline")
     sources = [ROOT / "common/src/main/java" / package / (name + ".java")
                for name in ("FastNoiseLite", "TerralithBiomeClassifier", "BiomeClassifier", "MacroBiomeContext",
-                            "BroadEcologyClimate", "EcologyClassifier", "ShoreClassifier", "ShoreContext")]
+                            "BroadEcologyClimate", "EcologyClassifier", "EcologyShowcaseProfile", "ShoreClassifier", "ShoreContext")]
     for name in ("ShoreClassifierTest", "ShoreContextTest"):
         sources.append(ROOT / "common/src/test/java" / package / (name + ".java"))
     sources.append(ROOT / "common/src/test/java" / package / "TerralithBiomeClassifierTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "MacroBiomeContextTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "BroadEcologyClimateTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "EcologyClassifierTest.java")
+    sources.append(ROOT / "common/src/test/java" / package / "EcologyShowcaseProfileTest.java")
     world_package = Path("com/github/xandergos/terraindiffusionmc/world")
     sources.append(ROOT / "common/src/main/java" / world_package / "LowlandCarvingGuard.java")
     sources.append(ROOT / "common/src/test/java" / world_package / "LowlandCarvingGuardTest.java")
@@ -53,6 +54,7 @@ def main():
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimateTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifierTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfileTest")
     for name in ("ShoreClassifierTest", "ShoreContextTest"):
         run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline." + name)
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.LowlandCarvingGuardTest")

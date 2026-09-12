@@ -14,6 +14,10 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenPrefetchMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsShowcaseFeatureMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsShowcaseDeferMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsShowcaseFlowMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsShowcaseNetworkMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsBankMaterialMixin");
 
     @Override

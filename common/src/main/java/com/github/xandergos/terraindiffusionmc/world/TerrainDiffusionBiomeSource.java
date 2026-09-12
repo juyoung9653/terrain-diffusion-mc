@@ -9,6 +9,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Codec;
+import com.mojang.serialization.DataResult;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.Holder;
@@ -38,6 +39,9 @@ import java.util.stream.Stream;
 import static java.util.Map.entry;
 
 public class TerrainDiffusionBiomeSource extends BiomeSource {
+    private static final Codec<String> SHOWCASE_CODEC = Codec.STRING.validate(name ->
+            name.isEmpty() || EcologyClassifier.BIOMES.contains(name) ? DataResult.success(name)
+                    : DataResult.error(() -> "Unknown ecology showcase biome: " + name));
     private static final Logger LOG = LoggerFactory.getLogger(TerrainDiffusionBiomeSource.class);
     private final AtomicBoolean ringSearchStarted = new AtomicBoolean();
     private final AtomicInteger completedRingSearches = new AtomicInteger();
@@ -50,13 +54,15 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
             instance.group(
                     RegistryOps.retrieveGetter(Registries.BIOME),
                     Codec.BOOL.optionalFieldOf("terralith", false).forGetter(source -> source.terralith),
-                    Codec.BOOL.optionalFieldOf("natural_biomes", false).forGetter(source -> source.naturalBiomes)
+                    Codec.BOOL.optionalFieldOf("natural_biomes", false).forGetter(source -> source.naturalBiomes),
+                    SHOWCASE_CODEC.optionalFieldOf("ecology_showcase", "").forGetter(source -> source.ecologyShowcase)
             ).apply(instance, instance.stable(TerrainDiffusionBiomeSource::new)));
 
 
     private final HolderGetter<Biome> biomeLookup;
     private final boolean terralith;
     private final boolean naturalBiomes;
+    private final String ecologyShowcase;
     private final Map<Integer, Holder<Biome>> ecologicalBiomes;
     private final Map<Short, Holder<Biome>> terralithBiomes;
     private Map<Short, Holder<Biome>> biomeIdMap = null;
@@ -70,10 +76,18 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     }
 
     public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes) {
+        this(biomeLookup, terralith, naturalBiomes, "");
+    }
+
+    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes,
+                                       String ecologyShowcase) {
         if (naturalBiomes && !terralith) throw new IllegalArgumentException("natural_biomes requires terralith=true and the compatibility pack");
+        if (!ecologyShowcase.isEmpty() && (!naturalBiomes || !EcologyClassifier.BIOMES.contains(ecologyShowcase)))
+            throw new IllegalArgumentException("ecology_showcase requires natural_biomes and a known ecology biome");
         this.biomeLookup = biomeLookup;
         this.terralith = terralith;
         this.naturalBiomes = naturalBiomes;
+        this.ecologyShowcase = ecologyShowcase;
         Map<Integer, Holder<Biome>> ecological = new HashMap<>();
         if (naturalBiomes) {
             for (int i = 0; i < EcologyClassifier.BIOMES.size(); i++) {
@@ -102,6 +116,11 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     }
 
     public boolean naturalBiomes() { return naturalBiomes; }
+    public String ecologyShowcase() { return ecologyShowcase; }
+
+    private Holder<Biome> showcaseBiome() {
+        return ecologicalBiomes.get(EcologyClassifier.BIOMES.indexOf(ecologyShowcase) + 1);
+    }
 
     @Override
     protected MapCodec<? extends BiomeSource> codec() {
@@ -140,6 +159,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
 
     @Override
     protected Stream<Holder<Biome>> collectPossibleBiomes() {
+        if (!ecologyShowcase.isEmpty()) return Stream.of(showcaseBiome());
         requireBiomeIdMap();
         return Stream.concat(Stream.concat(biomeIdMap.values().stream(), terralithBiomes.values().stream()),
                 ecologicalBiomes.values().stream()).distinct();
@@ -147,6 +167,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
 
     @Override
     public Holder<Biome> getNoiseBiome(int x, int y, int z, Climate.Sampler noise) {
+        if (!ecologyShowcase.isEmpty()) return showcaseBiome();
         requireBiomeIdMap();
 
         // x, y, z are in quart coordinates (block / 4)
@@ -170,6 +191,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
 
     private Holder<Biome> biomeFromTile(int blockX, int blockY, int blockZ,
                                         int blockStartX, int blockStartZ, HeightmapData data) {
+        if (!ecologyShowcase.isEmpty()) return showcaseBiome();
         if (data != null && data.biomeIds != null) {
             int localX = Math.max(0, Math.min(data.width  - 1, blockX - blockStartX));
             int localZ = Math.max(0, Math.min(data.height - 1, blockZ - blockStartZ));
@@ -197,6 +219,10 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     /** Called only by concentric-ring placement; ordinary biome searches remain unchanged. */
     public Pair<BlockPos, Holder<Biome>> findRingBiome(int x, int y, int z, int radius,
                                                      Predicate<Holder<Biome>> preferred, RandomSource random) {
+        if (!ecologyShowcase.isEmpty()) {
+            Holder<Biome> biome = showcaseBiome();
+            return preferred.test(biome) ? Pair.of(new BlockPos(x, y, z), biome) : null;
+        }
         requireBiomeIdMap();
         if (collectPossibleBiomes().noneMatch(preferred)) return null;
         int tileSize = TerrainDiffusionConfig.tileSize();

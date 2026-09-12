@@ -351,6 +351,27 @@ checks session data and state isolation in the diagnostic server.
 
 Regenerate the ecological biome resources with
 `python tools/ecology/generate_biomes.py --vanilla path/to/minecraft_1.21.1_client.jar`.
+For separate playable examples, the TD biome source accepts an optional
+`ecology_showcase` name from `EcologyClassifier.BIOMES`, with `terralith=true`
+and `natural_biomes=true`. It fixes biome assignment and feature climate to that
+profile while retaining TD heights and slope-dependent vegetation. Omitted or
+empty values preserve normal world generation. These are representative comparison
+worlds, not samples of the natural biome distribution.
+On the audited NeoForge/Streams 2.13.1 combination, showcase worlds skip Streams
+placement and scheduling so their saved biome stays fixed. Normal worlds retain
+native Streams generation and flow.
+Streams initializes its engine from a `ConfiguredFeature.place` HEAD hook even
+for ordinary vegetation. The showcase wrapper must bypass that whole hook;
+another HEAD injection or a cached calibration file does not prevent initialization.
+Player chunk delivery also initializes the engine through `StreamFlowNet.onChunkSent`;
+verify actual client entry, since a headless generation probe does not cover this path.
+`tools/ecology/prepare_showcases.py --template-world <dedicated-probe-world>
+--output <new-directory>` stages all 11 named worlds without copying existing
+chunks or players. Generate their spawn chunks before installing the worlds;
+verify saved biome IDs and actual tree/soil output with the Streams probe's
+`surfaceAudit` and `ecologyAudit` options. The template must retain TD scale 2.
+When generating via a dedicated server, set `gamemode=creative`: its properties
+override the staged world's game mode when saving. Recheck `GameType` before installation.
 The coarse model stride is 256 native pixels, or 512 game blocks at scale 2;
 30 meters per native pixel converts physical altitude, not this horizontal stride.
 Check exact

@@ -2,6 +2,7 @@ package com.github.xandergos.terraindiffusionmc.world.ecology;
 
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
+import com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfile;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
 import net.minecraft.world.level.chunk.ChunkGenerator;
@@ -17,6 +18,8 @@ public final class NaturalEcology {
         var data = LocalTerrainProvider.getInstance().fetchHeightmap(z0, x0, z0 + size, x0 + size);
         if (data == null || data.ecology == null) throw new IllegalStateException("Natural ecology tile unavailable");
         var result = data.ecology.sample(x - x0, z - z0);
+        if (!source.ecologyShowcase().isEmpty())
+            return EcologyShowcaseProfile.sample(source.ecologyShowcase(), x, z, result.slope());
         return result.biomeId() == 0 ? null : result;
     }
 }
