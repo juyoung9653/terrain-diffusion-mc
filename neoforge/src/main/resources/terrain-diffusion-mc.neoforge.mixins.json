@@ -8,10 +8,6 @@
     "StreamsStructureShieldMixin",
     "StreamsWorldgenPrefetchMixin",
     "StreamsPlayerPrefetchMixin",
-    "StreamsShowcaseFeatureMixin",
-    "StreamsShowcaseDeferMixin",
-    "StreamsShowcaseFlowMixin",
-    "StreamsShowcaseNetworkMixin",
     "StreamsBankMaterialMixin"
   ],
   "injectors": {

@@ -1,7 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsTerrainPolicy;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
 import com.llamalad7.mixinextras.injector.WrapWithCondition;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -10,32 +9,11 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /** Defers Streams' speculative player plate work for Terrain Diffusion worlds. */
 @Pseudo
 @Mixin(targets = "dev.streamsreflowing.worldgen.StreamPrefetcher", remap = false)
 public final class StreamsPlayerPrefetchMixin {
-    @Inject(
-            method = "onServerTick(Lnet/minecraft/server/MinecraftServer;)V",
-            at = @At("HEAD"), cancellable = true, require = 1, expect = 1, remap = false)
-    private static void terrainDiffusion$skipShowcasePrefetch(MinecraftServer server, CallbackInfo callback) {
-        if (isEcologyShowcase(server.overworld())) {
-            callback.cancel();
-        }
-    }
-
-    @Inject(
-            method = "submitUrgentAt(Lnet/minecraft/server/level/ServerLevel;II)V",
-            at = @At("HEAD"), cancellable = true, require = 1, expect = 1, remap = false)
-    private static void terrainDiffusion$skipShowcaseTeleportPrefetch(
-            ServerLevel level, int blockX, int blockZ, CallbackInfo callback) {
-        if (isEcologyShowcase(level)) {
-            callback.cancel();
-        }
-    }
-
     @WrapWithCondition(
             method = "onServerTick(Lnet/minecraft/server/MinecraftServer;)V",
             at = @At(
@@ -108,10 +86,5 @@ public final class StreamsPlayerPrefetchMixin {
         }
         StreamsTerrainPolicy.recordSkippedUnloadedFlowGrid();
         return false;
-    }
-
-    private static boolean isEcologyShowcase(ServerLevel level) {
-        return level.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource source
-                && !source.ecologyShowcase().isEmpty();
     }
 }

@@ -357,19 +357,18 @@ and `natural_biomes=true`. It fixes biome assignment and feature climate to that
 profile while retaining TD heights and slope-dependent vegetation. Omitted or
 empty values preserve normal world generation. These are representative comparison
 worlds, not samples of the natural biome distribution.
-On the audited NeoForge/Streams 2.13.1 combination, showcase worlds skip Streams
-placement and scheduling so their saved biome stays fixed. Normal worlds retain
-native Streams generation and flow.
-Streams initializes its engine from a `ConfiguredFeature.place` HEAD hook even
-for ordinary vegetation. The showcase wrapper must bypass that whole hook;
-another HEAD injection or a cached calibration file does not prevent initialization.
-Player chunk delivery also initializes the engine through `StreamFlowNet.onChunkSent`;
-verify actual client entry, since a headless generation probe does not cover this path.
+Showcase worlds retain native Streams generation, banks, river biomes and flow.
+The selected ecology is the surrounding land biome, not a restriction that removes
+rivers. Streams may replace saved biome IDs inside its channels with a river biome.
+Prepare river terrain before installation; do not disable Streams to shorten initial
+loading. Verify actual client entry as well as headless generation, since player
+chunk delivery also initializes the Streams engine through `StreamFlowNet.onChunkSent`.
 `tools/ecology/prepare_showcases.py --template-world <dedicated-probe-world>
 --output <new-directory>` stages all 11 named worlds without copying existing
 chunks or players. Generate their spawn chunks before installing the worlds;
-verify saved biome IDs and actual tree/soil output with the Streams probe's
-`surfaceAudit` and `ecologyAudit` options. The template must retain TD scale 2.
+verify the selected land biome, actual tree/soil output and physical river water
+with the Streams probe's `surfaceAudit`, `ecologyAudit` and `streamsTopologyAudit`
+options. Native river biome IDs are expected. The template must retain TD scale 2.
 When generating via a dedicated server, set `gamemode=creative`: its properties
 override the staged world's game mode when saving. Recheck `GameType` before installation.
 The coarse model stride is 256 native pixels, or 512 game blocks at scale 2;
