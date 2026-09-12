@@ -7,7 +7,8 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
  * correction or read native terrain.
  */
 public final class BroadEcologyClimate {
-    static final int ECOLOGY_BLOCK_RADIUS = 1024;
+    /** Radius in native model pixels; scale two therefore covers 1024 world blocks. */
+    static final int ECOLOGY_MODEL_PIXEL_RADIUS = 512;
 
     public record Values(float temperature, float precipitation, float precipitationCv, float elevation) { }
 
@@ -54,7 +55,9 @@ public final class BroadEcologyClimate {
     }
 
     static int smoothingRadius(int scale, int stride) {
-        return Math.max(1, (ECOLOGY_BLOCK_RADIUS + scale * stride - 1) / (scale * stride));
+        long blockRadius = (long) ECOLOGY_MODEL_PIXEL_RADIUS * scale;
+        long coarseBlockWidth = (long) scale * stride;
+        return (int) Math.max(1L, (blockRadius + coarseBlockWidth - 1L) / coarseBlockWidth);
     }
     static double coarseCoordinate(int block, int scale, int stride) {
         return (((double) block + .5d) / scale) / stride - .5d;

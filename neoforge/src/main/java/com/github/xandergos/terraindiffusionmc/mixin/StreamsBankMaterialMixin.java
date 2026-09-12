@@ -12,7 +12,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
 
 /**
- * Intercepts Streams 2.13.1's selected bank state before its top and depth-fill writes.
+ * Intercepts the selected bank state before its top and depth-fill writes in audited Streams versions.
  * The renderer receives coordinates as x, y, z; only the first and third int arguments
  * select the TD ecology field.
  */

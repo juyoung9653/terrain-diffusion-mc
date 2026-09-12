@@ -7,6 +7,7 @@ public final class BroadEcologyClimateTest {
         constantsStayConstant();
         affineAndTileInvariant();
         seamsHaveBoundedDerivative();
+        physicalRadiusScalesWithTerrainScale();
         haloIsRequired();
         System.out.println("BroadEcologyClimateTest: PASS");
     }
@@ -18,7 +19,7 @@ public final class BroadEcologyClimateTest {
         }
     }
     private static void affineAndTileInvariant() {
-        for (int scale : new int[]{1, 2}) {
+        for (int scale : new int[]{1, 2, 5}) {
             BroadEcologyClimate whole = make(-1300, -900, 1400, 1100, scale, false, false);
             BroadEcologyClimate left = make(-1300, -900, 1400, 100, scale, false, false);
             BroadEcologyClimate right = make(-1300, 100, 1400, 1100, scale, false, false);
@@ -36,6 +37,10 @@ public final class BroadEcologyClimateTest {
         float max = 0, prior = field.sample(-1024, 0).temperature();
         for (int x = -1023; x < 1024; x++) { float next = field.sample(x, 0).temperature(); max = Math.max(max, Math.abs(next-prior)); prior=next; }
         require(max < .02f, "coarse seam derivative is too sharp: " + max);
+    }
+    private static void physicalRadiusScalesWithTerrainScale() {
+        require(BroadEcologyClimate.smoothingRadius(2, STRIDE) == 2, "scale-two radius must cover 1024 blocks");
+        require(BroadEcologyClimate.smoothingRadius(5, STRIDE) == 2, "scale-five radius must cover 2560 blocks");
     }
     private static void haloIsRequired() {
         boolean failed = false;

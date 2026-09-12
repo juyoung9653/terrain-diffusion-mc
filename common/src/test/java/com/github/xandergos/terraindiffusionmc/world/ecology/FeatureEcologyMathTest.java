@@ -4,17 +4,11 @@ package com.github.xandergos.terraindiffusionmc.world.ecology;
 public final class FeatureEcologyMathTest {
     public static void main(String[] args) {
         long seed = 91357L;
-        float repeated = FeatureEcologyMath.broadPatch(seed, 101, -73, 48);
-        require(repeated == FeatureEcologyMath.broadPatch(seed, 101, -73, 48), "noise must be deterministic");
-        float left = FeatureEcologyMath.broadPatch(seed, 47, 22, 48);
-        float right = FeatureEcologyMath.broadPatch(seed, 48, 22, 48);
-        require(Math.abs(left - right) < 0.08F, "cell boundary must be smooth");
-        checkFarSeam(seed, 29_000_000);
-        checkFarSeam(seed, -29_000_000);
+        checkSoilMoisture(seed);
         for (int x = -192; x <= 192; x++) {
             float value = FeatureEcologyMath.broadPatch(seed, x, x * 3, 48);
             require(value >= 0.0F && value <= 1.0F, "noise must remain normalized");
-            float moisture = FeatureEcologyMath.surfaceMoisture(0.0F, seed, x, x * 3);
+            float moisture = FeatureEcologyMath.surfaceMoisture(0.0F, seed, x, x * 3, 2);
             require(moisture >= 0.0F && moisture <= 2.0F, "surface moisture must remain in source range");
         }
         checkSpecies(-5.0F, 0.9F, true, false, false, "cold");
@@ -34,11 +28,46 @@ public final class FeatureEcologyMathTest {
         System.out.println("FeatureEcologyMathTest: PASS");
     }
 
-    private static void checkFarSeam(long seed, int coordinate) {
-        int seam = Math.floorDiv(coordinate, 48) * 48;
-        float left = FeatureEcologyMath.broadPatch(seed, seam - 1, coordinate, 48);
-        float right = FeatureEcologyMath.broadPatch(seed, seam, coordinate, 48);
-        require(Math.abs(left - right) < 0.08F, "far cell boundary must remain smooth");
+    private static void checkSoilMoisture(long seed) {
+        for (int scale : new int[]{2, 5}) {
+            int cell = 64 * scale;
+            float repeated = FeatureEcologyMath.surfaceMoisture(.50F, seed, 101, -73, scale);
+            require(repeated == FeatureEcologyMath.surfaceMoisture(.50F, seed, 101, -73, scale),
+                    "soil moisture must be deterministic");
+            for (int x = -2 * cell; x <= 2 * cell; x += 7) {
+                for (int z = -2 * cell; z <= 2 * cell; z += 11) {
+                    float cold = FeatureEcologyMath.surfaceMoisture(.50F, seed, x, z, scale);
+                    float desert = FeatureEcologyMath.surfaceMoisture(.10F, seed, x, z, scale);
+                    require(cold > .40F, "cold grassland must not gain coarse-dirt islands");
+                    require(desert < .22F, "desert must remain eligible for sand");
+                    require(Math.abs(cold - FeatureEcologyMath.surfaceMoisture(.50F, seed, x + 1, z, scale)) < .003F,
+                            "adjacent soil moisture must vary gently");
+                }
+            }
+            checkFarSeam(seed, 29_000_000, cell);
+            checkFarSeam(seed, -29_000_000, cell);
+        }
+        for (int modelX = -193; modelX <= 193; modelX += 13) {
+            int modelZ = modelX * 3;
+            float scaleTwo = FeatureEcologyMath.surfaceMoisture(.50F, seed, modelX * 2, modelZ * 2, 2);
+            float scaleFive = FeatureEcologyMath.surfaceMoisture(.50F, seed, modelX * 5, modelZ * 5, 5);
+            require(scaleTwo == scaleFive, "matching model positions must retain soil moisture across scales");
+        }
+        float[] whole = new float[385];
+        for (int x = -192; x <= 192; x++) whole[x + 192] = FeatureEcologyMath.surfaceMoisture(.50F, seed, x, -73, 2);
+        for (int x = -192; x < 0; x++)
+            require(whole[x + 192] == FeatureEcologyMath.surfaceMoisture(.50F, seed, x, -73, 2),
+                    "negative-coordinate split must retain soil moisture");
+        for (int x = 0; x <= 192; x++)
+            require(whole[x + 192] == FeatureEcologyMath.surfaceMoisture(.50F, seed, x, -73, 2),
+                    "positive-coordinate split must retain soil moisture");
+    }
+
+    private static void checkFarSeam(long seed, int coordinate, int cell) {
+        int seam = Math.floorDiv(coordinate, cell) * cell;
+        float left = FeatureEcologyMath.surfaceMoisture(.50F, seed, seam - 1, coordinate, cell / 64);
+        float right = FeatureEcologyMath.surfaceMoisture(.50F, seed, seam, coordinate, cell / 64);
+        require(Math.abs(left - right) < .003F, "far cell boundary must remain smooth");
     }
 
     private static void checkSpecies(float temperature, float moisture, boolean conifers, boolean acacia, boolean jungle, String label) {

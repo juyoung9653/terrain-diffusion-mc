@@ -41,22 +41,18 @@ public final class EcologyClassifier {
         short shore = ShoreClassifier.select(x, z, elevation, slope, temperature, moisture,
                 waterDistance, openWater, relief);
         if (shore != 0) return terrain(shore, temperature, moisture, slope);
-        if (elevation >= 1600 && temperature < 0)
+        if (regionalElevation >= 1600 && regionalTemperature < 0)
             return terrain(terralith("alpine_highlands"), temperature, moisture, slope);
-        if (slope > .70f && elevation > 150)
-            // Rocky Mountains directly places snow/powder-snow patches. Its cold decoration
-            // program must not leak onto otherwise temperate slopes simply because they are high.
-            return terrain(terralith(elevation > 900 && temperature < 0
-                    ? "rocky_mountains" : "granite_cliffs"), temperature, moisture, slope);
 
         float regionalCover = smooth(.38f, 1.22f, moisture);
         float cover = regionalCover * (1 - smooth(.25f, .85f, slope))
                 * smooth(-7, 3, temperature) * (.90f + .10f * VARIATION.GetNoise(x, z));
         int id;
-        if (moisture < .30f && temperature > 10) id = 11;
-        else if (temperature < 5) id = regionalCover > .65f ? 4 : regionalCover > .22f ? 5 : 6;
-        else if (temperature >= 23 && moisture >= .65f) id = regionalCover > .65f ? 9 : 10;
-        else if (moisture < .65f && temperature > 17) id = regionalCover > .22f ? 7 : 8;
+        // Regional fields determine labels. Local lapse and slope remain continuous controls for cover.
+        if (moisture < .30f && regionalTemperature > 10) id = 11;
+        else if (regionalTemperature < 5) id = regionalCover > .65f ? 4 : regionalCover > .22f ? 5 : 6;
+        else if (regionalTemperature >= 23 && moisture >= .65f) id = regionalCover > .65f ? 9 : 10;
+        else if (moisture < .65f && regionalTemperature > 17) id = regionalCover > .22f ? 7 : 8;
         else id = regionalCover > .65f ? 1 : regionalCover > .22f ? 2 : 3;
         return new Selection(new Sample(id, clamp(cover, 0, 1), temperature, moisture, slope), (short) 0);
     }

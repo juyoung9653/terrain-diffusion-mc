@@ -2,6 +2,7 @@ package com.github.xandergos.terraindiffusionmc.world.ecology;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
+import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.ResourceLocation;
@@ -40,7 +41,8 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 if (sample == null) continue;
                 BlockState surface = level.getBlockState(top);
                 if (!isExposedSoil(surface)) continue;
-                float moisture = FeatureEcologyMath.surfaceMoisture(sample.moisture(), level.getSeed(), x, z);
+                float moisture = FeatureEcologyMath.surfaceMoisture(sample.moisture(), level.getSeed(), x, z,
+                        WorldScaleManager.getCurrentScale());
                 if (moisture < 0.22F) {
                     changed |= placeSupportedSand(level, top);
                 } else if (moisture < 0.40F) {

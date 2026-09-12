@@ -24,6 +24,16 @@ public final class EcologyShowcaseProfile {
     private EcologyShowcaseProfile() {
     }
 
+    /** Only land ecology is fixed: native hydrology must still see oceans and shores. */
+    public static boolean retainsTerrainBiome(short terrainBiomeId) {
+        return TerralithBiomeClassifier.isOcean(terrainBiomeId)
+                || terrainBiomeId == -1 || terrainBiomeId == -2 || terrainBiomeId == -3;
+    }
+
+    public static boolean isVanillaOcean(short biomeId) {
+        return biomeId == 41 || biomeId == 44 || biomeId == 46 || biomeId == 48;
+    }
+
     /** Produces the normal classifier sample from a fixed representative climate. */
     public static EcologyClassifier.Sample sample(String name, int x, int z, float slope) {
         if (!EcologyClassifier.BIOMES.contains(name)) {

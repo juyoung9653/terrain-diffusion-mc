@@ -2,6 +2,8 @@ package com.github.xandergos.terraindiffusionmc.world.ecology;
 
 /** Coordinate-continuous fields shared by ecological decoration features. */
 public final class FeatureEcologyMath {
+    private static final int SOIL_PATCH_MODEL_PIXELS = 64;
+    private static final float SOIL_MOISTURE_VARIATION = 0.12F;
     public record SpeciesWeights(float spruce, float pine, float oak, float birch, float acacia, float jungle) {
         public float total() {
             return spruce + pine + oak + birch + acacia + jungle;
@@ -30,10 +32,20 @@ public final class FeatureEcologyMath {
         return lerp(lerp(nw, ne, sx), lerp(sw, se, sx), sz);
     }
 
-    /** Moisture adjusted by a broad, continuous patch field, in the source's 0..2 domain. */
+    /**
+     * Moisture adjusted by a broad, continuous soil field, in the source's 0..2 domain.
+     * Its physical cell width is 64 model pixels at the active terrain scale.
+     */
+    public static float surfaceMoisture(float moisture, long seed, int blockX, int blockZ, int scale) {
+        if (scale <= 0) throw new IllegalArgumentException("scale must be positive");
+        int cellSize = Math.multiplyExact(SOIL_PATCH_MODEL_PIXELS, scale);
+        float patch = broadPatch(seed, blockX, blockZ, cellSize);
+        return Math.max(0.0F, Math.min(2.0F, moisture + (patch - 0.5F) * SOIL_MOISTURE_VARIATION));
+    }
+
+    /** Compatibility overload for callers that explicitly use the historic scale-two layout. */
     public static float surfaceMoisture(float moisture, long seed, int blockX, int blockZ) {
-        float patch = broadPatch(seed, blockX, blockZ, 48);
-        return Math.max(0.0F, Math.min(2.0F, moisture + (patch - 0.5F) * 0.42F));
+        return surfaceMoisture(moisture, seed, blockX, blockZ, 2);
     }
 
     /**

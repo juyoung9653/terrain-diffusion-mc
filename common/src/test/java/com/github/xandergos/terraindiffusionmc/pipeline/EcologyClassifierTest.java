@@ -34,13 +34,29 @@ public final class EcologyClassifierTest {
         }
         require(EcologyClassifier.select(0, 0, 0, .1f, true, 15, 800, 300).terrainBiomeId() != 0, "coast retained");
         require(EcologyClassifier.select(0, 0, -100, .1f, false, 15, 800, 300).sample().biomeId() == 0, "ocean retained");
-        require(EcologyClassifier.select(0, 0, 900, .8f, false, 15, 800, 300).sample().biomeId() == 0, "cliff retained");
-        short warmCliff = EcologyClassifier.select(0, 0, 1200, .8f, false, 15, 800, 1200).terrainBiomeId();
-        short coldCliff = EcologyClassifier.select(0, 0, 1200, .8f, false, -5, 800, 1200).terrainBiomeId();
-        require("terralith:granite_cliffs".equals(TerralithBiomeClassifier.biomeName(warmCliff)), "no snowy mountain decoration on warm cliffs");
-        require("terralith:rocky_mountains".equals(TerralithBiomeClassifier.biomeName(coldCliff)), "cold mountains retain snow");
-        require(EcologyClassifier.select(0, 0, 1900, .1f, false, -2, 800, 1900).sample().biomeId() == 0, "alpine retained");
+        checkRegionalLandIdentity();
         System.out.println("EcologyClassifierTest: PASS (11 ecosystems, " + transitions + " continuous label transitions)");
+    }
+
+    private static void checkRegionalLandIdentity() {
+        var lowRipple = EcologyClassifier.select(0, 0, 200, .05f, false, 5, 800, 300);
+        var highRipple = EcologyClassifier.select(0, 0, 800, .80f, false, 5, 800, 300);
+        require(lowRipple.sample().biomeId() == highRipple.sample().biomeId(),
+                "local lapse and slope must not create land-biome islands at a regional threshold");
+        require(lowRipple.terrainBiomeId() == 0 && highRipple.terrainBiomeId() == 0,
+                "isolated steep land must retain its ecological biome");
+        require(lowRipple.sample().treeCover() != highRipple.sample().treeCover(),
+                "local lapse and slope must continue to control continuous cover");
+
+        var cold = EcologyClassifier.select(0, 0, 300, .1f, false, 4, 800, 300);
+        var temperate = EcologyClassifier.select(0, 0, 300, .1f, false, 6, 800, 300);
+        require(cold.sample().biomeId() != temperate.sample().biomeId(), "different broad climates must retain different ecosystems");
+
+        var isolatedHighpoint = EcologyClassifier.select(0, 0, 1900, .1f, false, -2, 800, 300);
+        require(isolatedHighpoint.terrainBiomeId() == 0, "isolated highpoint must not become alpine");
+        var broadHighland = EcologyClassifier.select(0, 0, 300, .1f, false, -2, 800, 1900);
+        require("terralith:alpine_highlands".equals(TerralithBiomeClassifier.biomeName(broadHighland.terrainBiomeId())),
+                "cold broad highlands must retain alpine terrain");
     }
     private static void require(boolean ok, String message) { if (!ok) throw new AssertionError(message); }
 }

@@ -9,6 +9,7 @@ import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
+import com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfile;
 import com.github.xandergos.terraindiffusionmc.world.river.RiverPreviewService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
@@ -25,6 +26,7 @@ import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
 import net.minecraft.world.level.levelgen.SurfaceRules;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.tags.BlockTags;
+import net.minecraft.tags.BiomeTags;
 import net.minecraft.world.level.material.Fluids;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -191,7 +193,23 @@ public final class StreamsReflowingProbe {
                         "targetTick", startTick + 100, "endTick", afterTicks.tick, "selectedChunkCount", completed.size(),
                         "tickableChunkCount", tickability.tickableCount));
                 emit(receipts, topology.json(ticksPassed, startTick, afterTicks.tick));
+                emit(receipts, server.submit(() -> auditNativeEndpoint(level, topology.outlet)).get(config.timeoutSeconds, TimeUnit.SECONDS));
                 if (!topology.passed || !ticksPassed || "mismatch".equals(topology.restartStatus) || topology.restartStatus.startsWith("io_error")) terminal = "incomplete";
+            }
+            if (Boolean.getBoolean("td.streamsProbe.marineConnectivityAudit")) {
+                final Config marineConfig = config;
+                MarineConnectivityAudit marine = server.submit(() -> auditMarineConnectivity(level, marineConfig)).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                emit(receipts, marine.planJson());
+                if (Boolean.getBoolean("td.streamsProbe.marinePrepareChunks") && marine.preparable()) {
+                    for (ChunkPos pos : marine.requiredChunks) {
+                        server.submit(() -> inspectChunk(level, pos.x, pos.z)).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                        if (server.submit(() -> level.setChunkForced(pos.x, pos.z, true)).get(config.timeoutSeconds, TimeUnit.SECONDS))
+                            tickAuditForcedChunks.add(pos);
+                    }
+                    final MarineConnectivityAudit plannedMarine = marine;
+                    marine = server.submit(() -> evaluateMarineConnectivity(level, plannedMarine)).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                }
+                emit(receipts, marine.json());
             }
             if (riverPreview) {
                 // Run only after every requested FULL chunk is complete, so neighboring generation order is settled.
@@ -753,8 +771,257 @@ public final class StreamsReflowingProbe {
                     "center", selected.centerX + "," + selected.centerZ, "radius", selected.radius, "networks", selected.networks,
                     "nodes", selected.nodes, "source", selected.value(selected.source), "junction", selected.value(selected.junction),
                     "outlet", selected.value(selected.outlet), "flow", selected.value(selected.flow), "chunks", result.size(), "error", selected.error));
-        } catch (Throwable t) { emit(receipts, json("streams_topology_discovery", "status", "unavailable", "error", t.getClass().getSimpleName(), "message", safe(t.getMessage()))); }
+        } catch (Throwable t) {
+            LOG.error("Native topology discovery failed", t);
+            Throwable cause = t;
+            while (cause.getCause() != null && cause.getCause() != cause) cause = cause.getCause();
+            emit(receipts, json("streams_topology_discovery", "status", "unavailable", "error", cause.getClass().getSimpleName(), "message", safe(cause.getMessage())));
+        }
         return result;
+    }
+
+    /** Opt-in bounded proof that a native terminal is physically connected to an ocean, not just wet locally. */
+    private static String auditNativeEndpoint(ServerLevel level, NativePoint point) {
+        if (point == null) return json("native_water_endpoint", "status", "missing");
+        try {
+            Object engine = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen")
+                    .getMethod("engineIfPresent", ServerLevel.class).invoke(null, level);
+            Object lake = engine.getClass().getMethod("lakeAt", int.class, int.class).invoke(engine, point.x, point.z);
+            Object lakeY = engine.getClass().getMethod("lakeSurfaceAt", int.class, int.class).invoke(engine, point.x, point.z);
+            Object diag = engine.getClass().getMethod("planDiag", int.class, int.class).invoke(engine, point.x, point.z);
+            var biome = level.getChunkSource().getGenerator().getBiomeSource().getNoiseBiome(point.x >> 2,
+                    point.waterY >> 2, point.z >> 2, level.getChunkSource().randomState().sampler());
+            return json("native_water_endpoint", "status", "observed", "x", point.x, "z", point.z,
+                    "waterY", point.waterY, "nativeLake", lake != null, "lakeSurfaceY", lakeY,
+                    "sourceBiome", biome.unwrapKey().map(ResourceKey::location).orElse(null), "ocean", biome.is(BiomeTags.IS_OCEAN), "nativePlan", diag);
+        } catch (Throwable e) { return json("native_water_endpoint", "status", "unavailable", "error", e.toString()); }
+    }
+
+    private static MarineConnectivityAudit auditMarineConnectivity(ServerLevel level, Config config) {
+        MarineConnectivityAudit audit = new MarineConnectivityAudit();
+        try {
+            int centerX = integerProperty("td.streamsProbe.marineCenterX", integerProperty("td.streamsProbe.topologyCenterX", config.centerX * 16 + 8));
+            int centerZ = integerProperty("td.streamsProbe.marineCenterZ", integerProperty("td.streamsProbe.topologyCenterZ", config.centerZ * 16 + 8));
+            int radius = Math.max(64, Math.min(1024, integerProperty("td.streamsProbe.marineRadius", 512)));
+            Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen");
+            Object engine = worldgen.getMethod("engineIfPresent", ServerLevel.class).invoke(null, level);
+            if (engine == null) { audit.status="unresolved"; audit.error="engine_absent"; return audit; }
+            Method platesNear = engine.getClass().getMethod("platesNear", double.class, double.class, double.class);
+            Method networkFor = null, networkAt = engine.getClass().getMethod("networkAt", int.class, int.class);
+            Map<String, MarineNode> nodes = new LinkedHashMap<>(); Map<String, List<MarineSegment>> outgoing = new LinkedHashMap<>();
+            java.util.HashSet<String> networks = new java.util.HashSet<>();
+            Object[] plates = (Object[]) platesNear.invoke(engine, (double) centerX, (double) centerZ, (double) radius);
+            for (int i=0; i<Math.min(64, plates.length); i++) {
+                if (networkFor == null) networkFor = engine.getClass().getMethod("networkFor", plates[i].getClass());
+                addMarineNetwork(networkFor.invoke(engine, plates[i]), networks, nodes, outgoing, audit);
+            }
+            audit.networks = networks.size();
+            MarineNode source = nodes.values().stream().filter(n -> n.in == 0 && n.out > 0)
+                    .min(java.util.Comparator.comparingDouble(n -> Math.hypot(n.x-centerX, n.z-centerZ))).orElse(null);
+            if (source == null) { audit.status="unresolved"; audit.error="no_bounded_source"; return audit; }
+            String cursor = source.key; java.util.HashSet<String> visited = new java.util.HashSet<>();
+            Method plan = engine.getClass().getMethod("plan", int.class, int.class);
+            Class<?> cp = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
+            Method inChannel=cp.getMethod("inChannel"), waterY=cp.getMethod("waterSurfaceY"), terminal=cp.getMethod("terminal");
+            NativePoint sourcePoint = nativePlanNear(engine, new GraphNode(source.x,source.z), "source", "marine_source");
+            if (sourcePoint != null) addMarineSample(audit,sourcePoint.x,sourcePoint.waterY,sourcePoint.z,true);
+            double distanceSinceSample = 32;
+            for (int step=0; step<8192; step++) {
+                List<MarineSegment> nexts = outgoing.getOrDefault(cursor, List.of());
+                if (nexts.isEmpty()) { audit.truncated=true; audit.error="no_successor_in_bounded_networks"; break; }
+                MarineSegment next = nexts.stream().max(java.util.Comparator.comparingDouble(s -> s.w2)).orElseThrow();
+                if (!visited.add(next.id())) { audit.truncated=true; audit.error="cycle_in_directed_segments"; break; }
+                audit.segmentCount++;
+                if (audit.segmentCount % 32 == 1) audit.widthObservations.add(String.format(java.util.Locale.ROOT, "%.2f>%.2f", next.w1, next.w2));
+                MarineNode start=nodes.get(next.from), end=nodes.get(next.to);
+                double segmentLength = Math.hypot(end.x-start.x,end.z-start.z);
+                int samples=Math.max(1, (int)Math.ceil(segmentLength/32.0));
+                for (int i=1; i<=samples; i++) {
+                    distanceSinceSample += segmentLength / samples;
+                    if (distanceSinceSample < 32) continue;
+                    if (audit.samples.size() >= 256) { audit.truncated=true; audit.error="sample_budget_256"; break; }
+                    int x=(int)Math.round(start.x+(end.x-start.x)*i/samples), z=(int)Math.round(start.z+(end.z-start.z)*i/samples);
+                    NativePoint aligned = nativePlanNear(engine, new GraphNode(x,z), "any", "marine_sample");
+                    if (aligned != null) addMarineSample(audit,aligned.x,aligned.waterY,aligned.z,true);
+                    else { Object sampled=plan.invoke(engine,x,z); addMarineSample(audit,x,((Number)waterY.invoke(sampled)).intValue(),z,(Boolean)inChannel.invoke(sampled)); }
+                    distanceSinceSample = 0;
+                }
+                if (audit.truncated) break;
+                cursor = next.to;
+                MarineNode endpoint = nodes.get(cursor);
+                Object extra = networkAt.invoke(engine, (int)Math.round(endpoint.x), (int)Math.round(endpoint.z));
+                if (extra != null && networks.size() < 64) addMarineNetwork(extra, networks, nodes, outgoing, audit);
+                Object column = plan.invoke(engine, (int)Math.round(endpoint.x), (int)Math.round(endpoint.z));
+                boolean channel=(Boolean)inChannel.invoke(column); int y=((Number)waterY.invoke(column)).intValue(); boolean isTerminal=(Boolean)terminal.invoke(column);
+                if (isTerminal) {
+                    audit.terminalX=(int)Math.round(endpoint.x); audit.terminalZ=(int)Math.round(endpoint.z); audit.terminalY=y; audit.terminalSeen=true;
+                    addMarineSample(audit,audit.terminalX,y,audit.terminalZ,channel);
+                    break;
+                }
+            }
+            audit.networks = networks.size();
+            if (audit.segmentCount >= 8192 && !audit.terminalSeen) { audit.truncated=true; audit.error="segment_budget_8192"; }
+            if (audit.truncated || !audit.terminalSeen) { audit.status="truncated"; return audit; }
+            if (audit.requiredChunks.size() > 32) { audit.status="truncated"; audit.error="route_chunk_budget_32"; return audit; }
+            audit.status = "planned";
+        } catch (Throwable t) { audit.status="unresolved"; audit.error=t.getClass().getSimpleName()+":"+safe(t.getMessage()); }
+        return audit;
+    }
+
+    private static void addMarineNetwork(Object network, java.util.Set<String> seen, Map<String, MarineNode> nodes,
+                                         Map<String, List<MarineSegment>> outgoing, MarineConnectivityAudit audit) throws Exception {
+        if (network == null) return;
+        String key=String.valueOf(network.getClass().getMethod("key").invoke(network)); if (!seen.add(key)) return;
+        for (Object segment : (List<?>) network.getClass().getMethod("segments").invoke(network)) {
+            double x1=endpoint(segment,"x1"), z1=endpoint(segment,"z1"), x2=endpoint(segment,"x2"), z2=endpoint(segment,"z2");
+            MarineNode from=marineNode(nodes,x1,z1), to=marineNode(nodes,x2,z2); from.out++; to.in++;
+            double w1=endpoint(segment,"w1"), w2=endpoint(segment,"w2"); MarineSegment edge=new MarineSegment(from.key,to.key,w1,w2);
+            outgoing.computeIfAbsent(from.key, ignored -> new ArrayList<>()).add(edge);
+        }
+    }
+    private static MarineNode marineNode(Map<String, MarineNode> nodes, double x, double z) {
+        String key=nodeKey(x,z); return nodes.computeIfAbsent(key, ignored -> new MarineNode(key,x,z));
+    }
+    private static void addMarineSample(MarineConnectivityAudit audit, int x, int y, int z, boolean channel) {
+        MarineSample sample=new MarineSample(x,y,z,channel); if (!audit.samples.contains(sample)) audit.samples.add(sample);
+        audit.requiredChunks.add(new ChunkPos(x>>4,z>>4));
+    }
+    /** Called only after the background worker has requested the bounded planned chunks. */
+    private static MarineConnectivityAudit evaluateMarineConnectivity(ServerLevel level, MarineConnectivityAudit audit) {
+        if (!"planned".equals(audit.status)) return audit;
+        // These are sparse plan samples, so a dry point is an observation rather than a
+        // verdict about the unsampled channel between it and the terminal.
+        for (MarineSample sample : audit.samples) loadedChannelWater(level,sample.x,sample.y,sample.z,sample.channel,audit);
+        audit.sampledCorridorStatus = audit.unloaded ? "samples_unloaded"
+                : !audit.dryPlannedSamples.isEmpty() || audit.unaligned ? "inconclusive_dry_or_unaligned_samples"
+                : "all_sampled_planned_centers_wet";
+        BlockPos terminalPos = new BlockPos(audit.terminalX, audit.terminalY, audit.terminalZ);
+        // Saved biomes may be rebiomed to river by Streams; use the generator's direct source for marine classification.
+        var sourceBiome = level.getChunkSource().getGenerator().getBiomeSource().getNoiseBiome(terminalPos.getX() >> 2,
+                terminalPos.getY() >> 2, terminalPos.getZ() >> 2, level.getChunkSource().randomState().sampler());
+        audit.oceanSourceBiome = sourceBiome.unwrapKey().map(ResourceKey::location).map(String::valueOf).orElse("unkeyed");
+        audit.oceanBiome = sourceBiome.is(BiomeTags.IS_OCEAN);
+        // A native endpoint can be one grid cell inland while its channel joins nearby ocean water.
+        // Do not turn a bounded negative search into an inland-sink claim.
+        audit.oceanWaterConnected = boundedOceanWaterConnection(level, terminalPos, audit);
+        // Terminal/mouth evidence is deliberately independent from sparse corridor samples.
+        // `sampledCorridorStatus` tells whether those observations are complete or inconclusive.
+        if (audit.oceanWaterConnected) audit.status = audit.oceanBiome ? "marine_outlet" : "shore_adjacent_ocean_connection";
+        else if (audit.tdMarineWaterConnected) audit.status = "td_marine_mask_connection";
+        else if (audit.unloaded) audit.status = "unloaded";
+        else audit.status = "unresolved_bounded_connection";
+        return audit;
+    }
+    private static boolean loadedChannelWater(ServerLevel level, int x, int y, int z, boolean channel, MarineConnectivityAudit audit) {
+        LevelChunk chunk=level.getChunkSource().getChunkNow(x>>4,z>>4);
+        if (chunk == null) { audit.unloaded=true; audit.unloadedChunks.add((x>>4)+","+(z>>4)); return false; }
+        audit.sampledLoaded++;
+        if (!channel) { audit.unaligned=true; audit.alignmentSamples.add(x+","+y+","+z); return false; }
+        audit.plannedChannelSamples++;
+        NativePoint physical = new NativePoint(x,z,y,y-1,0,0,"marine_physical");
+        physical.readRole(level);
+        boolean physicalWater=physical.valid;
+        if (!physicalWater) {
+            try {
+                Object engine=Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen").getMethod("engineIfPresent",ServerLevel.class).invoke(null,level);
+                Method plan=engine.getClass().getMethod("plan",int.class,int.class);
+                Object center=plan.invoke(engine,x,z), cfg=engine.getClass().getMethod("config").invoke(engine);
+                Method pointBar=Class.forName("dev.streamsreflowing.worldgen.ChannelBed").getDeclaredMethod("onPointBar",center.getClass(),cfg.getClass());
+                pointBar.setAccessible(true);
+                if ((Boolean)pointBar.invoke(null,center,cfg)) {
+                    double lateral=Math.abs(endpoint(center,"lateral"));
+                    for (int radius=1; radius<=2 && !physicalWater; radius++) for (int dz=-radius;dz<=radius && !physicalWater;dz++) for (int dx=-radius;dx<=radius && !physicalWater;dx++) {
+                        if (Math.max(Math.abs(dx),Math.abs(dz))!=radius || level.getChunkSource().getChunkNow((x+dx)>>4,(z+dz)>>4)==null) continue;
+                        Object adjacent=plan.invoke(engine,x+dx,z+dz);
+                        if (!(Boolean)adjacent.getClass().getMethod("inChannel").invoke(adjacent) || Math.abs(endpoint(adjacent,"lateral"))>=lateral) continue;
+                        int adjacentY=((Number)adjacent.getClass().getMethod("waterSurfaceY").invoke(adjacent)).intValue();
+                        NativePoint lane=new NativePoint(x+dx,z+dz,adjacentY,adjacentY-1,0,0,"point_bar_wet_lane"); lane.readRole(level);
+                        if (lane.valid) { physicalWater=true; audit.alignmentSamples.add("native_point_bar:"+x+","+z+"->"+(x+dx)+","+(z+dz)+"@"+lane.observedWaterY); }
+                    }
+                }
+            } catch (Exception e) { audit.error="point_bar_check:"+e; }
+        }
+        if (physicalWater) audit.physicalWaterSamples++;
+        if (!physicalWater) audit.dryPlannedSamples.add(x+","+y+","+z);
+        return physicalWater;
+    }
+    /**
+     * Bounded physical-water search from the traced terminal.  Direct generator biomes are
+     * intentional: Streams may persist a minecraft:river biome over a source-ocean column.
+     * A negative result is unresolved, because this is deliberately not a coastline scan.
+     */
+    private static boolean boundedOceanWaterConnection(ServerLevel level, BlockPos start, MarineConnectivityAudit audit) {
+        final int horizontalRadius = 64, verticalRadius = 64, waterNodeBudget = 8192, checkedPositionBudget = 32768;
+        final int seaLevel = level.getChunkSource().getGenerator().getSeaLevel();
+        final int minY = Math.max(level.getMinBuildHeight(), start.getY() - verticalRadius);
+        final int maxY = Math.min(level.getMaxBuildHeight() - 1, start.getY() + verticalRadius);
+        final Map<Long, LocalTerrainProvider.HeightmapData> tdTiles = new LinkedHashMap<>();
+        java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+        java.util.HashSet<Long> seen = new java.util.HashSet<>();
+        queue.add(start);
+        while (!queue.isEmpty() && seen.size() < checkedPositionBudget && audit.waterSearchVisited < waterNodeBudget) {
+            BlockPos p = queue.removeFirst();
+            if (p.getY() < minY || p.getY() > maxY || Math.abs(p.getX() - start.getX()) > horizontalRadius
+                    || Math.abs(p.getZ() - start.getZ()) > horizontalRadius) continue;
+            long key = BlockPos.asLong(p.getX(), p.getY(), p.getZ());
+            if (!seen.add(key)) continue;
+            LevelChunk chunk = level.getChunkSource().getChunkNow(p.getX() >> 4, p.getZ() >> 4);
+            if (chunk == null) {
+                // A missing neighbour makes this bounded negative inconclusive, but must not
+                // discard already loaded frontiers that can still reach direct ocean water.
+                audit.unloaded = true;
+                String chunkKey = (p.getX() >> 4) + "," + (p.getZ() >> 4);
+                if (!audit.unloadedChunks.contains(chunkKey)) audit.unloadedChunks.add(chunkKey);
+                continue;
+            }
+            if (!chunk.getBlockState(p).getFluidState().is(FluidTags.WATER)) continue;
+            audit.waterSearchVisited++;
+            var directBiome = level.getChunkSource().getGenerator().getBiomeSource().getNoiseBiome(p.getX() >> 2,
+                    p.getY() >> 2, p.getZ() >> 2, level.getChunkSource().randomState().sampler());
+            String directBiomeId = directBiome.unwrapKey().map(ResourceKey::location).map(String::valueOf).orElse("unkeyed");
+            if (p.getY() >= seaLevel - 1 && directBiome.is(BiomeTags.IS_OCEAN) && !audit.oceanWaterConnected) {
+                audit.oceanWaterConnected = true;
+                audit.oceanConnectionSourceBiome = directBiomeId;
+                audit.oceanConnectionPosition = p.getX() + "," + p.getY() + "," + p.getZ();
+            }
+            if (p.getY() >= seaLevel - 1 && !audit.tdMarineWaterConnected
+                    && level.getChunkSource().getGenerator().getBiomeSource()
+                    instanceof com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource) {
+                TdMarineMask mask = tdMarineMaskAt(p.getX(), p.getZ(), tdTiles);
+                if (mask != null && mask.modelElevation < 0 && EcologyShowcaseProfile.isVanillaOcean(mask.vanillaBiomeId)) {
+                    audit.tdMarineWaterConnected = true;
+                    audit.tdMarineMaskConnectionPosition = p.getX() + "," + p.getY() + "," + p.getZ();
+                    audit.tdMarineMaskDirectBiome = directBiomeId;
+                    audit.tdMarineMaskModelElevation = Short.toString(mask.modelElevation);
+                    audit.tdMarineMaskVanillaOceanId = Short.toString(mask.vanillaBiomeId);
+                }
+            }
+            if (audit.oceanWaterConnected && audit.tdMarineWaterConnected) return true;
+            for (int[] d : new int[][]{{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}}) {
+                queue.add(p.offset(d[0], d[1], d[2]));
+            }
+        }
+        audit.waterSearchBudgetHit = audit.waterSearchVisited >= waterNodeBudget;
+        audit.waterSearchPositionBudgetHit = seen.size() >= checkedPositionBudget;
+        return audit.oceanWaterConnected;
+    }
+
+    /** TD data is tile-cached for a single bounded BFS; it never changes generation state. */
+    private static TdMarineMask tdMarineMaskAt(int x, int z, Map<Long, LocalTerrainProvider.HeightmapData> tiles) {
+        int tileSize = TerrainDiffusionConfig.tileSize();
+        int shift = Integer.numberOfTrailingZeros(tileSize);
+        int tileX = x >> shift, tileZ = z >> shift;
+        long key = ChunkPos.asLong(tileX, tileZ);
+        LocalTerrainProvider.HeightmapData data = tiles.get(key);
+        if (data == null && !tiles.containsKey(key)) {
+            int startX = tileX << shift, startZ = tileZ << shift;
+            data = LocalTerrainProvider.getInstance().fetchHeightmap(startZ, startX, startZ + tileSize, startX + tileSize);
+            tiles.put(key, data);
+        }
+        if (data == null || data.heightmap == null || data.biomeIds == null) return null;
+        int localX = x - (tileX << shift), localZ = z - (tileZ << shift);
+        if (localX < 0 || localZ < 0 || localX >= data.width || localZ >= data.height) return null;
+        return new TdMarineMask(data.heightmap[localZ][localX], data.biomeIds[localZ][localX]);
     }
 
     private static NativeGraphSelection selectNativeGraph(ServerLevel level, Config config) throws Exception {
@@ -1402,6 +1669,34 @@ public final class StreamsReflowingProbe {
         final double x, z; int inDegree, outDegree;
         GraphNode(double x, double z) { this.x=x; this.z=z; }
     }
+    private static final class MarineNode {
+        final String key; final double x, z; int in, out;
+        MarineNode(String key, double x, double z) { this.key=key; this.x=x; this.z=z; }
+    }
+    private record MarineSegment(String from, String to, double w1, double w2) {
+        String id() { return from+">"+to+":"+w1+":"+w2; }
+    }
+    private record MarineSample(int x, int y, int z, boolean channel) { }
+    private record TdMarineMask(short modelElevation, short vanillaBiomeId) { }
+    private static final class MarineConnectivityAudit {
+        String status="unresolved", error="", oceanSourceBiome="", oceanConnectionSourceBiome="", oceanConnectionPosition="", tdMarineMaskConnectionPosition="", tdMarineMaskDirectBiome="", tdMarineMaskModelElevation="", tdMarineMaskVanillaOceanId="", sampledCorridorStatus="not_evaluated"; int networks, segmentCount, sampledLoaded, plannedChannelSamples, physicalWaterSamples, terminalX, terminalY, terminalZ, waterSearchVisited;
+        boolean terminalSeen, oceanBiome, oceanWaterConnected, tdMarineWaterConnected, waterSearchBudgetHit, waterSearchPositionBudgetHit, truncated, unloaded, unaligned;
+        final List<String> widthObservations=new ArrayList<>(), unloadedChunks=new ArrayList<>(), dryPlannedSamples=new ArrayList<>(), alignmentSamples=new ArrayList<>();
+        final List<MarineSample> samples=new ArrayList<>(); final java.util.LinkedHashSet<ChunkPos> requiredChunks=new java.util.LinkedHashSet<>();
+        boolean preparable() { return "planned".equals(status) && requiredChunks.size() <= 32; }
+        String planJson() { return StreamsReflowingProbe.json("marine_connectivity_plan", "status", status, "error", error,
+                "requiredChunkCount", requiredChunks.size(), "requiredChunks", requiredChunks.toString(), "sampleCount", samples.size(),
+                "prepareEligible", preparable(), "procedure", "rerun_with_marinePrepareChunks=true_to_generate_at_most_32_planned_chunks_then_recheck_physical_water"); }
+        String json() { return StreamsReflowingProbe.json("marine_connectivity_audit", "status", status, "error", error,
+                "networks", networks, "segments", segmentCount, "terminal", terminalSeen ? terminalX+","+terminalY+","+terminalZ : "missing",
+                "terminalOceanBiome", oceanBiome, "oceanSourceBiome", oceanSourceBiome, "oceanConnectionSourceBiome", oceanConnectionSourceBiome, "oceanConnectionPosition", oceanConnectionPosition,
+                "oceanWaterConnected3d", oceanWaterConnected, "tdMarineWaterConnected3d", tdMarineWaterConnected, "tdMarineMaskConnectionPosition", tdMarineMaskConnectionPosition,
+                "tdMarineMaskDirectBiome", tdMarineMaskDirectBiome, "tdMarineMaskModelElevation", tdMarineMaskModelElevation, "tdMarineMaskVanillaOceanId", tdMarineMaskVanillaOceanId,
+                "waterSearchVisited", waterSearchVisited, "waterSearchBudgetHit", waterSearchBudgetHit, "waterSearchPositionBudgetHit", waterSearchPositionBudgetHit, "loadedSamples", sampledLoaded,
+                "plannedChannelSamples", plannedChannelSamples, "physicalWaterSamples", physicalWaterSamples, "sampledCorridorStatus", sampledCorridorStatus,
+                "unloadedChunks", String.join(";", unloadedChunks), "dryPlannedSamples", String.join(";", dryPlannedSamples), "alignmentSamples", String.join(";", alignmentSamples),
+                "widthObservationsEvery32Segments", String.join(";", widthObservations), "bounds", "networks<=64;segments<=8192;samples<=256;prepareChunks<=32;sampled_trunk_continuity;waterBfsHorizontal<=64;waterBfsVertical<=64;waterBfsWaterNodes<=8192;waterBfsCheckedPositions<=32768;marineRequiresDirectOceanBiome+waterAtSeaLevelMinus1"); }
+    }
     private static final class NativeGraphSelection {
         final int centerX, centerZ, radius; int networks, nodes; String error = "";
         NativePoint source, junction, outlet, flow;
@@ -1430,16 +1725,31 @@ public final class StreamsReflowingProbe {
     private static final class NativePoint {
         final int x, z, waterY, bedY; final double flowX, flowZ; final String provenance;
         boolean water, bedSolid, flowNonZero, valid, waterColumnContinuous, physicalBedSolid;
-        int physicalBedY = Integer.MIN_VALUE, waterColumnDepth;
+        int physicalBedY = Integer.MIN_VALUE, waterColumnDepth, observedWaterY;
         String waterBlock = "", bedBlock = "", physicalBedBlock = "";
         NativePoint(int x, int z, int waterY, int bedY, double flowX, double flowZ, String provenance) {
             this.x=x; this.z=z; this.waterY=waterY; this.bedY=bedY; this.flowX=flowX; this.flowZ=flowZ; this.provenance=provenance;
         }
         /** Exact native-plan water/bed evidence for source, confluence and terminal roles. */
         void readRole(ServerLevel level) {
-            var waterState = level.getBlockState(new BlockPos(x, waterY, z)); var bedState = level.getBlockState(new BlockPos(x, bedY, z));
-            water = waterState.getFluidState().is(FluidTags.WATER); bedSolid = bedState.isSolid(); flowNonZero = Math.abs(flowX)+Math.abs(flowZ)>1.0e-6;
-            valid = water && bedSolid; waterBlock = String.valueOf(waterState); bedBlock = String.valueOf(bedState);
+            observedWaterY = waterY;
+            var waterState = level.getBlockState(new BlockPos(x, observedWaterY, z));
+            if (waterState.isAir() && level.getFluidState(new BlockPos(x, waterY - 1, z)).is(FluidTags.WATER)) {
+                observedWaterY--; waterState = level.getBlockState(new BlockPos(x, observedWaterY, z));
+            }
+            water = waterState.getFluidState().is(FluidTags.WATER);
+            flowNonZero = Math.abs(flowX)+Math.abs(flowZ)>1.0e-6;
+            waterBlock = String.valueOf(waterState);
+            bedSolid = false; physicalBedSolid = false; physicalBedY = Integer.MIN_VALUE; waterColumnDepth = water ? 1 : 0;
+            for (int depth=1; water && depth<=64; depth++) {
+                int y=observedWaterY-depth;
+                if (y < level.getMinBuildHeight()) break;
+                var state=level.getBlockState(new BlockPos(x,y,z));
+                if (state.getFluidState().is(FluidTags.WATER)) { waterColumnDepth++; continue; }
+                physicalBedY=y; bedSolid=physicalBedSolid=state.isSolid(); bedBlock=physicalBedBlock=String.valueOf(state); break;
+            }
+            waterColumnContinuous = water && bedSolid;
+            valid = waterColumnContinuous;
         }
         /** Flow channels may be carved below ColumnPlan.bedY by native features; prove a bounded, hole-free physical column instead. */
         void readFlowColumn(ServerLevel level, int maximumDepth) {
@@ -1449,7 +1759,7 @@ public final class StreamsReflowingProbe {
             waterColumnDepth = water ? 1 : 0;
             waterColumnContinuous = water;
             for (int depth = 1; waterColumnContinuous && depth <= maximumDepth; depth++) {
-                int y = waterY - depth; if (y < level.getMinBuildHeight()) { waterColumnContinuous = false; break; }
+                int y = observedWaterY - depth; if (y < level.getMinBuildHeight()) { waterColumnContinuous = false; break; }
                 var state = level.getBlockState(new BlockPos(x, y, z));
                 if (state.getFluidState().is(FluidTags.WATER)) { waterColumnDepth = depth + 1; continue; }
                 physicalBedY = y; physicalBedSolid = state.isSolid(); physicalBedBlock = String.valueOf(state);
@@ -1458,7 +1768,7 @@ public final class StreamsReflowingProbe {
             valid = water && flowNonZero && waterColumnContinuous && physicalBedSolid;
         }
         String canonical() { return x+","+z+","+waterY+","+bedY+","+water+","+bedSolid+","+flowNonZero+","+flowX+","+flowZ+","+provenance+","+waterBlock+","+bedBlock
-                + ",physicalBed="+physicalBedY+","+physicalBedSolid+","+waterColumnDepth+","+waterColumnContinuous+","+physicalBedBlock; }
+                + ",physicalBed="+physicalBedY+","+physicalBedSolid+","+waterColumnDepth+","+waterColumnContinuous+","+physicalBedBlock+",observedWaterY="+observedWaterY; }
         public String toString() { return canonical(); }
     }
 

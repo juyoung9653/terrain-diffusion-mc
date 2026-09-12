@@ -5,7 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Pure tuple handling for the Streams 2.13.1 structure-shield compatibility hook. */
+/** Pure tuple handling for the audited Streams structure-shield compatibility hook. */
 public final class StructureShieldGeometry {
     public static final int TUPLE_SIZE = 5;
 

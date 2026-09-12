@@ -6,6 +6,18 @@ public final class EcologyShowcaseProfileTest {
     }
 
     public static void main(String[] args) {
+        for (short id : new short[]{-1, -2, -3})
+            require(EcologyShowcaseProfile.retainsTerrainBiome(id), "showcases must retain shores");
+        for (String name : new String[]{"deep_warm_ocean", "warm_river"}) {
+            int index = TerralithBiomeClassifier.biomeNames().indexOf("terralith:" + name);
+            require(index >= 0 && EcologyShowcaseProfile.retainsTerrainBiome((short) (index + 1)), "retain ocean " + name);
+        }
+        for (short id : new short[]{41, 44, 46, 48})
+            require(EcologyShowcaseProfile.isVanillaOcean(id), "retain vanilla ocean fallback");
+        require(!EcologyShowcaseProfile.isVanillaOcean((short) 3), "snowy plains are land");
+        require(!EcologyShowcaseProfile.retainsTerrainBiome((short) 0), "land ecology remains fixed");
+        int cliff = TerralithBiomeClassifier.biomeNames().indexOf("terralith:granite_cliffs");
+        require(cliff >= 0 && !EcologyShowcaseProfile.retainsTerrainBiome((short) (cliff + 1)), "local cliffs must not replace showcase ecology");
         for (int i = 0; i < EcologyClassifier.BIOMES.size(); i++) {
             String name = EcologyClassifier.BIOMES.get(i);
             EcologyClassifier.Sample flat = EcologyShowcaseProfile.sample(name, 1234, -5678, 0.0F);

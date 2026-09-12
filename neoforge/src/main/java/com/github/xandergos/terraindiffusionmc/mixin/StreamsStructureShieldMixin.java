@@ -46,7 +46,7 @@ public abstract class StreamsStructureShieldMixin {
         if (filtered != original) {
             callback.setReturnValue(filtered);
             if (REPORTED.compareAndSet(false, true)) {
-                LOG.info("Streams 2.13.1: replaced Better Mineshaft aggregate structure shields with piece shields for Terrain Diffusion");
+                LOG.info("Streams: replaced Better Mineshaft aggregate structure shields with piece shields for Terrain Diffusion");
             }
         }
     }

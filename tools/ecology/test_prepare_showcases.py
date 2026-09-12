@@ -1,4 +1,6 @@
 ﻿import gzip
+import hashlib
+import json
 import importlib.util
 from pathlib import Path
 import struct
@@ -24,13 +26,13 @@ def string(name, value): return tag(8, name, showcases.nbt_string(value))
 def compound(name, *entries): return tag(10, name, b"".join(entries) + b"\0")
 
 
-def level_nbt(existing_showcase=None):
+def level_nbt(existing_showcase=None, dimension_type="terrain-diffusion-mc:terrain_diffusion_scale_2"):
     source_entries = [string("type", "terrain-diffusion-mc:terrain_diffusion"), byte("terralith", 1), byte("natural_biomes", 1)]
     if existing_showcase is not None:
         source_entries.append(string("ecology_showcase", existing_showcase))
     biome_source = compound("biome_source", *source_entries)
     generator = compound("generator", biome_source)
-    overworld = compound("minecraft:overworld", generator)
+    overworld = compound("minecraft:overworld", string("type", dimension_type), generator)
     dimensions = compound("dimensions", overworld)
     worldgen = compound("WorldGenSettings", long("seed", 123456789), dimensions)
     rules = compound("GameRules", string("spawnRadius", "9"), string("spawnChunkRadius", "9"),
@@ -56,11 +58,17 @@ class PrepareShowcasesTest(unittest.TestCase):
         level.write_bytes(gzip.compress(level_nbt(existing_showcase)))
         return level
 
-    def write_scale_state(self):
+    def write_scale_state(self, scale=2, explicit=True, omit_scale=False):
         data = self.template / "data"
         data.mkdir()
-        payload = b"\x0a\x00\x00" + compound("data", integer("scale", 2), byte("explicit_scale", 1)) + b"\0"
+        entries = [] if omit_scale else [integer("scale", scale)]
+        if explicit:
+            entries.append(byte("explicit_scale", 1))
+        payload = b"\x0a\x00\x00" + compound("data", *entries) + b"\0"
         (data / "terrain_diffusion_world_settings.dat").write_bytes(gzip.compress(payload))
+
+    def fields(self, path):
+        return showcases.nbt_fields(gzip.decompress(path.read_bytes()))
 
     def test_inserts_showcase_string_and_edits_playable_fields(self):
         seed = showcases.patch_level(self.write_level(), "temperate_forest", (9472, 110, 896))
@@ -98,6 +106,48 @@ class PrepareShowcasesTest(unittest.TestCase):
         target.mkdir()
         showcases.copy_template(self.template, target)
         self.assertEqual({path.name for path in (target / "data").iterdir()}, {"terrain_diffusion_world_settings.dat"})
+
+    def test_stage_scale_five_patches_legacy_default_state_and_dimension_type(self):
+        self.write_level()
+        self.write_scale_state(omit_scale=True, explicit=False)
+        source_level_hash = hashlib.sha256((self.template / "level.dat").read_bytes()).hexdigest()
+        source_scale_hash = hashlib.sha256((self.template / "data" / "terrain_diffusion_world_settings.dat").read_bytes()).hexdigest()
+        output = self.root / "showcases"
+
+        manifests = showcases.stage(self.template, output, (1, 110, 3), scale=5)
+
+        self.assertEqual(len(manifests), len(showcases.ECOLOGY_BIOMES))
+        world = output / "temperate_forest"
+        level_fields = self.fields(world / "level.dat")
+        saved_fields = self.fields(world / "data" / "terrain_diffusion_world_settings.dat")
+        self.assertEqual(level_fields[showcases.OVERWORLD_DIMENSION_TYPE][3],
+                         "terrain-diffusion-mc:terrain_diffusion_scale_5")
+        self.assertEqual(saved_fields[("data", "scale")][3], 5)
+        self.assertEqual(saved_fields[("data", "explicit_scale")][3], 1)
+        manifest = json.loads((world / "showcase-manifest.json").read_text())
+        self.assertEqual(manifest["scale"], 5)
+        self.assertEqual(manifest["levelDatSha256"], hashlib.sha256((world / "level.dat").read_bytes()).hexdigest())
+        self.assertEqual(hashlib.sha256((self.template / "level.dat").read_bytes()).hexdigest(), source_level_hash)
+        self.assertEqual(hashlib.sha256((self.template / "data" / "terrain_diffusion_world_settings.dat").read_bytes()).hexdigest(), source_scale_hash)
+
+    def test_default_scale_preserves_legacy_omitted_codec_state(self):
+        self.write_level()
+        self.write_scale_state(omit_scale=True, explicit=False)
+        source_state = (self.template / "data" / "terrain_diffusion_world_settings.dat").read_bytes()
+
+        showcases.stage(self.template, self.root / "default-showcases", (1, 2, 3))
+
+        world = self.root / "default-showcases" / "temperate_forest"
+        self.assertEqual((world / "data" / "terrain_diffusion_world_settings.dat").read_bytes(), source_state)
+        self.assertEqual(self.fields(world / "level.dat")[showcases.OVERWORLD_DIMENSION_TYPE][3],
+                         "terrain-diffusion-mc:terrain_diffusion_scale_2")
+
+    def test_rejects_invalid_requested_scale(self):
+        self.write_level()
+        self.write_scale_state()
+        for invalid in (0, 7):
+            with self.assertRaises(ValueError):
+                showcases.stage(self.template, self.root / f"scale-{invalid}", (1, 2, 3), scale=invalid)
 
 
 if __name__ == "__main__":

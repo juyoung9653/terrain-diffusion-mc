@@ -6,6 +6,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.Hei
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.CoarseBiomeHints;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
+import com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfile;
 import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Codec;
@@ -159,7 +160,12 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
 
     @Override
     protected Stream<Holder<Biome>> collectPossibleBiomes() {
-        if (!ecologyShowcase.isEmpty()) return Stream.of(showcaseBiome());
+        if (!ecologyShowcase.isEmpty()) return Stream.concat(
+                Stream.concat(Stream.of(showcaseBiome()), biomeIdMap.entrySet().stream()
+                        .filter(entry -> EcologyShowcaseProfile.isVanillaOcean(entry.getKey())).map(Map.Entry::getValue)),
+                terralithBiomes.entrySet().stream()
+                        .filter(entry -> EcologyShowcaseProfile.retainsTerrainBiome(entry.getKey()))
+                        .map(Map.Entry::getValue)).distinct();
         requireBiomeIdMap();
         return Stream.concat(Stream.concat(biomeIdMap.values().stream(), terralithBiomes.values().stream()),
                 ecologicalBiomes.values().stream()).distinct();
@@ -167,7 +173,6 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
 
     @Override
     public Holder<Biome> getNoiseBiome(int x, int y, int z, Climate.Sampler noise) {
-        if (!ecologyShowcase.isEmpty()) return showcaseBiome();
         requireBiomeIdMap();
 
         // x, y, z are in quart coordinates (block / 4)
@@ -191,7 +196,6 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
 
     private Holder<Biome> biomeFromTile(int blockX, int blockY, int blockZ,
                                         int blockStartX, int blockStartZ, HeightmapData data) {
-        if (!ecologyShowcase.isEmpty()) return showcaseBiome();
         if (data != null && data.biomeIds != null) {
             int localX = Math.max(0, Math.min(data.width  - 1, blockX - blockStartX));
             int localZ = Math.max(0, Math.min(data.height - 1, blockZ - blockStartZ));
@@ -199,6 +203,16 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
                 if (naturalBiomes && data.ecology == null) throw new IllegalStateException("Natural ecology data missing");
                 short surfaceId = naturalBiomes ? data.ecology.terrainBiomeId(localX, localZ)
                         : data.terralithBiomeIds[localZ][localX];
+                if (!ecologyShowcase.isEmpty()) {
+                    if (EcologyShowcaseProfile.retainsTerrainBiome(surfaceId)) {
+                        Holder<Biome> marine = terralithBiomes.get(surfaceId);
+                        if (marine == null) throw new IllegalStateException("Missing showcase marine biome: " + surfaceId);
+                        return marine;
+                    }
+                    short vanillaId = data.biomeIds[localZ][localX];
+                    if (EcologyShowcaseProfile.isVanillaOcean(vanillaId)) return biomeIdMap.get(vanillaId);
+                    return showcaseBiome();
+                }
                 int surfaceY = HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
                 short caveId = TerralithBiomeClassifier.selectCave(blockX, blockY, blockZ,
                         surfaceY, surfaceId);
@@ -219,10 +233,6 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     /** Called only by concentric-ring placement; ordinary biome searches remain unchanged. */
     public Pair<BlockPos, Holder<Biome>> findRingBiome(int x, int y, int z, int radius,
                                                      Predicate<Holder<Biome>> preferred, RandomSource random) {
-        if (!ecologyShowcase.isEmpty()) {
-            Holder<Biome> biome = showcaseBiome();
-            return preferred.test(biome) ? Pair.of(new BlockPos(x, y, z), biome) : null;
-        }
         requireBiomeIdMap();
         if (collectPossibleBiomes().noneMatch(preferred)) return null;
         int tileSize = TerrainDiffusionConfig.tileSize();

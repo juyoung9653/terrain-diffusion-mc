@@ -91,7 +91,7 @@ public final class TerralithBiomeClassifier {
         return "temperate";
     }
 
-    private static boolean isOcean(short base) {
+    static boolean isOcean(short base) {
         int index = base - 1;
         return index >= 0 && index < ENTRIES.size() && ("ocean".equals(ENTRIES.get(index).group) || "estuary".equals(ENTRIES.get(index).group));
     }

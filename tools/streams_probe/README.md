@@ -308,3 +308,57 @@ World Preview 1.3.1's actual `BiomeColorMapReloadListener.parseColorData` accept
 all 14 custom TD color mappings with nonzero RGB. Keep this resource separate
 from terrain scheduling: adding map colors does not fix large-range inference
 queues or preview seed/scale isolation.
+
+## Ecology showcase and scale constraints
+
+Showcases fix the **land ecology**, not oceans or shores. Returning the selected
+land holder before reading terrain hides `IS_OCEAN` from Streams' native outlet
+queries. Preserve both Terralith marine alternatives and vanilla ocean fallbacks;
+ecological land decoration must likewise skip these marine columns.
+
+The native topology audit proves local source/junction/terminal water and tick
+behavior only. Its `outlet` role is a bounded graph endpoint, not proof of a route
+to the sea. A marine claim additionally needs direct source-ocean classification
+or the original TD marine mask, plus physical water connectivity. The marine receipt records
+sparse planned-center checks separately as `sampledCorridorStatus`: dry or unaligned
+samples are inconclusive corridor observations, never proof that the whole route is
+blocked. The 3D mouth search is capped at 8,192 water nodes and 32,768 checked
+positions within 64 blocks of the start horizontally/vertically; it records the exact direct-ocean
+water coordinate on success. Separately, `td_marine_mask_connection` records physical sea-level water
+whose aligned TD model elevation is negative and whose underlying vanilla biome ID is an ocean. This
+keeps the strict direct `IS_OCEAN` result false for legitimate estuary/river source tags. Missing chunks
+or a bounded search ending are also inconclusive.
+
+For fixed FULL chunks, pass semicolon-separated chunk coordinates through Gradle,
+for example `-PtdProbe.chunks="-90,0;-89,14;-223,42;-223,43"`; the init script forwards
+that as `td.streamsProbe.chunks` and bypasses route discovery.
+
+Regenerate scale changes in fresh worlds. The scale codec omits its legacy
+default value of 2, so changing that decoding default would reinterpret existing
+saves. `tools/ecology/prepare_showcases.py --scale 5` instead writes explicit
+scale data and the matching `_scale_5` dimension type into fresh staged copies.
+Do not copy old Streams networks or calibration files across scale/biome-source
+changes. The template and existing player worlds remain untouched by staging.
+
+In natural ecology, broad climate chooses land labels; local lapse and slope
+control continuous vegetation. Per-column cliff labels or local lapse thresholds
+can create small biome islands. The broad climate radius is 512 model pixels,
+and soil variation uses 64 model-pixel cells with moisture amplitude 0.12.
+Run `tools/test_terralith.py` for the pure continuity and resource checks, then
+validate new terrain in the engine at the intended scale.
+
+Streams 2.13.1 and 2.13.5 have audited hook layouts. Native `plateScale` is
+already in blocks: scale 5 adapts the installed 768-block setting to 1,920,
+width factor 1.0 to 1.3, and maximum half-width 16 to 32. Keep native
+headwater width and drainage/merging logic. The compatibility policy applies
+only to TD worlds; do not alter the global Streams TOML.
+
+Scale-5 fixture, seed 6187795302574383407, Streams 2.13.5: all eleven land
+showcases and the mixed-ecology world passed local topology and 100 ticking
+server ticks. In the temperate-forest fixture, saved FULL chunks contained a
+1,068-position downhill water path from the confluence (-3699,102,96) to
+(-3573,62,699), including 40 one-block cascades across 68 FULL chunks.
+The endpoint's original TD model elevation was -1 with vanilla ocean ID 41.
+This proves that sampled mainstem reaches TD marine water; it does not prove
+every headwater or every native terminal reaches the sea. Sparse center samples
+can hit dry bars even when a continuous adjacent water lane exists.

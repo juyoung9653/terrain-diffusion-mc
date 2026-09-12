@@ -22,6 +22,8 @@ ECOLOGY_BIOMES = (
 OVERWORLD_BIOME_SOURCE = (
     "Data", "WorldGenSettings", "dimensions", "minecraft:overworld", "generator", "biome_source"
 )
+OVERWORLD_DIMENSION_TYPE = ("Data", "WorldGenSettings", "dimensions", "minecraft:overworld", "type")
+SAVED_SCALE_DATA = ("data",)
 
 
 def river_nbt_helpers():
@@ -59,7 +61,15 @@ def scalar_payload(kind, value):
     raise ValueError(f"Unsupported scalar NBT type {kind}")
 
 
-def patch_level(path, profile, spawn):
+def dimension_type_for_scale(scale):
+    if not 1 <= scale <= 6:
+        raise ValueError(f"Scale must be between 1 and 6, got {scale}")
+    # All selectable scales, including the legacy default scale 2, have an
+    # explicit registered dimension type.  Do not substitute the unsuffixed key.
+    return f"terrain-diffusion-mc:terrain_diffusion_scale_{scale}"
+
+
+def patch_level(path, profile, spawn, scale=None):
     if profile not in ECOLOGY_BIOMES:
         raise ValueError(f"Unknown ecology showcase profile: {profile}")
     raw = gzip.decompress(path.read_bytes())
@@ -78,6 +88,11 @@ def patch_level(path, profile, spawn):
         if key not in before or before[key][3] != expected:
             raise ValueError(f"Template lacks required TD biome source flag: {'/'.join(key)}")
 
+    if scale is not None:
+        dimension_type_for_scale(scale)
+        if OVERWORLD_DIMENSION_TYPE not in before or before[OVERWORLD_DIMENSION_TYPE][0] != 8:
+            raise ValueError("Missing overworld dimension type")
+
     changes = {
         ("Data", "LevelName"): profile,
         ("Data", "GameType"): 1,
@@ -95,6 +110,8 @@ def patch_level(path, profile, spawn):
         key = ("Data", name)
         if key in before:
             changes[key] = value
+    if scale is not None:
+        changes[OVERWORLD_DIMENSION_TYPE] = dimension_type_for_scale(scale)
 
     patches = []
     for key, value in changes.items():
@@ -155,22 +172,53 @@ def read_saved_scale(template):
     return scale, settings.relative_to(template).as_posix()
 
 
-def stage(template, output, spawn):
+def patch_saved_scale(path, scale):
+    if not 1 <= scale <= 6:
+        raise ValueError(f"Scale must be between 1 and 6, got {scale}")
+    raw = gzip.decompress(path.read_bytes())
+    before = nbt_fields(raw)
+    data = before.get(SAVED_SCALE_DATA)
+    if data is None or data[0] != 10:
+        raise ValueError("Saved TD world scale data lacks data compound")
+    changes = {SAVED_SCALE_DATA + ("scale",): (3, scale), SAVED_SCALE_DATA + ("explicit_scale",): (1, 1)}
+    patches = []
+    for key, (kind, value) in changes.items():
+        previous = before.get(key)
+        if previous is None:
+            patches.append((data[2] - 1, data[2] - 1, bytes((kind,)) + nbt_string(key[-1]) + scalar_payload(kind, value)))
+        else:
+            if previous[0] != kind:
+                raise ValueError(f"Saved TD world scale data has invalid {'/'.join(key)} type")
+            patches.append((previous[1], previous[2], scalar_payload(kind, value)))
+    for start, end, encoded in sorted(patches, reverse=True):
+        raw = raw[:start] + encoded + raw[end:]
+    after = nbt_fields(raw)
+    assert after[SAVED_SCALE_DATA + ("scale",)][3] == scale
+    assert after[SAVED_SCALE_DATA + ("explicit_scale",)][3] == 1
+    path.write_bytes(gzip.compress(raw))
+
+
+def stage(template, output, spawn, scale=None):
     template = template.resolve(strict=True)
     if not (template / "level.dat").is_file():
         raise ValueError("--template-world must contain level.dat")
     if output.exists():
         raise FileExistsError(f"--output must be new: {output}")
-    scale, scale_path = read_saved_scale(template)
+    template_scale, scale_path = read_saved_scale(template)
+    if scale is not None:
+        dimension_type_for_scale(scale)
+    staged_scale = template_scale if scale is None else scale
     output.mkdir(parents=True)
     manifests = []
     for profile in ECOLOGY_BIOMES:
         world = output / profile
         world.mkdir()
         copy_template(template, world)
-        seed = patch_level(world / "level.dat", profile, spawn)
+        seed = patch_level(world / "level.dat", profile, spawn, scale)
+        if scale is not None:
+            patch_saved_scale(world / scale_path, scale)
         manifest = {
-            "profile": profile, "seed": seed, "scale": scale, "savedScalePath": scale_path,
+            "profile": profile, "seed": seed, "scale": staged_scale, "savedScalePath": scale_path,
             "world": profile, "levelDat": "level.dat", "dataPath": "data",
             "datapacksPath": "datapacks", "spawn": list(spawn),
             "sourceTemplate": str(template), "levelDatSha256": sha256(world / "level.dat"),
@@ -187,8 +235,10 @@ def main():
     parser.add_argument("--template-world", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--spawn", nargs=3, type=int, default=(9472, 110, 896), metavar=("X", "Y", "Z"))
+    parser.add_argument("--scale", type=int, choices=range(1, 7), metavar="1..6",
+                        help="Explicit TD scale for each staged fresh world")
     args = parser.parse_args()
-    manifests = stage(args.template_world, args.output, tuple(args.spawn))
+    manifests = stage(args.template_world, args.output, tuple(args.spawn), args.scale)
     print(json.dumps({"output": str(args.output), "worlds": [item["world"] for item in manifests]}, indent=2))
 
 

@@ -8,11 +8,12 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 import java.util.List;
 import java.util.Set;
 
-/** Applies compatibility hooks only to the bytecode layout audited for Streams 2.13.1. */
+/** Applies compatibility hooks only to the audited Streams 2.13.1 and 2.13.5 layouts. */
 public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlugin {
     private static final Set<String> AUDITED_MIXINS = Set.of(
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenPrefetchMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenScaleMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsBankMaterialMixin");
 
@@ -34,7 +35,7 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
         return FMLLoader.getLoadingModList().getMods().stream()
                 .filter(mod -> "streamsreflowing".equals(mod.getModId()))
                 .map(mod -> mod.getVersion().toString())
-                .anyMatch("2.13.1"::equals);
+                .anyMatch(version -> "2.13.1".equals(version) || "2.13.5".equals(version));
     }
 
     @Override
