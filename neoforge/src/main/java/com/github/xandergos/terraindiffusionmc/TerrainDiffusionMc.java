@@ -42,7 +42,7 @@ public class TerrainDiffusionMc {
     }
 
     private void onServerStarting(ServerStartingEvent event) {
-        TerrainDiffusionLifecycle.onServerStarting();
+        if (!TerrainDiffusionLifecycle.isPreviewServer(event.getServer())) TerrainDiffusionLifecycle.onServerStarting();
     }
 
     private void onLevelLoad(LevelEvent.Load event) {
@@ -52,7 +52,7 @@ public class TerrainDiffusionMc {
     }
 
     private void onServerStopping(ServerStoppingEvent event) {
-        TerrainDiffusionLifecycle.onServerStopping();
+        if (!TerrainDiffusionLifecycle.isPreviewServer(event.getServer())) TerrainDiffusionLifecycle.onServerStopping();
     }
 
     private void onRegisterCommands(RegisterCommandsEvent event) {

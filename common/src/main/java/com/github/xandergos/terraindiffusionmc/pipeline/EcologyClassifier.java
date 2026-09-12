@@ -44,7 +44,10 @@ public final class EcologyClassifier {
         if (elevation >= 1600 && temperature < 0)
             return terrain(terralith("alpine_highlands"), temperature, moisture, slope);
         if (slope > .70f && elevation > 150)
-            return terrain(terralith(elevation > 900 ? "rocky_mountains" : "granite_cliffs"), temperature, moisture, slope);
+            // Rocky Mountains directly places snow/powder-snow patches. Its cold decoration
+            // program must not leak onto otherwise temperate slopes simply because they are high.
+            return terrain(terralith(elevation > 900 && temperature < 0
+                    ? "rocky_mountains" : "granite_cliffs"), temperature, moisture, slope);
 
         float regionalCover = smooth(.38f, 1.22f, moisture);
         float cover = regionalCover * (1 - smooth(.25f, .85f, slope))

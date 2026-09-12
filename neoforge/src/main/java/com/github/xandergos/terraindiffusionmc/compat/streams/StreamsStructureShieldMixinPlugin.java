@@ -13,7 +13,8 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
     private static final Set<String> AUDITED_MIXINS = Set.of(
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenPrefetchMixin",
-            "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin");
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsBankMaterialMixin");
 
     @Override
     public void onLoad(String mixinPackage) {

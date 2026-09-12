@@ -1,0 +1,14 @@
+{
+  "required": false,
+  "minVersion": "0.8",
+  "package": "com.github.xandergos.terraindiffusionmc.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.github.xandergos.terraindiffusionmc.compat.preview.WorldPreviewMixinPlugin",
+  "client": [
+    "WorldPreviewWorkManagerMixin",
+    "WorldPreviewWorkBatchMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

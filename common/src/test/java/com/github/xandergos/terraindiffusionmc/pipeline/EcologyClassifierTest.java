@@ -35,6 +35,10 @@ public final class EcologyClassifierTest {
         require(EcologyClassifier.select(0, 0, 0, .1f, true, 15, 800, 300).terrainBiomeId() != 0, "coast retained");
         require(EcologyClassifier.select(0, 0, -100, .1f, false, 15, 800, 300).sample().biomeId() == 0, "ocean retained");
         require(EcologyClassifier.select(0, 0, 900, .8f, false, 15, 800, 300).sample().biomeId() == 0, "cliff retained");
+        short warmCliff = EcologyClassifier.select(0, 0, 1200, .8f, false, 15, 800, 1200).terrainBiomeId();
+        short coldCliff = EcologyClassifier.select(0, 0, 1200, .8f, false, -5, 800, 1200).terrainBiomeId();
+        require("terralith:granite_cliffs".equals(TerralithBiomeClassifier.biomeName(warmCliff)), "no snowy mountain decoration on warm cliffs");
+        require("terralith:rocky_mountains".equals(TerralithBiomeClassifier.biomeName(coldCliff)), "cold mountains retain snow");
         require(EcologyClassifier.select(0, 0, 1900, .1f, false, -2, 800, 1900).sample().biomeId() == 0, "alpine retained");
         System.out.println("EcologyClassifierTest: PASS (11 ecosystems, " + transitions + " continuous label transitions)");
     }

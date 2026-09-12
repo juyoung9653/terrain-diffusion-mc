@@ -101,10 +101,17 @@ public final class TerrainDiffusionLifecycle {
      * Called by each loader when a server level is loaded.
      */
     public static void onWorldLoad(ServerLevel world) {
+        if (isPreviewServer(world.getServer())) return;
         if (world.dimension() == Level.OVERWORLD) {
             WorldScaleManager.initializeForWorld(world);
             LocalTerrainProvider.init(world.getSeed());
         }
+    }
+
+    /** World Preview's temporary server must not consume world-creation settings or reseed gameplay. */
+    public static boolean isPreviewServer(net.minecraft.server.MinecraftServer server) {
+        return server != null && server.getClass().getName().equals(
+                "com.caeruleusTait.world.preview.backend.stubs.DummyMinecraftServer");
     }
 
     /**

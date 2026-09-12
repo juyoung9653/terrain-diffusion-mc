@@ -16,6 +16,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -90,6 +91,8 @@ public final class LocalTerrainProvider {
     private static long instanceSeed;
 
     private final WorldPipeline pipeline;
+    private PreviewSession previewOwner;
+    private static final ThreadLocal<PreviewSession> PREVIEW = new ThreadLocal<>();
 
     private static final Object INIT_LOCK = new Object();
 
@@ -114,6 +117,8 @@ public final class LocalTerrainProvider {
     }
 
     public static LocalTerrainProvider getInstance() {
+        PreviewSession preview = PREVIEW.get();
+        if (preview != null) return preview.provider();
         if (INSTANCE != null) return INSTANCE;
 
         synchronized(INIT_LOCK) {
@@ -139,7 +144,119 @@ public final class LocalTerrainProvider {
 
     /** Returns the current world seed used by the pipeline. */
     public static long getSeed() {
+        PreviewSession preview = PREVIEW.get();
+        if (preview != null) return preview.seed;
         return instanceSeed;
+    }
+
+    /** Thread-scoped preview scale; never changes the loaded world's saved/runtime scale. */
+    public static Integer previewScale() {
+        PreviewSession preview = PREVIEW.get();
+        return preview == null ? null : preview.scale;
+    }
+
+    public static PreviewSession createPreviewSession(long seed, int scale) {
+        return new PreviewSession(seed, WorldScaleManager.clampScale(scale));
+    }
+
+    /**
+     * Independent seeded pipeline and bounded tile cache. Shared ONNX models still execute on
+     * the single inference thread. Closing invalidates queued work without interrupting ONNX.
+     */
+    public static final class PreviewSession implements AutoCloseable {
+        private final long seed;
+        private final int scale;
+        private final Map<CacheKey, HeightmapData> cache = new LinkedHashMap<>(16, .75f, true);
+        private final Map<CacheKey, FutureTask<HeightmapData>> pending = new LinkedHashMap<>();
+        private LocalTerrainProvider provider;
+        private boolean closed;
+
+        private PreviewSession(long seed, int scale) { this.seed = seed; this.scale = scale; }
+        public long seed() { return seed; }
+        public int scale() { return scale; }
+
+        public void run(Runnable action) {
+            synchronized (this) { requireOpen(); }
+            PreviewSession previous = PREVIEW.get();
+            PREVIEW.set(this);
+            try { action.run(); }
+            finally {
+                if (previous == null) PREVIEW.remove();
+                else PREVIEW.set(previous);
+            }
+        }
+
+        private LocalTerrainProvider provider() {
+            synchronized (this) {
+                requireOpen();
+                if (provider != null) return provider;
+            }
+            PipelineModels.awaitLoad();
+            PipelineModels models = PipelineModels.getInstance();
+            if (models == null) throw new IllegalStateException("PipelineModels failed to load");
+            synchronized (this) {
+                requireOpen();
+                if (provider == null) {
+                    provider = new LocalTerrainProvider(seed, models);
+                    provider.previewOwner = this;
+                }
+                return provider;
+            }
+        }
+
+        private void requireOpen() {
+            if (closed) throw new CancellationException("Terrain preview session closed");
+        }
+
+        private HeightmapData fetch(CacheKey key) {
+            FutureTask<HeightmapData> future;
+            synchronized (this) {
+                requireOpen();
+                HeightmapData ready = cache.get(key);
+                if (ready != null) return ready;
+                future = pending.get(key);
+                if (future == null) {
+                    LocalTerrainProvider local = provider;
+                    future = new FutureTask<>(() -> {
+                        synchronized (this) { requireOpen(); }
+                        try {
+                            HeightmapData result = scale == 1
+                                    ? local.handle1x(key.i1, key.j1, key.i2, key.j2)
+                                    : local.handleUpsampled(key.i1, key.j1, key.i2, key.j2, scale);
+                            synchronized (this) {
+                                requireOpen();
+                                cache.put(key, result);
+                                while (cache.size() > 16) cache.remove(cache.keySet().iterator().next());
+                            }
+                            return result;
+                        } finally {
+                            synchronized (this) { pending.remove(key); }
+                        }
+                    });
+                    pending.put(key, future);
+                    INFERENCE_EXECUTOR.execute(future);
+                }
+            }
+            try { return future.get(); }
+            catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new CancellationException("Terrain preview caller interrupted");
+            } catch (java.util.concurrent.ExecutionException failed) {
+                if (failed.getCause() instanceof CancellationException cancelled) throw cancelled;
+                throw new IllegalStateException("Terrain preview tile failed: " + key, failed.getCause());
+            }
+        }
+
+        @Override public synchronized void close() {
+            if (closed) return;
+            closed = true;
+            pending.values().forEach(future -> future.cancel(false));
+            pending.clear();
+            cache.clear();
+            // An active ONNX call can finish using its local provider reference. No stale
+            // result may enter the cache, and shared models belong to PipelineModels.
+            provider = null;
+        }
     }
 
     /**
@@ -213,6 +330,7 @@ public final class LocalTerrainProvider {
      */
     public HeightmapData fetchHeightmap(int i1, int j1, int i2, int j2) {
         CacheKey key = new CacheKey(i1, j1, i2, j2);
+        if (previewOwner != null) return previewOwner.fetch(key);
         CacheEntry cached = CACHE.get(key);
         if (cached != null) {
             cached.lastAccessed.set(CACHE_CLOCK.incrementAndGet());

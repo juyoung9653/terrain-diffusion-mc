@@ -8,7 +8,7 @@ import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-COLORS = ROOT / "common/src/main/resources/data/terrain-diffusion-mc/worldgen/biome_colors.json"
+COLORS = ROOT / "common/src/main/resources/data/c/worldgen/biome_colors.json"
 CLASSIFIER = ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/pipeline/EcologyClassifier.java"
 BIOME_SOURCE = ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/TerrainDiffusionBiomeSource.java"
 
@@ -30,6 +30,9 @@ class PreviewBiomeColorsTest(unittest.TestCase):
         expected = expected_td_ids()
         self.assertEqual(expected, set(colors), "keep Preview color entries in lockstep with TD custom biome IDs")
         self.assertEqual(14, len(expected))
+
+    def test_resource_uses_world_preview_shared_c_namespace_path(self) -> None:
+        self.assertEqual(Path("common/src/main/resources/data/c/worldgen/biome_colors.json"), COLORS.relative_to(ROOT))
 
     def test_entries_match_world_preview_rgb_schema(self) -> None:
         colors = json.loads(COLORS.read_text(encoding="utf-8-sig"))

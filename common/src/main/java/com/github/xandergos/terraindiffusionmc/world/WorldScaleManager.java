@@ -38,6 +38,8 @@ public final class WorldScaleManager {
      * Returns the currently active world scale.
      */
     public static int getCurrentScale() {
+        Integer preview = com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.previewScale();
+        if (preview != null) return preview;
         return currentScale;
     }
 

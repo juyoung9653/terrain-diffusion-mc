@@ -6,6 +6,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier
 import com.mojang.serialization.JsonOps;
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
+import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.github.xandergos.terraindiffusionmc.world.river.RiverPreviewService;
@@ -83,6 +84,7 @@ public final class StreamsReflowingProbe {
         try {
             ServerLevel level = server.overworld();
             auditCustomBiomes(level, receipts);
+            if (Boolean.getBoolean("td.streamsProbe.previewSessionAudit")) emit(receipts, auditPreviewSession());
             if (Boolean.getBoolean("td.streamsProbe.playerPrefetchAudit")) {
                 if ("enabled".equalsIgnoreCase(System.getProperty("td.streamsProbe.playerPrefetchMode", "disabled"))) {
                     auditEnabledPlayerPrefetch(server, level, receipts);
@@ -252,6 +254,9 @@ public final class StreamsReflowingProbe {
                     terminal = "incomplete";
                     emit(receipts, json("river_tick_audit", "status", "unforce_error", "error", e.getClass().getSimpleName(), "message", safe(e.getMessage())));
                 }
+            }
+            if (Boolean.getBoolean("td.streamsProbe.previewSessionAudit")) {
+                emit(receipts, json("streams_bank_material_audit", "status", "observed", "counters", streamsBankCounters()));
             }
             emit(receipts, json("complete", "status", terminal, "elapsedMs",
                     TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started),
@@ -587,6 +592,98 @@ public final class StreamsReflowingProbe {
     private static boolean touchesShore(com.github.xandergos.terraindiffusionmc.pipeline.EcologyData ecology, int x, int z, ShoreMapping mapping) {
         return (x>0 && shoreType(ecology.terrainBiomeId(x-1,z), mapping)!=null) || (x+1<ecology.width && shoreType(ecology.terrainBiomeId(x+1,z), mapping)!=null)
                 || (z>0 && shoreType(ecology.terrainBiomeId(x,z-1), mapping)!=null) || (z+1<ecology.height && shoreType(ecology.terrainBiomeId(x,z+1), mapping)!=null);
+    }
+
+    /** Bounded API audit: three 8x8 heightmap samples, no world mutation or cache clearing. */
+    private static String auditPreviewSession() {
+        final int x = integerProperty("td.streamsProbe.previewSessionX", 0);
+        final int z = integerProperty("td.streamsProbe.previewSessionZ", 0);
+        final int side = 8;
+        try {
+            LocalTerrainProvider globalProvider = LocalTerrainProvider.getInstance();
+            long globalSeed = LocalTerrainProvider.getSeed();
+            int globalScale = WorldScaleManager.getCurrentScale();
+            String globalData = heightmapFingerprint(globalProvider.fetchHeightmap(z, x, z + side, x + side));
+            PreviewAudit audit = new PreviewAudit(globalProvider, globalSeed, globalScale, globalData);
+
+            try (LocalTerrainProvider.PreviewSession same = LocalTerrainProvider.createPreviewSession(globalSeed, 2)) {
+                same.run(() -> {
+                    audit.sameProviderDistinct = LocalTerrainProvider.getInstance() != audit.globalProvider;
+                    audit.sameScopedSeed = LocalTerrainProvider.getSeed();
+                    audit.sameScopedScale = WorldScaleManager.getCurrentScale();
+                    audit.sameData = heightmapFingerprint(LocalTerrainProvider.getInstance().fetchHeightmap(z, x, z + side, x + side));
+                    try (LocalTerrainProvider.PreviewSession nested = LocalTerrainProvider.createPreviewSession(globalSeed ^ 0x5EED5EEDL, 1)) {
+                        nested.run(() -> {
+                            audit.nestedProviderDistinct = LocalTerrainProvider.getInstance() != audit.globalProvider;
+                            audit.nestedSeed = LocalTerrainProvider.getSeed();
+                            audit.nestedScale = WorldScaleManager.getCurrentScale();
+                            audit.differentData = heightmapFingerprint(LocalTerrainProvider.getInstance().fetchHeightmap(z, x, z + side, x + side));
+                        });
+                        try { nested.run(() -> { throw new IllegalStateException("expected_preview_exception"); }); }
+                        catch (IllegalStateException expected) { audit.exceptionObserved = true; }
+                    }
+                    audit.nestedRestored = LocalTerrainProvider.getInstance() != audit.globalProvider
+                            && LocalTerrainProvider.getSeed() == globalSeed && WorldScaleManager.getCurrentScale() == 2;
+                });
+            }
+            LocalTerrainProvider.PreviewSession closed = LocalTerrainProvider.createPreviewSession(globalSeed, 2);
+            closed.close();
+            try { closed.run(() -> {}); } catch (java.util.concurrent.CancellationException expected) { audit.closedRejected = true; }
+
+            audit.globalRestored = LocalTerrainProvider.getInstance() == globalProvider && LocalTerrainProvider.getSeed() == globalSeed
+                    && LocalTerrainProvider.previewScale() == null && WorldScaleManager.getCurrentScale() == globalScale;
+            audit.sameDataMatchesGlobal = globalScale == 2 && globalData.equals(audit.sameData);
+            audit.differentDataDiffers = !globalData.equals(audit.differentData);
+            boolean passed = audit.sameProviderDistinct && audit.sameScopedSeed == globalSeed && audit.sameScopedScale == 2
+                    && audit.sameDataMatchesGlobal && audit.nestedProviderDistinct && audit.nestedSeed != globalSeed && audit.nestedScale == 1
+                    && audit.differentDataDiffers && audit.exceptionObserved && audit.nestedRestored && audit.closedRejected && audit.globalRestored;
+            return json("preview_session_audit", "status", passed ? "passed" : "failed", "sample", x+","+z+"+"+side,
+                    "globalSeed", globalSeed, "globalScale", globalScale, "sameSeedScale2MatchesGlobal", audit.sameDataMatchesGlobal,
+                    "sameProviderDistinct", audit.sameProviderDistinct, "differentSeedScale", audit.nestedSeed+"/"+audit.nestedScale,
+                    "differentDataDiffers", audit.differentDataDiffers, "nestedRestoredAfterException", audit.nestedRestored,
+                    "closedRejectsWork", audit.closedRejected, "globalUnchanged", audit.globalRestored);
+        } catch (Throwable t) {
+            return json("preview_session_audit", "status", "failed", "error", t.getClass().getSimpleName(), "message", safe(t.getMessage()));
+        }
+    }
+
+    private static String heightmapFingerprint(LocalTerrainProvider.HeightmapData data) {
+        if (data == null) return "null";
+        long hash = 0xcbf29ce484222325L;
+        hash = fingerprint(hash, data.width); hash = fingerprint(hash, data.height);
+        for (int row = 0; row < data.height; row++) for (int column = 0; column < data.width; column++) {
+            hash = fingerprint(hash, data.heightmap[row][column]);
+            hash = fingerprint(hash, data.biomeIds[row][column]);
+            if (data.terralithBiomeIds != null) hash = fingerprint(hash, data.terralithBiomeIds[row][column]);
+            if (data.ecology != null) {
+                hash = fingerprint(hash, data.ecology.biomeId(column, row));
+                hash = fingerprint(hash, data.ecology.terrainBiomeId(column, row));
+                var sample = data.ecology.sample(column, row);
+                hash = fingerprint(hash, Float.floatToIntBits(sample.temperature()));
+                hash = fingerprint(hash, Float.floatToIntBits(sample.moisture()));
+                hash = fingerprint(hash, Float.floatToIntBits(sample.treeCover()));
+            }
+        }
+        return data.width+"x"+data.height+":"+Long.toUnsignedString(hash, 16);
+    }
+
+    private static long fingerprint(long hash, int value) { return (hash ^ value) * 0x100000001b3L; }
+
+    private static String streamsBankCounters() {
+        try {
+            Class<?> policy = Class.forName("com.github.xandergos.terraindiffusionmc.compat.streams.StreamsBankMaterialPolicy");
+            return "gravel="+policy.getMethod("gravelSubstitutions").invoke(null)+";stone="+policy.getMethod("stoneSubstitutions").invoke(null)
+                    +";coherentPointBars="+policy.getMethod("coherentPointBarEvaluations").invoke(null);
+        } catch (Throwable unavailable) { return "unavailable:"+unavailable.getClass().getSimpleName(); }
+    }
+
+    private static final class PreviewAudit {
+        final LocalTerrainProvider globalProvider; final long globalSeed; final int globalScale; final String globalData;
+        boolean sameProviderDistinct, nestedProviderDistinct, exceptionObserved, nestedRestored, closedRejected, globalRestored, sameDataMatchesGlobal, differentDataDiffers;
+        long sameScopedSeed, nestedSeed; int sameScopedScale, nestedScale; String sameData = "", differentData = "";
+        PreviewAudit(LocalTerrainProvider globalProvider, long globalSeed, int globalScale, String globalData) {
+            this.globalProvider=globalProvider; this.globalSeed=globalSeed; this.globalScale=globalScale; this.globalData=globalData;
+        }
     }
 
     private static List<RouteCandidate> discoverRoutes(ServerLevel level, Config config, List<String> receipts) {

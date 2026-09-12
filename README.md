@@ -330,12 +330,24 @@ heights and native Streams channels intact. Shore widths vary with exposure,
 moisture and a coherent 768-block substrate field. Existing generated chunks
 retain their old materials; compare fresh chunks or a new test world after an
 update. The compatibility pack must be updated along with the mod JAR.
+On the audited Streams 2.13.1 renderer, natural-world point bars use a coherent
+96-block sand/gravel field before both top and depth-fill writes. Original TD
+gravel and stone shores override point-bar sand with their own substrate, even
+after Streams changes the saved biome to river. This changes sediment material,
+not channel geometry or water flow. Rocky Mountains' direct snow decoration is
+selected only below freezing; warm steep terrain uses Granite Cliffs instead.
 
 World Preview 1.3.1 reads custom biome colors from
-`data/terrain-diffusion-mc/worldgen/biome_colors.json`. Keep all 14 TD biome IDs
-registered there to avoid black/unmapped ecological biomes. This resource fixes
-map colors; it does not resolve Preview's independent inference-queue and
-seed/scale lifecycle limitations.
+`data/c/worldgen/biome_colors.json` (the shared resource stack, not a mod-namespaced
+`worldgen` folder). Keep all 14 TD biome IDs registered there. NeoForge bridges
+the audited 1.3.1 work queue to exact, center-first TD tiles, publishing each batch
+through Preview's own storage. The pending tile queue is bounded and continues
+across the viewport; uncomputed areas can briefly show N/A. Each preview owns its
+seed, scale, pipeline and cache, while ONNX execution remains serialized. Closing
+or replacing a preview invalidates publication without changing gameplay state.
+Validate this in the real Preview screen: a standalone color parser cannot prove
+the resource loader visits the path. `tdProbe.previewSessionAudit=true` additionally
+checks session data and state isolation in the diagnostic server.
 
 Regenerate the ecological biome resources with
 `python tools/ecology/generate_biomes.py --vanilla path/to/minecraft_1.21.1_client.jar`.
