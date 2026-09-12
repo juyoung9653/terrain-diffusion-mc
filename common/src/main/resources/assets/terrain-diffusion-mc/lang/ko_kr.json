@@ -1,0 +1,13 @@
+{
+  "biome.terrain-diffusion-mc.ecology.temperate_forest": "온대 숲",
+  "biome.terrain-diffusion-mc.ecology.temperate_woodland": "온대 성긴 숲",
+  "biome.terrain-diffusion-mc.ecology.temperate_grassland": "온대 초원",
+  "biome.terrain-diffusion-mc.ecology.boreal_forest": "북방 숲",
+  "biome.terrain-diffusion-mc.ecology.boreal_woodland": "북방 성긴 숲",
+  "biome.terrain-diffusion-mc.ecology.cold_grassland": "한랭 초원",
+  "biome.terrain-diffusion-mc.ecology.dry_woodland": "건조한 성긴 숲",
+  "biome.terrain-diffusion-mc.ecology.dry_grassland": "건조 초원",
+  "biome.terrain-diffusion-mc.ecology.tropical_forest": "열대 숲",
+  "biome.terrain-diffusion-mc.ecology.tropical_woodland": "열대 성긴 숲",
+  "biome.terrain-diffusion-mc.ecology.desert": "사막"
+}

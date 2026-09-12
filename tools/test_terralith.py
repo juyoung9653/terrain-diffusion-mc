@@ -33,19 +33,29 @@ def main():
     target.mkdir(parents=True, exist_ok=True)
     package = Path("com/github/xandergos/terraindiffusionmc/pipeline")
     sources = [ROOT / "common/src/main/java" / package / (name + ".java")
-               for name in ("FastNoiseLite", "TerralithBiomeClassifier", "BiomeClassifier", "MacroBiomeContext")]
+               for name in ("FastNoiseLite", "TerralithBiomeClassifier", "BiomeClassifier", "MacroBiomeContext",
+                            "BroadEcologyClimate", "EcologyClassifier")]
     sources.append(ROOT / "common/src/test/java" / package / "TerralithBiomeClassifierTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "MacroBiomeContextTest.java")
+    sources.append(ROOT / "common/src/test/java" / package / "BroadEcologyClimateTest.java")
+    sources.append(ROOT / "common/src/test/java" / package / "EcologyClassifierTest.java")
     world_package = Path("com/github/xandergos/terraindiffusionmc/world")
     sources.append(ROOT / "common/src/main/java" / world_package / "LowlandCarvingGuard.java")
     sources.append(ROOT / "common/src/test/java" / world_package / "LowlandCarvingGuardTest.java")
+    ecology_package = world_package / "ecology"
+    sources.append(ROOT / "common/src/main/java" / ecology_package / "FeatureEcologyMath.java")
+    sources.append(ROOT / "common/src/test/java" / ecology_package / "FeatureEcologyMathTest.java")
     run(javac, "--release", "21", "-encoding", "UTF-8", "-d", target, *sources)
     classpath = os.pathsep.join([str(target), str(ROOT / "common/src/main/resources")])
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifierTest", args.jar.resolve())
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimateTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifierTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.LowlandCarvingGuardTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMathTest")
     run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith/tests", "-v")
     run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith_integration", "-v")
+    run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/ecology", "-v")
     for inverse in (False, True):
         command = [sys.executable, "-B", "tools/terralith_integration/validate_resources.py", "--terralith", args.jar.resolve()]
         if inverse:

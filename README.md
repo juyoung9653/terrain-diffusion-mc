@@ -274,7 +274,7 @@ at zero prevents Terralith's `above_preliminary_surface` rules from applying
 (for example, gravel beaches become fallback grass). The compatibility generator
 checks this contract before writing the pack.
 
-Terralith land groups now use globally addressed, jittered 128-block regions;
+Legacy Terralith land groups use globally addressed, jittered 128-block regions;
 water remains local and beaches require smooth ocean terrain within 24 blocks.
 The diffusion elevation and vanilla biome classification remain local. A TD-only
 carver guard retains the upper eight solid blocks of lowlands from sea level to
@@ -283,12 +283,18 @@ coasts. Deeper caves, higher cave entrances, and native Streams features remain
 enabled. These generation changes require fresh chunks; use a new same-seed
 world for comparison rather than mixing old and new generation.
 
-This branch provides an optional Terralith biome source for Terrain Diffusion worlds.
-It keeps the diffusion heightmap and places Terralith biomes in climate-appropriate,
-coherent regions. All 95 Terralith 2.6.2 biome IDs are represented, including 11
-underground biomes selected by depth. Their vegetation and carvers come from the
-installed Terralith mod. Floating islands, spires, craters, and other distinctive
-terrain shapes are deferred; selecting their biome does not reproduce their shape.
+New compatibility-preset worlds enable `natural_biomes: true`. Their land uses
+11 ecological biomes controlled by a continuous TD climate field, with a target
+filter radius of 1024 game blocks (rounded up to coarse cells). Forest, woodland and grassland in the same ecosystem
+share grass/foliage tints and decoration lists. Tree density, compatible species
+weights and broad soil patches depend on continuous climate controls, not biome
+labels. Biome IDs are never randomly dithered at a boundary. Terrain heights and
+native Streams generation stay in their existing generation paths.
+
+Ocean, gravel coast, steep rock and cold alpine terrain retain selected Terralith
+biomes; underground biomes retain the depth-based Terralith selector. The legacy
+mode still represents all 95 Terralith IDs. The natural land palette intentionally
+omits fantasy biomes. Terralith density functions are not applied.
 
 Use the matching Minecraft 1.21.1 loader builds of Terrain Diffusion, Terralith
 2.6.2, and Lithostitched (Terralith requires at least 1.7.7). For NeoForge, build
@@ -298,12 +304,13 @@ The Windows variant also requires the existing `libs/onnxruntime-dml.jar`.
 Enable the generated pack in
 `compat/terralith/terrain-diffusion-terralith-surface` **when creating a new world**,
 then select the **Terrain Diffusion** world type. The pack supplies the surface
-rules and enables `terralith: true` in that preset's biome-source settings. Put it
+rules and enables `terralith: true` and `natural_biomes: true` in the preset's biome-source settings. Put it
 above the source packs in the data-pack priority list. Terralith and Lithostitched
 remain required: the compatibility pack does not bundle their biomes or features.
 
-The option is saved in the world's biome-source codec. Existing worlds default to
-disabled; installing Terralith alone does not switch their biome selector. Do not
+Both options are saved in the world's biome-source codec and default to false
+when absent. Existing Terralith-enabled saves keep their legacy biome selection;
+installing Terralith alone does not switch the biome selector. Do not
 add this pack to an existing world expecting seamless conversion of old chunks,
 or remove the required mods from a Terralith-enabled world. A missing required
 biome fails at registry loading rather than silently changing new terrain.
@@ -311,13 +318,19 @@ biome fails at registry loading rather than silently changing new terrain.
 For maintenance, use `python tools/terralith/generate_compat.py --help` to regenerate
 the pack from a local Terralith JAR. The generated inventory and audit describe
 source references and retained height assumptions. Tune biome distribution in the
-classifier's resource table, not by adding per-biome Java branches. Check exact
+legacy classifier's resource table. Natural ecosystem thresholds live in
+`EcologyClassifier`; shared tree/soil controls live in `FeatureEcologyMath`.
+Regenerate the ecological biome resources with
+`python tools/ecology/generate_biomes.py --vanilla path/to/minecraft_1.21.1_client.jar`.
+The coarse model stride is 256 native pixels, or 512 game blocks at scale 2;
+30 meters per native pixel converts physical altitude, not this horizontal stride.
+Check exact
 95-ID coverage, synthetic selection reachability, negative-coordinate/tile
 continuity, underground depth guards, resource references, and feature-order
 cycles before testing new seeds in Minecraft. Synthetic checks do not establish
 that every biome occurs in every seed or that its scenery looks correct.
 
-The table is `common/src/main/resources/terralith-biomes.tsv` (tab-separated).
+The legacy table is `common/src/main/resources/terralith-biomes.tsv` (tab-separated).
 Surface elevation thresholds and horizontal regions use physical terrain meters;
 the 8192-meter regions are roughly 546 blocks wide at scale 2. Underground region
 coordinates and cave elevation thresholds use Minecraft blocks. Low coastal land

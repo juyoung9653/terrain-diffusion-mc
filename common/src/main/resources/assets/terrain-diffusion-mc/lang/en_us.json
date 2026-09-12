@@ -4,6 +4,16 @@
   "terrain-diffusion-mc.world_settings.open_button": "Terrain Settings",
   "terrain-diffusion-mc.world_settings.scale": "World Scale",
   "terrain-diffusion-mc.world_settings.world_scale_description": "Set World Scale for this world.",
-  "terrain-diffusion-mc.world_settings.scale_error": "Scale must be an integer >= 1"
+  "terrain-diffusion-mc.world_settings.scale_error": "Scale must be an integer >= 1",
+  "biome.terrain-diffusion-mc.ecology.temperate_forest": "Temperate Forest",
+  "biome.terrain-diffusion-mc.ecology.temperate_woodland": "Temperate Woodland",
+  "biome.terrain-diffusion-mc.ecology.temperate_grassland": "Temperate Grassland",
+  "biome.terrain-diffusion-mc.ecology.boreal_forest": "Boreal Forest",
+  "biome.terrain-diffusion-mc.ecology.boreal_woodland": "Boreal Woodland",
+  "biome.terrain-diffusion-mc.ecology.cold_grassland": "Cold Grassland",
+  "biome.terrain-diffusion-mc.ecology.dry_woodland": "Dry Woodland",
+  "biome.terrain-diffusion-mc.ecology.dry_grassland": "Dry Grassland",
+  "biome.terrain-diffusion-mc.ecology.tropical_forest": "Tropical Forest",
+  "biome.terrain-diffusion-mc.ecology.tropical_woodland": "Tropical Woodland",
+  "biome.terrain-diffusion-mc.ecology.desert": "Desert"
 }
-

@@ -5,6 +5,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.CoarseBiomeHints;
+import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
@@ -47,12 +48,15 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     public static final MapCodec<TerrainDiffusionBiomeSource> CODEC = RecordCodecBuilder.mapCodec((instance) ->
             instance.group(
                     RegistryOps.retrieveGetter(Registries.BIOME),
-                    Codec.BOOL.optionalFieldOf("terralith", false).forGetter(source -> source.terralith)
+                    Codec.BOOL.optionalFieldOf("terralith", false).forGetter(source -> source.terralith),
+                    Codec.BOOL.optionalFieldOf("natural_biomes", false).forGetter(source -> source.naturalBiomes)
             ).apply(instance, instance.stable(TerrainDiffusionBiomeSource::new)));
 
 
     private final HolderGetter<Biome> biomeLookup;
     private final boolean terralith;
+    private final boolean naturalBiomes;
+    private final Map<Integer, Holder<Biome>> ecologicalBiomes;
     private final Map<Short, Holder<Biome>> terralithBiomes;
     private Map<Short, Holder<Biome>> biomeIdMap = null;
 
@@ -61,8 +65,22 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     }
 
     public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith) {
+        this(biomeLookup, terralith, false);
+    }
+
+    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes) {
+        if (naturalBiomes && !terralith) throw new IllegalArgumentException("natural_biomes requires terralith=true and the compatibility pack");
         this.biomeLookup = biomeLookup;
         this.terralith = terralith;
+        this.naturalBiomes = naturalBiomes;
+        Map<Integer, Holder<Biome>> ecological = new HashMap<>();
+        if (naturalBiomes) {
+            for (int i = 0; i < EcologyClassifier.BIOMES.size(); i++) {
+                ecological.put(i + 1, biomeLookup.getOrThrow(ResourceKey.create(Registries.BIOME,
+                        ResourceLocation.fromNamespaceAndPath("terrain-diffusion-mc", "ecology/" + EcologyClassifier.BIOMES.get(i)))));
+            }
+        }
+        this.ecologicalBiomes = Map.copyOf(ecological);
         Map<Short, Holder<Biome>> entries = new HashMap<>();
         if (terralith) {
             // Fail during world loading if the required pack is missing, rather
@@ -76,6 +94,8 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         this.terralithBiomes = Map.copyOf(entries);
         requireBiomeIdMap();
     }
+
+    public boolean naturalBiomes() { return naturalBiomes; }
 
     @Override
     protected MapCodec<? extends BiomeSource> codec() {
@@ -115,7 +135,8 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     @Override
     protected Stream<Holder<Biome>> collectPossibleBiomes() {
         requireBiomeIdMap();
-        return Stream.concat(biomeIdMap.values().stream(), terralithBiomes.values().stream()).distinct();
+        return Stream.concat(Stream.concat(biomeIdMap.values().stream(), terralithBiomes.values().stream()),
+                ecologicalBiomes.values().stream()).distinct();
     }
 
     @Override
@@ -147,10 +168,16 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
             int localX = Math.max(0, Math.min(data.width  - 1, blockX - blockStartX));
             int localZ = Math.max(0, Math.min(data.height - 1, blockZ - blockStartZ));
             if (terralith && data.terralithBiomeIds != null) {
-                short surfaceId = data.terralithBiomeIds[localZ][localX];
+                if (naturalBiomes && data.ecology == null) throw new IllegalStateException("Natural ecology data missing");
+                short surfaceId = naturalBiomes ? data.ecology.terrainBiomeId(localX, localZ)
+                        : data.terralithBiomeIds[localZ][localX];
                 int surfaceY = HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
                 short caveId = TerralithBiomeClassifier.selectCave(blockX, blockY, blockZ,
                         surfaceY, surfaceId);
+                if (naturalBiomes && caveId == 0) {
+                    Holder<Biome> ecological = ecologicalBiomes.get(data.ecology.biomeId(localX, localZ));
+                    if (ecological != null) return ecological;
+                }
                 Holder<Biome> selected = terralithBiomes.get(caveId == 0 ? surfaceId : caveId);
                 if (selected != null) return selected;
             }

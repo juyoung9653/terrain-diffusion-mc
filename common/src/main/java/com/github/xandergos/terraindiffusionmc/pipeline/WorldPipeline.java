@@ -451,6 +451,42 @@ public final class WorldPipeline implements AutoCloseable {
     }
 
     /**
+     * Returns a broad, coarse-model-only ecology field for block coordinates.
+     * This reads cached coarse channels only; it never evaluates native terrain,
+     * latent, or decoder stages.  Callers already serialize pipeline reads on
+     * LocalTerrainProvider's inference executor, so this creates no executor.
+     */
+    public BroadEcologyClimate getBroadEcologyClimate(int blockI0, int blockJ0, int blockI1, int blockJ1, int scale) {
+        if (scale <= 0 || blockI1 <= blockI0 || blockJ1 <= blockJ0)
+            throw new IllegalArgumentException("invalid broad ecology bounds");
+        int stride = 32 * LATENT_COMPRESSION;
+        int radius = BroadEcologyClimate.smoothingRadius(scale, stride);
+        int minI = BroadEcologyClimate.floorCoarse(blockI0, scale, stride);
+        int minJ = BroadEcologyClimate.floorCoarse(blockJ0, scale, stride);
+        int maxI = BroadEcologyClimate.floorCoarse(blockI1 - 1, scale, stride) + 1;
+        int maxJ = BroadEcologyClimate.floorCoarse(blockJ1 - 1, scale, stride) + 1;
+        int rawI0 = minI - radius, rawJ0 = minJ - radius;
+        int rawI1 = maxI + radius + 1, rawJ1 = maxJ + radius + 1;
+        int h = rawI1 - rawI0, w = rawJ1 - rawJ0, plane = h * w;
+        FloatTensor raw = coarse.getSlice(new int[]{0, rawI0, rawJ0}, new int[]{7, rawI1, rawJ1});
+        float[] elevation = unweightCoarseChannel(raw.data, plane, 0);
+        float[] temperature = unweightCoarseChannel(raw.data, plane, 2);
+        float[] precipitation = unweightCoarseChannel(raw.data, plane, 4);
+        float[] precipitationCv = unweightCoarseChannel(raw.data, plane, 5);
+        return new BroadEcologyClimate(elevation, temperature, precipitation, precipitationCv,
+                rawI0, rawJ0, h, w, blockI0, blockJ0, blockI1, blockJ1, scale, stride);
+    }
+
+    private static float[] unweightCoarseChannel(float[] data, int plane, int channel) {
+        float[] result = new float[plane];
+        for (int index = 0; index < plane; index++) {
+            float weight = data[6 * plane + index];
+            result[index] = weight > 1e-6f ? data[channel * plane + index] / weight : 0f;
+        }
+        return result;
+    }
+
+    /**
      * Get elevation and climate for a bounding box.
      *
      * @return float[2]: [0] = elev (H*W flat), [1] = climate (5*H*W flat, or null)

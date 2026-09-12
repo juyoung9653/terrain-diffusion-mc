@@ -3,6 +3,7 @@
     "minecraft:overworld": {
       "generator": {
         "biome_source": {
+          "natural_biomes": true,
           "terralith": true,
           "type": "terrain-diffusion-mc:terrain_diffusion"
         },

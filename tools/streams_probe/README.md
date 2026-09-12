@@ -69,6 +69,30 @@ water or sand in a Streams-enabled world to Streams.
 
 Generated instances and screenshots stay under `build/`; installation preserves prior instances.
 
+For natural-biome worlds, add `-PtdProbe.ecologyAudit=true` with `surfaceAudit`.
+The per-column CSV appends continuous cover, temperature, moisture and slope,
+plus actual log evidence above the original TD ground. Log columns are a trunk
+proxy, not a canopy-area measurement. `-PtdProbe.ecologyOverview=true` writes an
+8192-by-8192-block coarse-only overview at 64-block spacing to find candidate
+ecotones. It uses the saved world scale and assumes zero slope/no coast; validate
+selected locations in actual generated chunks before judging the scenery.
+Use `ecologyOverviewRadius` and `ecologyOverviewStep` for a wider search; the
+diagnostic limits the radius to 32768 blocks and the grid to 512 samples per side.
+Tree cover measures woody vegetation, not bare ground. A dirt threshold of 0.58
+made the tested temperate grassland mostly coarse dirt; 0.40 restored grass as
+the dominant surface. Use biome IDs, climate fields and actual generated block
+counts as the primary validation; biome IDs alone do not describe the resulting
+soil or vegetation. Screenshots are an optional final appearance check, not a
+substitute for reading the generation data or a reason to repeat scene tours.
+
+The natural-biome fixture (`6187795302574383407`, scale 2) has an inland transect
+near X=9472: forest around Z=0, woodland around Z=384, grassland around Z=896.
+Final fresh-chunk checks covered 20 chunks and 100 ticks with native Streams and
+C2ME; the existing native topology baseline matched. Four chunks per transect
+site had mean cover 0.67/0.39/0.10 and observed log columns 25/17/7. Grassland
+retained grass on 1020 of 1024 tested ground columns. These are bounded samples,
+not a guarantee about all seeds or ecosystems.
+
 The coastal repair was checked on 1,024 matching columns: base heights were
 identical, exposed cave-water columns fell from 77 to zero, and underground
 water remained. Native Streams + C2ME repeated the zero-pond result and passed

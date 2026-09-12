@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from validate_resources import find_cycles, resolve_tag
+from validate_resources import ecological_biomes, find_cycles, resolve_tag
 
 
 class FeatureSorterGraphTests(unittest.TestCase):
@@ -19,6 +19,10 @@ class FeatureSorterGraphTests(unittest.TestCase):
         self.assertEqual(["minecraft:ok"], resolve_tag("root", {"root": ["minecraft:ok", {"id": "#missing", "required": False}]}))
         with self.assertRaisesRegex(ValueError, "missing required"):
             resolve_tag("missing", {})
+
+    def test_ecology_biomes_are_discovered_by_prefix(self):
+        biomes = {"terrain-diffusion-mc:ecology/desert": {}, "terrain-diffusion-mc:ecology/temperate_forest": {}, "minecraft:plains": {}}
+        self.assertEqual(["terrain-diffusion-mc:ecology/desert", "terrain-diffusion-mc:ecology/temperate_forest"], ecological_biomes(biomes))
 
 
 if __name__ == "__main__":

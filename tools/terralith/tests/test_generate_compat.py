@@ -62,6 +62,7 @@ class GenerateCompatTest(unittest.TestCase):
             self.assertEqual("minecraft:mud", noise["surface_rule"]["sequence"][1]["then_run"]["sequence"][1]["then_run"]["result_state"]["Name"])
             self.assertEqual("minecraft:deepslate", noise["surface_rule"]["sequence"][2]["then_run"]["result_state"]["Name"])
             self.assertTrue(preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["terralith"])
+            self.assertTrue(preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["natural_biomes"])
             self.assertNotIn("terralith", preset["dimensions"]["minecraft:the_end"])
             self.assertEqual(
                 "deep_cave",

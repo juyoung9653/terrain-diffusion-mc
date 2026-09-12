@@ -48,6 +48,7 @@ public final class LocalTerrainProvider {
         public final short[][] heightmap;
         public final short[][] biomeIds;
         public final short[][] terralithBiomeIds;
+        public final EcologyData ecology;
         public final int width;
         public final int height;
 
@@ -56,9 +57,15 @@ public final class LocalTerrainProvider {
         }
 
         public HeightmapData(short[][] heightmap, short[][] biomeIds, short[][] terralithBiomeIds, int width, int height) {
+            this(heightmap, biomeIds, terralithBiomeIds, null, width, height);
+        }
+
+        public HeightmapData(short[][] heightmap, short[][] biomeIds, short[][] terralithBiomeIds,
+                             EcologyData ecology, int width, int height) {
             this.heightmap = heightmap;
             this.biomeIds  = biomeIds;
             this.terralithBiomeIds = terralithBiomeIds;
+            this.ecology = ecology;
             this.width     = width;
             this.height    = height;
         }
@@ -152,6 +159,12 @@ public final class LocalTerrainProvider {
      */
     public static FloatTensor getPipelineCoarse(int ci0, int cj0, int ci1, int cj1) throws Exception {
         return submitToInferenceThread(() -> getInstance().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
+    }
+
+    /** Coarse-only ecological overview; bounds are game blocks and maxima are exclusive. */
+    public static BroadEcologyClimate getBroadEcologyClimate(int minX, int minZ, int maxX, int maxZ, int scale)
+            throws Exception {
+        return submitToInferenceThread(() -> getInstance().pipeline.getBroadEcologyClimate(minZ, minX, maxZ, maxX, scale));
     }
 
     /** Coarse-only hint batch. Exact terrain is still fetched for every accepted search result. */
@@ -276,7 +289,8 @@ public final class LocalTerrainProvider {
 
         short[] terralithFlat = new short[H * W];
         short[] biomeFlat = BiomeClassifier.classify(elevFlat, climate, i1, j1, elevPadded, H, W, NATIVE_RESOLUTION, terralithFlat, terralithContext);
-        return buildHeightmapData(elevFlat, biomeFlat, terralithFlat, H, W);
+        return withEcology(buildHeightmapData(elevFlat, biomeFlat, terralithFlat, H, W),
+                elevFlat, elevPadded, terralithContext.coastal(), i1, j1, 1, NATIVE_RESOLUTION);
     }
 
     // =========================================================================
@@ -329,12 +343,34 @@ public final class LocalTerrainProvider {
         BiomeClassifier.TerralithContext terralithContext = MacroBiomeContext.build(macro[0], macro[1],
                 macroI0, macroJ0, macroH, macroW, scale, pixelSizeM, i1, j1, H, W);
         short[] biomeFlat = BiomeClassifier.classify(elevSmooth, climate, i1, j1, elevPadded, H, W, pixelSizeM, terralithFlat, terralithContext);
-        return buildHeightmapData(elevOut, biomeFlat, terralithFlat, H, W);
+        return withEcology(buildHeightmapData(elevOut, biomeFlat, terralithFlat, H, W),
+                elevSmooth, elevPadded, terralithContext.coastal(), i1, j1, scale, pixelSizeM);
     }
 
     // =========================================================================
     // Helpers
     // =========================================================================
+
+    private HeightmapData withEcology(HeightmapData data, float[] elevation, float[] paddedElevation,
+                                      boolean[] coast, int i0, int j0, int scale, float metersPerBlock) {
+        int h = data.height, w = data.width, n = h * w;
+        BroadEcologyClimate climate = pipeline.getBroadEcologyClimate(i0, j0, i0 + h, j0 + w, scale);
+        float[] gradients = sobelGradient(paddedElevation, h + 2, w + 2, h, w);
+        short[] biomes = new short[n], terrain = new short[n];
+        float[] cover = new float[n], temperature = new float[n], moisture = new float[n], slopes = new float[n];
+        for (int r = 0; r < h; r++) for (int c = 0; c < w; c++) {
+            int index = r * w + c, x = j0 + c, z = i0 + r;
+            var broad = climate.sample(x, z);
+            var selection = EcologyClassifier.select(x, z, elevation[index], gradients[index] / metersPerBlock,
+                    coast[index], broad.temperature(), broad.precipitation(), broad.elevation());
+            var sample = selection.sample();
+            biomes[index] = (short) sample.biomeId(); terrain[index] = selection.terrainBiomeId();
+            cover[index] = sample.treeCover(); temperature[index] = sample.temperature();
+            moisture[index] = sample.moisture(); slopes[index] = sample.slope();
+        }
+        return new HeightmapData(data.heightmap, data.biomeIds, data.terralithBiomeIds,
+                new EcologyData(w, h, biomes, terrain, cover, temperature, moisture, slopes), w, h);
+    }
 
     private float[] addElevationNoise(float[] elevSmooth, float[] elevPadded,
                                        int i1, int j1, int H, int W, float pixelSizeM) {

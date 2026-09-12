@@ -101,6 +101,11 @@ def find_cycles(edges: dict[tuple[int, str], set[tuple[int, str]]]) -> list[list
     return cycles
 
 
+def ecological_biomes(biomes: dict[str, dict]) -> list[str]:
+    """Discover generated ecology biomes so feature validation cannot omit a new label."""
+    return sorted(biome_id for biome_id in biomes if biome_id.startswith("terrain-diffusion-mc:ecology/"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--terralith", type=Path, default=DEFAULT_TERRALITH)
@@ -145,7 +150,8 @@ def main() -> int:
     # matching the id passed by TerrainDiffusionBiomeSource to the registry.
     terralith = [f"terralith:{row[0]}" for row in classifier_rows]
     biome_source_ids = [f"terralith:{row[0]}" for row in classifier_rows]
-    requested = BASE_BIOMES + terralith
+    ecology = ecological_biomes(biomes)
+    requested = BASE_BIOMES + terralith + ecology
     unresolved_biomes = sorted(set(requested) - set(biomes))
     unresolved_biome_source = sorted(set(biome_source_ids) - set(biomes))
 
@@ -183,7 +189,7 @@ def main() -> int:
     cycles = find_cycles(edges)
     priority = "vanilla < common < terralith < compat" if args.common_before_terralith else "vanilla < terralith < common < compat"
     print(f"layers: {priority} (vanilla={args.vanilla.name}, terralith={args.terralith.name})")
-    print(f"biomes: requested={len(requested)} base={len(BASE_BIOMES)} terralith={len(terralith)} resolved={len(requested)-len(unresolved_biomes)}")
+    print(f"biomes: requested={len(requested)} base={len(BASE_BIOMES)} terralith={len(terralith)} ecology={len(ecology)} resolved={len(requested)-len(unresolved_biomes)}")
     print("unresolved biome refs: " + (", ".join(unresolved_biomes) if unresolved_biomes else "none"))
     print("BiomeSource codec refs (current code): " + (", ".join(unresolved_biome_source) if unresolved_biome_source else "none"))
     print("unresolved placed-feature refs: " + (", ".join(sorted(unresolved_features)) if unresolved_features else "none"))

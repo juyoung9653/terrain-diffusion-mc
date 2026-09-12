@@ -230,6 +230,7 @@
     "td_zero_channel_predicates": [],
     "terralith_dimension_override_copied": false,
     "uses_above_preliminary_surface": true,
+    "world_preset_natural_biomes_flag": true,
     "world_preset_terralith_flag": true
   }
 }

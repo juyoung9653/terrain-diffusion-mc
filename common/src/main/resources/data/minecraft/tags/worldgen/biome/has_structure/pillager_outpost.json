@@ -1,6 +1,13 @@
 {
   "replace": false,
   "values": [
-    "terrain-diffusion-mc:taiga_sparse"
+    "terrain-diffusion-mc:taiga_sparse",
+    "terrain-diffusion-mc:ecology/temperate_grassland",
+    "terrain-diffusion-mc:ecology/boreal_forest",
+    "terrain-diffusion-mc:ecology/boreal_woodland",
+    "terrain-diffusion-mc:ecology/cold_grassland",
+    "terrain-diffusion-mc:ecology/dry_woodland",
+    "terrain-diffusion-mc:ecology/dry_grassland",
+    "terrain-diffusion-mc:ecology/desert"
   ]
 }

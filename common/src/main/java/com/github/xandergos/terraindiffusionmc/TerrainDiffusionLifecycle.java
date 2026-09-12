@@ -8,6 +8,8 @@ import com.github.xandergos.terraindiffusionmc.pipeline.PipelineModels;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionDensityFunction;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
+import com.github.xandergos.terraindiffusionmc.world.ecology.EcoSurfaceFeature;
+import com.github.xandergos.terraindiffusionmc.world.ecology.EcoTreesFeature;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -20,6 +22,7 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.levelgen.DensityFunction;
+import net.minecraft.world.level.levelgen.feature.Feature;
 import com.mojang.serialization.MapCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +36,8 @@ public final class TerrainDiffusionLifecycle {
     public static final String MOD_ID = "terrain-diffusion-mc";
     private static final Logger LOG = LoggerFactory.getLogger(TerrainDiffusionLifecycle.class);
     public static final ResourceLocation TERRAIN_DIFFUSION_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "terrain_diffusion");
+    public static final ResourceLocation ECO_TREES_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_trees");
+    public static final ResourceLocation ECO_SURFACE_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_surface");
     private static boolean initialized;
 
     private TerrainDiffusionLifecycle() {
@@ -72,6 +77,12 @@ public final class TerrainDiffusionLifecycle {
      */
     public static void registerDensityFunctionCodecs(CodecRegistrar<MapCodec<? extends DensityFunction>> registrar) {
         registrar.register(TERRAIN_DIFFUSION_ID, TerrainDiffusionDensityFunction.CODEC);
+    }
+
+    /** Registers the ecological worldgen feature types used by the opt-in biome palette. */
+    public static void registerEcologyFeatures(CodecRegistrar<Feature<?>> registrar) {
+        registrar.register(ECO_TREES_ID, new EcoTreesFeature());
+        registrar.register(ECO_SURFACE_ID, new EcoSurfaceFeature());
     }
 
     @FunctionalInterface

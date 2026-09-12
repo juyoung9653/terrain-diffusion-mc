@@ -4,6 +4,8 @@ import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.mojang.serialization.JsonOps;
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
+import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
+import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.github.xandergos.terraindiffusionmc.world.river.RiverPreviewService;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.Registries;
@@ -156,6 +158,10 @@ public final class StreamsReflowingProbe {
                         break;
                     }
             }
+            if (Boolean.getBoolean("td.streamsProbe.ecologyOverview")) {
+                emit(receipts, writeEcologyOverview(server));
+            }
+
             if (Boolean.getBoolean("td.streamsProbe.streamsTopologyAudit") && !completed.isEmpty()) {
                 List<ChunkPos> newlyForced = server.submit(() -> forceTickAuditChunks(level, completed))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS);
@@ -716,8 +722,41 @@ public final class StreamsReflowingProbe {
             if (mismatch) receipt.surfaceBiomeMismatchColumns++;
             if (grassBeach) receipt.grassInGravelBeachColumns++;
             receipt.surfaceMaterialCounts.merge(material,1,Integer::sum);
-            receipt.surfaceAuditRows.add(x+","+z+","+topmost+","+csv(topmostMaterial)+","+topSolid+","+csv(material)+","+csv(actual)+","+csv(predicted)+","+topWater+","+mismatch+","+grassBeach);
+            String ecology = "";
+            if (Boolean.getBoolean("td.streamsProbe.ecologyAudit")) {
+                int originalGround = generator.getBaseHeight(x, z, Heightmap.Types.OCEAN_FLOOR_WG,
+                        level, level.getChunkSource().randomState()) - 1;
+                ecology = ecologyAuditFields(level, chunk, generator, x, z, originalGround, maxY, receipt);
+            }
+            receipt.surfaceAuditRows.add(x+","+z+","+topmost+","+csv(topmostMaterial)+","+topSolid+","+csv(material)+","+csv(actual)+","+csv(predicted)+","+topWater+","+mismatch+","+grassBeach+ecology);
         }
+    }
+
+    /** Opt-in ecology evidence uses the same natural-ecology lookup used by EcoTreesFeature. */
+    private static String ecologyAuditFields(ServerLevel level, LevelChunk chunk, ChunkGenerator generator, int x, int z,
+                                             int originalGroundY, int maxY, ChunkReceipt receipt) {
+        int logs = 0;
+        for (int y=Math.max(level.getMinBuildHeight(), originalGroundY + 1); y<maxY; y++)
+            if (chunk.getBlockState(new BlockPos(x,y,z)).is(BlockTags.LOGS)) logs++;
+        boolean logAboveOriginalGround = logs > 0;
+        if (logAboveOriginalGround) receipt.ecologyLogColumns++;
+        receipt.ecologyObservedLogBlocks += logs;
+        try {
+            EcologyClassifier.Sample sample = NaturalEcology.sample(generator, x, z);
+            if (sample == null) { receipt.ecologyUnavailableColumns++; return unavailableEcologyFields(originalGroundY, logAboveOriginalGround, logs); }
+            receipt.ecologySamples++;
+            receipt.ecologyBiomeCounts.merge(Integer.toString(sample.biomeId()), 1, Integer::sum);
+            return ","+sample.biomeId()+","+sample.treeCover()+","+sample.temperature()+","+sample.moisture()+","+sample.slope()
+                    +","+originalGroundY+","+logAboveOriginalGround+","+logs;
+        } catch (RuntimeException unavailable) {
+            receipt.ecologyUnavailableColumns++;
+            return unavailableEcologyFields(originalGroundY, logAboveOriginalGround, logs);
+        }
+    }
+
+    /** Exactly eight opt-in ecology CSV fields, including four unavailable climate/control placeholders. */
+    private static String unavailableEcologyFields(int originalGroundY, boolean logAboveOriginalGround, int logs) {
+        return ",unavailable,,,,," + originalGroundY + "," + logAboveOriginalGround + "," + logs;
     }
 
     private static String surfaceRuleTrace(ServerLevel level, ChunkGenerator generator) {
@@ -764,10 +803,41 @@ public final class StreamsReflowingProbe {
         Path output=server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
                 .resolve("td-streams-probe-surface-audit-"+receipt.chunkX+"-"+receipt.chunkZ+".csv");
         List<String> lines=new ArrayList<>(receipt.surfaceAuditRows.size()+1);
-        lines.add("x,z,actualTopmostY,actualTopmostBlock,terrainTopSolidY,terrainTopSolidBlock,actualSavedTerrainBiome,directBiomeSourceTerrainBiome,actualTopWaterY,predictedActualMismatch,grassBlockInGravelBeach");
+        lines.add("x,z,actualTopmostY,actualTopmostBlock,terrainTopSolidY,terrainTopSolidBlock,actualSavedTerrainBiome,directBiomeSourceTerrainBiome,actualTopWaterY,predictedActualMismatch,grassBlockInGravelBeach"
+                + (Boolean.getBoolean("td.streamsProbe.ecologyAudit") ? ",ecoBiomeId,ecoTreeCover,ecoTemperature,ecoMoisture,ecoSlope,originalGroundY,actualLogAboveOriginalGround,actualLogBlocksAboveOriginalGround" : ""));
         lines.addAll(receipt.surfaceAuditRows);
         try { Files.write(output,lines); receipt.surfaceAuditCsvFile=output.getFileName().toString(); }
         catch (IOException e) { receipt.surfaceAuditCsvFile="write_error:"+e.getClass().getSimpleName(); }
+    }
+
+    /** Bounded coarse-only overview; never fetches an overview-sized native heightmap. */
+    private static String writeEcologyOverview(MinecraftServer server) {
+        final int radius = Math.max(512, Math.min(32768, Integer.getInteger("td.streamsProbe.ecologyOverviewRadius", 4096)));
+        final int min = -radius, max = radius;
+        final int step = Math.max((2 * radius + 511) / 512,
+                Math.max(32, Integer.getInteger("td.streamsProbe.ecologyOverviewStep", 64)));
+        Path output = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT).resolve("td-streams-probe-ecology-overview.csv");
+        try {
+            var field = LocalTerrainProvider.getBroadEcologyClimate(min, min, max, max,
+                    com.github.xandergos.terraindiffusionmc.world.WorldScaleManager.getCurrentScale());
+            List<String> lines = new ArrayList<>(((max-min)/step) * ((max-min)/step) + 1);
+            lines.add("x,z,coarseTemperature,coarsePrecipitation,coarseElevation,ecoBiomeId,ecoTreeCover,ecoMoisture,classification");
+            for (int z=min; z<max; z+=step) for (int x=min; x<max; x+=step) {
+                var climate = field.sample(x, z);
+                // Coarse approximation only: no exact local terrain slope or coast state is fetched for this overview.
+                var ecology = EcologyClassifier.select(x, z, climate.elevation(), 0.0F, false,
+                        climate.temperature(), climate.precipitation(), climate.elevation()).sample();
+                lines.add(x+","+z+","+climate.temperature()+","+climate.precipitation()+","+climate.elevation()+","+
+                        ecology.biomeId()+","+ecology.treeCover()+","+ecology.moisture()+",coarse_slope0_coastfalse");
+            }
+            Files.write(output, lines);
+            return json("ecology_overview", "status", "written", "csv", output.getFileName(), "minX", min, "minZ", min,
+                    "maxXExclusive", max, "maxZExclusive", max, "step", step, "samples", lines.size() - 1,
+                    "method", "coarse_only;EcologyClassifier.select(elevation,slope=0,coast=false)");
+        } catch (Exception e) {
+            return json("ecology_overview", "status", "unavailable", "error", e.getClass().getSimpleName(), "message", safe(e.getMessage()),
+                    "method", "coarse_only;no_heightmap_region_fetch");
+        }
     }
 
     /** CSV is assembled on the server task but written by the probe worker after the chunk request completes. */
@@ -1074,6 +1144,8 @@ public final class StreamsReflowingProbe {
         String plannedChannelSamples = "", representativeReplacingSolid, csvFile = "";
         String surfaceAuditCsvFile = "", surfaceRuleTrace = "";
         int surfaceBiomeMismatchColumns, grassInGravelBeachColumns;
+        int ecologySamples, ecologyUnavailableColumns, ecologyLogColumns, ecologyObservedLogBlocks;
+        final Map<String, Integer> ecologyBiomeCounts = new LinkedHashMap<>();
         final List<String> surfaceAuditRows = new ArrayList<>();
         final Map<String, Integer> surfaceMaterialCounts = new LinkedHashMap<>();
         String planAuditStatus = "disabled", planAuditError = "", planAuditNaturalGroundMinusWaterRange = "", planAuditCsvFile = "";
@@ -1095,6 +1167,9 @@ public final class StreamsReflowingProbe {
         String surfaceAuditJson() { return StreamsReflowingProbe.json("surface_audit", "chunk", chunkX+","+chunkZ,
                 "grassInGravelBeachColumns", grassInGravelBeachColumns, "predictedActualMismatchColumns", surfaceBiomeMismatchColumns,
                 "materialCounts", map(surfaceMaterialCounts), "csv", surfaceAuditCsvFile, "surfaceRuleTrace", surfaceRuleTrace,
+                "ecologyAuditEnabled", Boolean.getBoolean("td.streamsProbe.ecologyAudit"), "ecologySamples", ecologySamples,
+                "ecologyUnavailableColumns", ecologyUnavailableColumns, "ecologyBiomeCounts", map(ecologyBiomeCounts),
+                "actualLogColumnsAboveOriginalGround", ecologyLogColumns, "actualLogBlocksAboveOriginalGround", ecologyObservedLogBlocks,
                 "method", "actual_chunk_block+saved_level_biome+direct_generator_biome_source"); }
         String json() { return StreamsReflowingProbe.json("chunk", "chunk", chunkX + "," + chunkZ, "sample", sampleX + "," + sampleZ,
                 "seaLevel", seaLevel, "waterBlocks", waterBlocks, "waterAboveSeaBlocks", waterAboveSeaBlocks,
