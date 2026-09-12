@@ -36,6 +36,9 @@ TD_ZERO_CHANNEL_PREDICATES = {
     "minecraft:ridges",
 }
 
+VANILLA_SAND_SHORES = {"minecraft:beach", "minecraft:snowy_beach"}
+VANILLA_STONY_SHORE = "minecraft:stony_shore"
+
 
 def read_json_from_jar(jar: zipfile.ZipFile, name: str) -> dict[str, Any]:
     try:
@@ -94,6 +97,49 @@ def td_base_entries(surface_rule: dict[str, Any]) -> tuple[dict[str, Any], dict[
     if deepslate is None:
         raise ValueError("TD surface rule has no deepslate base rule")
     return bedrock, deepslate, [entry for entry in entries if entry is not bedrock and entry is not deepslate]
+
+
+def biome_rule_ids(rule: dict[str, Any]) -> set[str]:
+    """Return direct biome predicate IDs from a surface-rule subtree."""
+    return {
+        biome_id
+        for node in walk(rule)
+        if node.get("type") == "minecraft:biome"
+        for biome_id in node.get("biome_is", [])
+        if isinstance(biome_id, str)
+    }
+
+
+def validate_vanilla_shore_rules(fallback: list[dict[str, Any]]) -> None:
+    """Require TD's shore material rules to stay outside the Terralith-only gate."""
+    matched: dict[tuple[int, str], set[str]] = {}
+    for entry in fallback:
+        condition = entry.get("if_true", {})
+        if entry.get("type") != "minecraft:condition" or condition.get("type") != "minecraft:stone_depth":
+            continue
+        offset = condition.get("offset")
+        then_run = entry.get("then_run", {})
+        if then_run.get("type") != "minecraft:sequence":
+            continue
+        for branch in then_run.get("sequence", []):
+            state = branch.get("then_run", {}).get("result_state", {}).get("Name")
+            ids = biome_rule_ids(branch)
+            if offset in {0, 4} and isinstance(state, str):
+                matched.setdefault((offset, state), set()).update(ids)
+
+    expected = {
+        (0, "minecraft:sand"): VANILLA_SAND_SHORES,
+        (4, "minecraft:sandstone"): VANILLA_SAND_SHORES,
+        (0, "minecraft:stone"): {VANILLA_STONY_SHORE},
+        (4, "minecraft:stone"): {VANILLA_STONY_SHORE},
+    }
+    missing = [
+        f"offset {offset} {block}: {', '.join(sorted(ids - matched.get((offset, block), set())))}"
+        for (offset, block), ids in expected.items()
+        if not ids <= matched.get((offset, block), set())
+    ]
+    if missing:
+        raise ValueError("TD surface rule lacks vanilla shore material handling outside Terralith gate: " + "; ".join(missing))
 
 
 def collect_surface_dependencies(surface_rule: dict[str, Any], jar_names: set[str]) -> dict[str, Any]:
@@ -247,6 +293,7 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
 
     core = extract_terralith_core(terralith_noise["surface_rule"])
     td_bedrock, td_deepslate, td_fallback = td_base_entries(td_noise["surface_rule"])
+    validate_vanilla_shore_rules(td_fallback)
     # The gate prevents the source rule's generic dirt/gravel fallbacks from
     # changing TD-selected biomes.  Bedrock remains first.  Terralith's cave
     # branch must run before TD's deepslate rule, just as it does in the source.
@@ -299,6 +346,9 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
             "td_sea_level_preserved": generated_noise["sea_level"] == td_noise["sea_level"],
             "td_bedrock_rule_preserved": generated_noise["surface_rule"]["sequence"][0] == td_bedrock,
             "td_deepslate_rule_preserved": generated_noise["surface_rule"]["sequence"][2] == td_deepslate,
+            "vanilla_shore_rules_outside_terralith_gate": True,
+            "vanilla_sand_shores": sorted(VANILLA_SAND_SHORES),
+            "vanilla_stony_shore": VANILLA_STONY_SHORE,
             "td_zero_channel_predicates": dependencies["td_zero_channel_predicates"],
             "biome_climate_predicates": dependencies["biome_climate_predicates"],
             "uses_above_preliminary_surface": "minecraft:above_preliminary_surface" in dependencies["predicate_types"],

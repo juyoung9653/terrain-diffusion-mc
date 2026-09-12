@@ -290,7 +290,7 @@ public final class LocalTerrainProvider {
         short[] terralithFlat = new short[H * W];
         short[] biomeFlat = BiomeClassifier.classify(elevFlat, climate, i1, j1, elevPadded, H, W, NATIVE_RESOLUTION, terralithFlat, terralithContext);
         return withEcology(buildHeightmapData(elevFlat, biomeFlat, terralithFlat, H, W),
-                elevFlat, elevPadded, terralithContext.coastal(), i1, j1, 1, NATIVE_RESOLUTION);
+                elevFlat, elevPadded, terralithContext.shore(), i1, j1, 1, NATIVE_RESOLUTION);
     }
 
     // =========================================================================
@@ -344,7 +344,7 @@ public final class LocalTerrainProvider {
                 macroI0, macroJ0, macroH, macroW, scale, pixelSizeM, i1, j1, H, W);
         short[] biomeFlat = BiomeClassifier.classify(elevSmooth, climate, i1, j1, elevPadded, H, W, pixelSizeM, terralithFlat, terralithContext);
         return withEcology(buildHeightmapData(elevOut, biomeFlat, terralithFlat, H, W),
-                elevSmooth, elevPadded, terralithContext.coastal(), i1, j1, scale, pixelSizeM);
+                elevSmooth, elevPadded, terralithContext.shore(), i1, j1, scale, pixelSizeM);
     }
 
     // =========================================================================
@@ -352,7 +352,7 @@ public final class LocalTerrainProvider {
     // =========================================================================
 
     private HeightmapData withEcology(HeightmapData data, float[] elevation, float[] paddedElevation,
-                                      boolean[] coast, int i0, int j0, int scale, float metersPerBlock) {
+                                      ShoreContext shore, int i0, int j0, int scale, float metersPerBlock) {
         int h = data.height, w = data.width, n = h * w;
         BroadEcologyClimate climate = pipeline.getBroadEcologyClimate(i0, j0, i0 + h, j0 + w, scale);
         float[] gradients = sobelGradient(paddedElevation, h + 2, w + 2, h, w);
@@ -362,7 +362,8 @@ public final class LocalTerrainProvider {
             int index = r * w + c, x = j0 + c, z = i0 + r;
             var broad = climate.sample(x, z);
             var selection = EcologyClassifier.select(x, z, elevation[index], gradients[index] / metersPerBlock,
-                    coast[index], broad.temperature(), broad.precipitation(), broad.elevation());
+                    broad.temperature(), broad.precipitation(), broad.elevation(),
+                    shore.waterDistanceBlocks(index), shore.openWaterFraction(index), shore.reliefSlope(index));
             var sample = selection.sample();
             biomes[index] = (short) sample.biomeId(); terrain[index] = selection.terrainBiomeId();
             cover[index] = sample.treeCover(); temperature[index] = sample.temperature();

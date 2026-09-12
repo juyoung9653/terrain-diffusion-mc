@@ -320,6 +320,23 @@ the pack from a local Terralith JAR. The generated inventory and audit describe
 source references and retained height assumptions. Tune biome distribution in the
 legacy classifier's resource table. Natural ecosystem thresholds live in
 `EcologyClassifier`; shared tree/soil controls live in `FeatureEcologyMath`.
+Natural shores use a 24-block water-distance bound and fixed 64/96-block
+neighbourhood measurements. Sheltered wet banks retain their land ecosystem;
+exposed low shores select sand or gravel, and steep shores select stone. The
+96-block water fraction suppresses small enclosed ponds, but is a finite local
+heuristic, not proof of ocean connectivity; sufficiently large lakes can have
+beaches too. `ShoreClassifier` changes biome/material selection only, leaving TD
+heights and native Streams channels intact. Shore widths vary with exposure,
+moisture and a coherent 768-block substrate field. Existing generated chunks
+retain their old materials; compare fresh chunks or a new test world after an
+update. The compatibility pack must be updated along with the mod JAR.
+
+World Preview 1.3.1 reads custom biome colors from
+`data/terrain-diffusion-mc/worldgen/biome_colors.json`. Keep all 14 TD biome IDs
+registered there to avoid black/unmapped ecological biomes. This resource fixes
+map colors; it does not resolve Preview's independent inference-queue and
+seed/scale lifecycle limitations.
+
 Regenerate the ecological biome resources with
 `python tools/ecology/generate_biomes.py --vanilla path/to/minecraft_1.21.1_client.jar`.
 The coarse model stride is 256 native pixels, or 512 game blocks at scale 2;

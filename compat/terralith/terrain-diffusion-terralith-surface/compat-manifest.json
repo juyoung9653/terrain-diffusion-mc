@@ -230,6 +230,12 @@
     "td_zero_channel_predicates": [],
     "terralith_dimension_override_copied": false,
     "uses_above_preliminary_surface": true,
+    "vanilla_sand_shores": [
+      "minecraft:beach",
+      "minecraft:snowy_beach"
+    ],
+    "vanilla_shore_rules_outside_terralith_gate": true,
+    "vanilla_stony_shore": "minecraft:stony_shore",
     "world_preset_natural_biomes_flag": true,
     "world_preset_terralith_flag": true
   }

@@ -1,0 +1,16 @@
+{
+  "terrain-diffusion-mc:ecology/temperate_forest": { "name": "Temperate Forest", "r": 42, "g": 118, "b": 60 },
+  "terrain-diffusion-mc:ecology/temperate_woodland": { "name": "Temperate Woodland", "r": 78, "g": 147, "b": 76 },
+  "terrain-diffusion-mc:ecology/temperate_grassland": { "name": "Temperate Grassland", "r": 132, "g": 181, "b": 83 },
+  "terrain-diffusion-mc:ecology/boreal_forest": { "name": "Boreal Forest", "r": 35, "g": 87, "b": 73 },
+  "terrain-diffusion-mc:ecology/boreal_woodland": { "name": "Boreal Woodland", "r": 67, "g": 120, "b": 101 },
+  "terrain-diffusion-mc:ecology/cold_grassland": { "name": "Cold Grassland", "r": 143, "g": 178, "b": 156 },
+  "terrain-diffusion-mc:ecology/dry_woodland": { "name": "Dry Woodland", "r": 151, "g": 138, "b": 70 },
+  "terrain-diffusion-mc:ecology/dry_grassland": { "name": "Dry Grassland", "r": 195, "g": 177, "b": 81 },
+  "terrain-diffusion-mc:ecology/tropical_forest": { "name": "Tropical Forest", "r": 27, "g": 128, "b": 69 },
+  "terrain-diffusion-mc:ecology/tropical_woodland": { "name": "Tropical Woodland", "r": 70, "g": 158, "b": 86 },
+  "terrain-diffusion-mc:ecology/desert": { "name": "Ecological Desert", "r": 232, "g": 202, "b": 111 },
+  "terrain-diffusion-mc:forest_sparse": { "name": "Sparse Forest", "r": 95, "g": 151, "b": 88 },
+  "terrain-diffusion-mc:taiga_sparse": { "name": "Sparse Taiga", "r": 75, "g": 132, "b": 119 },
+  "terrain-diffusion-mc:snowy_taiga_sparse": { "name": "Sparse Snowy Taiga", "r": 128, "g": 164, "b": 151 }
+}

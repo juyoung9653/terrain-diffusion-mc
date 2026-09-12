@@ -25,6 +25,7 @@ BASE_BIOMES = (
     "minecraft:windswept_hills minecraft:jungle minecraft:badlands minecraft:meadow "
     "minecraft:grove minecraft:snowy_slopes minecraft:frozen_peaks minecraft:stony_peaks "
     "minecraft:warm_ocean minecraft:ocean minecraft:cold_ocean minecraft:frozen_ocean "
+    "minecraft:beach minecraft:snowy_beach minecraft:stony_shore "
     "terrain-diffusion-mc:forest_sparse terrain-diffusion-mc:taiga_sparse "
     "terrain-diffusion-mc:snowy_taiga_sparse"
 ).split()

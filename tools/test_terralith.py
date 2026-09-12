@@ -34,7 +34,9 @@ def main():
     package = Path("com/github/xandergos/terraindiffusionmc/pipeline")
     sources = [ROOT / "common/src/main/java" / package / (name + ".java")
                for name in ("FastNoiseLite", "TerralithBiomeClassifier", "BiomeClassifier", "MacroBiomeContext",
-                            "BroadEcologyClimate", "EcologyClassifier")]
+                            "BroadEcologyClimate", "EcologyClassifier", "ShoreClassifier", "ShoreContext")]
+    for name in ("ShoreClassifierTest", "ShoreContextTest"):
+        sources.append(ROOT / "common/src/test/java" / package / (name + ".java"))
     sources.append(ROOT / "common/src/test/java" / package / "TerralithBiomeClassifierTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "MacroBiomeContextTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "BroadEcologyClimateTest.java")
@@ -51,6 +53,8 @@ def main():
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimateTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifierTest")
+    for name in ("ShoreClassifierTest", "ShoreContextTest"):
+        run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline." + name)
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.LowlandCarvingGuardTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMathTest")
     run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith/tests", "-v")

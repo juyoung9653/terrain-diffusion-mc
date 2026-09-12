@@ -10,6 +10,16 @@ final class MacroBiomeContext {
     static final int COAST_BLOCKS = 24;
     private static final int ANCHOR_JITTER = 32;
     private static final int CONTEXT_PAD = 192;
+    private static final int[] RING_64_I = new int[16], RING_64_J = new int[16], RING_96_I = new int[16], RING_96_J = new int[16];
+    static {
+        for (int k = 0; k < 16; k++) {
+            double angle = Math.PI * 2d * k / 16d;
+            RING_64_I[k] = (int) Math.round(Math.sin(angle) * 64d);
+            RING_64_J[k] = (int) Math.round(Math.cos(angle) * 64d);
+            RING_96_I[k] = (int) Math.round(Math.sin(angle) * 96d);
+            RING_96_J[k] = (int) Math.round(Math.cos(angle) * 96d);
+        }
+    }
 
     private MacroBiomeContext() { }
 
@@ -29,6 +39,7 @@ final class MacroBiomeContext {
         int n = height * width;
         float[] e = new float[n], slope = new float[n], temp = new float[n], precip = new float[n], cv = new float[n];
         boolean[] coast = new boolean[n];
+        float[] distance = new float[n], open = new float[n], relief = new float[n];
         for (int r = 0; r < height; r++) for (int c = 0; c < width; c++) {
             int worldI = i0 + r, worldJ = j0 + c;
             int anchorI = anchor(worldI, worldJ, true), anchorJ = anchor(worldI, worldJ, false);
@@ -42,8 +53,24 @@ final class MacroBiomeContext {
             cv[out] = sampleChannel(climate, 3, nativeI0, nativeJ0, nativeH, nativeW, scale, anchorI, anchorJ);
             int local = (r + CONTEXT_PAD) * fieldW + c + CONTEXT_PAD;
             coast[out] = oceanDistance[local] <= COAST_BLOCKS * COAST_BLOCKS;
+            // The bounded distance transform is exact only within the coast radius.
+            distance[out] = coast[out] ? (float) Math.sqrt(oceanDistance[local]) : Float.POSITIVE_INFINITY;
+            if (!coast[out]) continue;
+            int wet = 0;
+            float lo = Float.POSITIVE_INFINITY, hi = Float.NEGATIVE_INFINITY;
+            for (int k = 0; k < 16; k++) {
+                int rr = worldI + RING_96_I[k] - fieldI0, cc = worldJ + RING_96_J[k] - fieldJ0;
+                float v = smooth[rr * fieldW + cc];
+                if (v < 0) wet++;
+                lo = Math.min(lo, v); hi = Math.max(hi, v);
+                rr = worldI + RING_64_I[k] - fieldI0;
+                cc = worldJ + RING_64_J[k] - fieldJ0;
+                v = smooth[rr * fieldW + cc];
+                lo = Math.min(lo, v); hi = Math.max(hi, v);
+            }
+            open[out] = wet / 16f; relief[out] = (hi - lo) / (192f * physicalPixelSize);
         }
-        return new BiomeClassifier.TerralithContext(e, slope, temp, precip, cv, coast);
+        return new BiomeClassifier.TerralithContext(e, slope, temp, precip, cv, coast, new ShoreContext(distance, open, relief));
     }
 
     /** Jittered nearest regional anchor avoids a visible 128-block checkerboard. */

@@ -285,3 +285,26 @@ supports ordinary chunk-driven placement without claiming full block determinism
 
 Validation also passed Python compilation, PowerShell parsing, diagnostic Java
 compilation, and normal Java compilation without the probe init script.
+
+## Natural shore and World Preview color validation
+
+`-PtdProbe.shoreAudit=true` reads exact tile ecology over a bounded 512x256
+block coastal area by default, then generates representative low/high shore
+chunks for `surfaceAudit`. It is not the coarse ecology overview. Only the
+exact Terralith gravel-beach ID counts as gravel; other positive terrain IDs
+include oceans and cliffs. Native Streams can replace saved biomes with river,
+so compare biome/material pairs and report those overrides separately.
+
+Seed 6187795302574383407 at scale 2: the shore revision checked 15 chunks /
+3,840 columns across two runs. Dry sand-shore columns were 81/81 sand and dry
+rock-shore columns 18/18 stone. All 68 matching former gravel-beach columns at
+the old fixture became the surrounding forest; 66 had grass and 2 dirt.
+2,304 matching original TD ground heights were unchanged. Native topology and
+100 ticks passed, with the topology baseline matching on restart. This bounded
+fixture reached sand and rock; gravel and snowy beach were covered by numeric
+selection and surface-resource checks, not by this engine sample.
+
+World Preview 1.3.1's actual `BiomeColorMapReloadListener.parseColorData` accepted
+all 14 custom TD color mappings with nonzero RGB. Keep this resource separate
+from terrain scheduling: adding map colors does not fix large-range inference
+queues or preview seed/scale isolation.

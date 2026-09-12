@@ -32,7 +32,7 @@ public final class EcologyClassifierTest {
             var a = EcologyClassifier.select(x, 0, 300, .1f, false, 15, 800, 300).sample();
             require(a.biomeId() == base.biomeId(), "no coordinate-dithered biome labels");
         }
-        require(EcologyClassifier.select(0, 0, 0, .1f, true, 15, 800, 300).terrainBiomeId() > 0, "coast retained");
+        require(EcologyClassifier.select(0, 0, 0, .1f, true, 15, 800, 300).terrainBiomeId() != 0, "coast retained");
         require(EcologyClassifier.select(0, 0, -100, .1f, false, 15, 800, 300).sample().biomeId() == 0, "ocean retained");
         require(EcologyClassifier.select(0, 0, 900, .8f, false, 15, 800, 300).sample().biomeId() == 0, "cliff retained");
         require(EcologyClassifier.select(0, 0, 1900, .1f, false, -2, 800, 1900).sample().biomeId() == 0, "alpine retained");

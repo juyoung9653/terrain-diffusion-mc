@@ -1,6 +1,8 @@
 package com.github.xandergos.terraindiffusionmc.diagnostic;
 
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
+import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
+import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier;
 import com.mojang.serialization.JsonOps;
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
@@ -102,10 +104,18 @@ public final class StreamsReflowingProbe {
                     "centerSource", config.centerExplicit ? "property" : "shared_spawn", "maxChunks", config.maxChunks,
                     "requestTimeoutSeconds", config.timeoutSeconds, "routeSearchRadius", config.routeSearchRadius));
             boolean riverPreview = Boolean.getBoolean("td.streamsProbe.riverPreview");
-            List<RouteCandidate> candidates = config.fixedCandidates.isEmpty()
+            List<RouteCandidate> candidates = new ArrayList<>(config.fixedCandidates.isEmpty()
                     ? (riverPreview ? discoverRiverPreviewCandidates(level, config, receipts)
                     : (Boolean.getBoolean("td.streamsProbe.streamsTopologyAudit") ? discoverTopologyCandidates(level, config, receipts) : discoverRoutes(level, config, receipts)))
-                    : config.fixedCandidates;
+                    : config.fixedCandidates);
+            if (Boolean.getBoolean("td.streamsProbe.shoreAudit")) {
+                ShoreAudit shore = discoverExactShoreAudit();
+                emit(receipts, shore.json());
+                for (ChunkPos pos : shore.representativeChunks()) {
+                    if (candidates.stream().noneMatch(c -> c.chunkX == pos.x && c.chunkZ == pos.z))
+                        candidates.add(new RouteCandidate(pos.x, pos.z, -1, Integer.MIN_VALUE, "exact_ecology_shore"));
+                }
+            }
             if (!config.fixedCandidates.isEmpty()) {
                 emit(receipts, json("route_discovery", "status", "fixed_candidates_no_streams_route_query",
                         "candidates", candidates.size(), "candidateSummary", candidates.toString()));
@@ -525,6 +535,58 @@ public final class StreamsReflowingProbe {
                     StreamsReflowingProbe.class.getClassLoader());
             return ((Number) policy.getMethod(methodName).invoke(null)).longValue();
         } catch (Throwable ignored) { return -1; }
+    }
+
+    /** Exact, tile-bounded ecology shore scan. No coarse climate or generated-block inference is used here. */
+    private static ShoreAudit discoverExactShoreAudit() {
+        ShoreAudit audit = new ShoreAudit();
+        try {
+            ShoreMapping mapping = resolveShoreMapping();
+            audit.mapping = mapping.report();
+            if (!mapping.valid()) { audit.error = "shore_mapping_invalid"; return audit; }
+            int tile = TerrainDiffusionConfig.tileSize();
+            int minX = System.getProperty("td.streamsProbe.shoreCenterX") == null ? Math.floorDiv(-1536, tile) * tile
+                    : Math.floorDiv(integerProperty("td.streamsProbe.shoreCenterX", -1280), tile) * tile;
+            int minZ = System.getProperty("td.streamsProbe.shoreCenterZ") == null ? Math.floorDiv(0, tile) * tile
+                    : Math.floorDiv(integerProperty("td.streamsProbe.shoreCenterZ", 128), tile) * tile;
+            // Default is exactly two adjacent TD tiles by one tile; explicit centers remain tile-aligned and equally bounded.
+            audit.minX=minX; audit.minZ=minZ; audit.maxX=minX + 2*tile; audit.maxZ=minZ + tile; audit.tileSize=tile;
+            for (int tileZ=minZ; tileZ<audit.maxZ; tileZ+=tile) for (int tileX=minX; tileX<audit.maxX; tileX+=tile) {
+                var data=LocalTerrainProvider.getInstance().fetchHeightmap(tileZ,tileX,tileZ+tile,tileX+tile);
+                if (data == null || data.ecology == null) { audit.error="ecology_tile_unavailable"; continue; }
+                audit.tiles++;
+                for (int z=0; z<data.height; z++) for (int x=0; x<data.width; x++) {
+                    short terrain=data.ecology.terrainBiomeId(x,z); int worldX=tileX+x, worldZ=tileZ+z;
+                    String type=shoreType(terrain, mapping);
+                    if (type != null) { audit.add(type,worldX,worldZ,data.heightmap[z][x]); continue; }
+                    if (terrain == 0 && touchesShore(data.ecology,x,z, mapping)) audit.addLand(worldX,worldZ);
+                }
+            }
+            if (audit.tiles == 0 && audit.error.isEmpty()) audit.error="no_tiles";
+        } catch (Throwable t) { audit.error=t.getClass().getSimpleName()+":"+safe(t.getMessage()); }
+        return audit;
+    }
+
+    /** Pure ID/name mapping: only the named Terralith gravel beach is positive shore terrain. */
+    private static ShoreMapping resolveShoreMapping() {
+        int index = TerralithBiomeClassifier.biomeNames().indexOf("terralith:gravel_beach");
+        short gravelId = (short) (index + 1);
+        String resolved = index < 0 ? null : TerralithBiomeClassifier.biomeName(gravelId);
+        return new ShoreMapping(gravelId, index >= 0 && "terralith:gravel_beach".equals(resolved)
+                && ShoreClassifier.BEACH == -1 && ShoreClassifier.SNOWY_BEACH == -2 && ShoreClassifier.STONY_SHORE == -3, resolved);
+    }
+
+    private static String shoreType(short terrain, ShoreMapping mapping) {
+        return switch (terrain) {
+            case ShoreClassifier.BEACH -> "beach";
+            case ShoreClassifier.SNOWY_BEACH -> "snowy_beach";
+            case ShoreClassifier.STONY_SHORE -> "stony_shore";
+            default -> terrain == mapping.gravelBeachId ? "terralith_gravel_beach" : null;
+        };
+    }
+    private static boolean touchesShore(com.github.xandergos.terraindiffusionmc.pipeline.EcologyData ecology, int x, int z, ShoreMapping mapping) {
+        return (x>0 && shoreType(ecology.terrainBiomeId(x-1,z), mapping)!=null) || (x+1<ecology.width && shoreType(ecology.terrainBiomeId(x+1,z), mapping)!=null)
+                || (z>0 && shoreType(ecology.terrainBiomeId(x,z-1), mapping)!=null) || (z+1<ecology.height && shoreType(ecology.terrainBiomeId(x,z+1), mapping)!=null);
     }
 
     private static List<RouteCandidate> discoverRoutes(ServerLevel level, Config config, List<String> receipts) {
@@ -1206,6 +1268,37 @@ public final class StreamsReflowingProbe {
             riverPreviewObstructedWaterColumns = riverPreviewObstructedWaterBlockCount = 0;
             riverPreviewObstructedWaterCoordinates = "";
         }
+    }
+
+    private static final class ShoreAudit {
+        int minX,minZ,maxX,maxZ,tileSize,tiles; String error="";
+        String mapping = "unresolved";
+        final Map<String,Integer> counts=new LinkedHashMap<>(); final Map<String,List<ChunkPos>> chunks=new LinkedHashMap<>();
+        final Map<String,String> representatives=new LinkedHashMap<>(); int landNearShore;
+        final Map<String,Short> highest = new LinkedHashMap<>();
+        void add(String type,int x,int z,short elevation) {
+            counts.merge(type,1,Integer::sum); representatives.putIfAbsent(type,x+","+z);
+            List<ChunkPos> selected=chunks.computeIfAbsent(type, ignored -> new ArrayList<>()); ChunkPos chunk=new ChunkPos(new BlockPos(x,0,z));
+            if (selected.isEmpty()) selected.add(chunk);
+            if (!highest.containsKey(type) || elevation > highest.get(type)) {
+                highest.put(type, elevation);
+                representatives.put(type + "_highest", x + "," + z);
+                if (!selected.getFirst().equals(chunk)) {
+                    if (selected.size() == 1) selected.add(chunk);
+                    else selected.set(1, chunk);
+                }
+            }
+        }
+        void addLand(int x,int z) { landNearShore++; representatives.putIfAbsent("land_near_shore",x+","+z); }
+        List<ChunkPos> representativeChunks() { return chunks.values().stream().flatMap(List::stream).toList(); }
+        String json() { return StreamsReflowingProbe.json("shore_audit", "status", error.isEmpty()?"exact_tile_ecology":"unavailable", "error", error,
+                "bounds", minX+","+minZ+".."+maxX+","+maxZ, "tileSize", tileSize, "tiles", tiles, "shoreCounts", map(counts),
+                "representatives", representatives.toString(), "landNearShoreColumns", landNearShore, "representativeChunkCount", representativeChunks().size(),
+                "mapping", mapping, "method", "exact_HeightmapData.ecology.terrainBiomeId;two_by_one_tile_bound"); }
+    }
+
+    private record ShoreMapping(short gravelBeachId, boolean valid, String resolvedName) {
+        String report() { return "pure_id_mapping;gravelBeachId="+gravelBeachId+";resolved="+resolvedName+";valid="+valid; }
     }
 
     private static final class GraphNode {

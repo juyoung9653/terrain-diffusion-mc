@@ -9,7 +9,12 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 public final class BiomeClassifier {
     /** Coherent Terralith-only inputs supplied from a haloed smooth-terrain read. */
     public record TerralithContext(float[] elevation, float[] slope, float[] temperature,
-                                   float[] precipitation, float[] precipitationCv, boolean[] coastal) {
+                                   float[] precipitation, float[] precipitationCv, boolean[] coastal, ShoreContext shore) {
+        public TerralithContext(float[] elevation, float[] slope, float[] temperature,
+                                float[] precipitation, float[] precipitationCv, boolean[] coastal) {
+            this(elevation, slope, temperature, precipitation, precipitationCv, coastal,
+                    ShoreContext.empty(elevation == null ? 0 : elevation.length));
+        }
         boolean validFor(int length) {
             return elevation != null && slope != null && temperature != null && precipitation != null
                     && precipitationCv != null && coastal != null && elevation.length >= length

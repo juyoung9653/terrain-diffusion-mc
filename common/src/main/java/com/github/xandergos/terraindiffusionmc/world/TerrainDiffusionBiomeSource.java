@@ -6,6 +6,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.Hei
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.CoarseBiomeHints;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
+import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
 import com.mojang.datafixers.util.Pair;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
@@ -82,6 +83,11 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         }
         this.ecologicalBiomes = Map.copyOf(ecological);
         Map<Short, Holder<Biome>> entries = new HashMap<>();
+        if (naturalBiomes) {
+            entries.put(ShoreClassifier.BEACH, biomeLookup.getOrThrow(Biomes.BEACH));
+            entries.put(ShoreClassifier.SNOWY_BEACH, biomeLookup.getOrThrow(Biomes.SNOWY_BEACH));
+            entries.put(ShoreClassifier.STONY_SHORE, biomeLookup.getOrThrow(Biomes.STONY_SHORE));
+        }
         if (terralith) {
             // Fail during world loading if the required pack is missing, rather
             // than silently generating a different world in unexplored chunks.

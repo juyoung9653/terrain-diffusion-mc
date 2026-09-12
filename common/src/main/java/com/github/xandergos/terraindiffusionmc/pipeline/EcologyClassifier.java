@@ -23,6 +23,13 @@ public final class EcologyClassifier {
 
     public static Selection select(int x, int z, float elevation, float slope, boolean coast,
                                    float regionalTemperature, float regionalRainfall, float regionalElevation) {
+        return select(x, z, elevation, slope, regionalTemperature, regionalRainfall, regionalElevation,
+                coast ? 1 : Float.POSITIVE_INFINITY, coast ? .5f : 0, slope);
+    }
+
+    public static Selection select(int x, int z, float elevation, float slope,
+                                   float regionalTemperature, float regionalRainfall, float regionalElevation,
+                                   float waterDistance, float openWater, float relief) {
         // The model temperature already reflects its coarse altitude. Correct only the local difference.
         float temperature = regionalTemperature - .006f * (Math.max(0, elevation) - Math.max(0, regionalElevation));
         float moisture = clamp(regionalRainfall / (500f + 20f * Math.max(0, regionalTemperature)), 0, 2);
@@ -31,8 +38,9 @@ public final class EcologyClassifier {
                     elevation, slope, temperature, regionalRainfall, 0, false);
             return terrain(water, temperature, moisture, slope);
         }
-        if (coast && elevation <= 120 && slope < .45f)
-            return terrain(terralith("gravel_beach"), temperature, moisture, slope);
+        short shore = ShoreClassifier.select(x, z, elevation, slope, temperature, moisture,
+                waterDistance, openWater, relief);
+        if (shore != 0) return terrain(shore, temperature, moisture, slope);
         if (elevation >= 1600 && temperature < 0)
             return terrain(terralith("alpine_highlands"), temperature, moisture, slope);
         if (slope > .70f && elevation > 150)
