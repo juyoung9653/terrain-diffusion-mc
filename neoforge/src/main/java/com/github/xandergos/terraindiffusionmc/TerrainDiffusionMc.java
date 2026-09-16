@@ -22,6 +22,11 @@ public class TerrainDiffusionMc {
 
     public TerrainDiffusionMc(IEventBus modEventBus) {
         LOG.info("Initializing terrain-diffusion-mc for NeoForge");
+        com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.setAdapterAvailable(
+                net.neoforged.fml.loading.FMLLoader.getLoadingModList().getMods().stream()
+                        .anyMatch(mod -> "streamsreflowing".equals(mod.getModId())
+                                && com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin
+                                .isAuditedVersion(mod.getVersion().toString())));
         modEventBus.addListener(this::onRegister);
         TerrainDiffusionLifecycle.bootstrap(FMLPaths.CONFIGDIR.get(), FMLPaths.GAMEDIR.get());
 

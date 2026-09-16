@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.world.river.WorldRiverPreviewState;
+import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.progress.ChunkProgressListener;
 import org.spongepowered.asm.mixin.Mixin;
@@ -25,10 +26,12 @@ public class RiverPreviewBootstrapMixin {
     private void terrainDiffusion$initializeRiverPreview(ChunkProgressListener progressListener, CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer) (Object) this;
         WorldRiverPreviewState.initialize(server.overworld(), terrainDiffusion$riverPreviewNewWorld);
+        WorldNaturalRiverState.initialize(server.overworld(), terrainDiffusion$riverPreviewNewWorld);
     }
 
     @Inject(method = "stopServer", at = @At("TAIL"))
     private void terrainDiffusion$clearRiverPreview(CallbackInfo ci) {
         WorldRiverPreviewState.clear();
+        WorldNaturalRiverState.clear();
     }
 }

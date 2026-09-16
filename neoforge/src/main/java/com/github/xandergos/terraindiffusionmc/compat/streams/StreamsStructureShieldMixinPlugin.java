@@ -14,6 +14,10 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenPrefetchMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenScaleMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsNaturalRiverMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsNaturalNetworkMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsRiverBanksMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsRiverRasterMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsBankMaterialMixin");
 
@@ -35,7 +39,11 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
         return FMLLoader.getLoadingModList().getMods().stream()
                 .filter(mod -> "streamsreflowing".equals(mod.getModId()))
                 .map(mod -> mod.getVersion().toString())
-                .anyMatch(version -> "2.13.1".equals(version) || "2.13.5".equals(version));
+                .anyMatch(StreamsStructureShieldMixinPlugin::isAuditedVersion);
+    }
+
+    public static boolean isAuditedVersion(String version) {
+        return "2.13.1".equals(version) || "2.13.5".equals(version);
     }
 
     @Override

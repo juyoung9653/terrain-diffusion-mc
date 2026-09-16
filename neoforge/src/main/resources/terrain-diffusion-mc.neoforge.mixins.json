@@ -8,6 +8,11 @@
     "StreamsStructureShieldMixin",
     "StreamsWorldgenPrefetchMixin",
     "StreamsWorldgenScaleMixin",
+    "StreamsNaturalRiverMixin",
+    "StreamsNaturalNetworkMixin",
+    "StreamsRiverBanksMixin",
+    "StreamsRiverRasterMixin",
+    "StreamsNaturalLifecycleMixin",
     "StreamsPlayerPrefetchMixin",
     "StreamsBankMaterialMixin"
   ],

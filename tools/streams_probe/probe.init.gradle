@@ -13,6 +13,9 @@ gradle.projectsEvaluated {
             systemProperty 'td.streamsProbe', 'true'
             maxHeapSize = '6G'
             args 'nogui'
+            if (gradle.rootProject.hasProperty('tdProbe.carveTrace')) {
+                systemProperty 'streamsreflowing.carvetrace', gradle.rootProject.property('tdProbe.carveTrace').toString()
+            }
             gradle.rootProject.properties.findAll { key, value -> key.startsWith('tdProbe.') }.each { key, value ->
                 systemProperty "td.streamsProbe.${key.substring('tdProbe.'.length())}", value.toString()
             }

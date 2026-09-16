@@ -7,6 +7,335 @@ with `probe.init.gradle` enabled.
 
 ## Native Streams integration
 
+### TD natural river profile (new worlds)
+
+New real NeoForge TD Overworlds with audited Streams 2.13.1/2.13.5 pin natural
+profile v4 in `data/terrain_diffusion_natural_rivers.dat`. Legacy worlds, Fabric,
+worlds without an audited adapter and finite-preview worlds remain disabled.
+`-Dtd.rivers.natural=false` opts out **only before the first world creation**;
+the saved choice wins on restart. Missing/corrupt profile data beside an existing
+natural cache, or loading an enabled world without its audited adapter, stops
+generation. Keep the complete world together when copying it.
+The first marker is written and read back atomically before publishing it to
+generation threads: C2ME defers `DimensionDataStorage.save()`, so calling that
+method and immediately reading the file is not a synchronous persistence gate.
+
+The implementation is a TD module plus versioned Mixin adapters; it does not
+patch, redistribute or require a fork of Streams. Native routing, lake/sea
+connections, indexing, water flow and bank decoration remain in Streams.
+`NaturalRiverProfile`, `NaturalRiverWatersheds` and `NaturalRiverMorphology` own the independent policy;
+`StreamsNaturalConfig`, `StreamsNaturalNetwork` and `StreamsRecordAccess` isolate
+the native types. The shipped JARs strip the Java Record attribute: use audited
+accessor/constructor layouts, never reflection field order or `isRecord()` alone.
+
+New worlds use **profile v4**. Profiles 1–3 retain their saved configuration and
+cache namespaces. V4 adds a deterministic directed-graph selection after the V3
+watershed policy: optional tributaries need 0.15 plate scales of remaining path
+and 0.05 plate scales of source clearance from retained channels (768 and 256
+blocks at scale 5). These are admission criteria, not minimum walking distances:
+confluences, meanders, independent mainstems, and protected lake/border/cyclic
+connections can remain closer. Each component first retains its longest native
+source-to-terminal shortest route; a shorter protected path must not replace
+that mainstem. Other mandatory upstream paths are completed before
+optional admission so their geometry participates in spacing. A monotone width
+response narrows intermediate channels while retaining the source taper and
+full widths of 24 blocks or more. Actual wetted width still needs engine checks.
+
+At voxel resolution, v4 raises positive sub-voxel plan half-widths to 0.71
+(just over half a block diagonal), including the native source taper. Otherwise
+an otherwise continuous spring can rasterize as disconnected puddles. This changes
+column plans, not saved native graph geometry. The common plan factory covers
+`plan`, `planLean`, alternate plans and their caches. Keep the explicit 22-field
+`ColumnPlan` constructor audit; 2.13.1 has a four-argument factory and 2.13.5 adds
+the ready-plate array.
+
+Native water-surface inset depends on width. A narrowing reach can therefore
+rise one block even along a flat/downhill graph grade. V4 uses the full configured
+inset consistently inside the planner's **lake-aware inset method**, keeping its
+native lake-level blending. Do not replace global `RiverEngine.insetFor`: the
+native graph tracer uses it too. Do not subtract an inferred inset from an already
+lake-adjusted column. Regression checks must include both width-transition shelves,
+a lake-fed source, an inland lake terminal and a marine mouth.
+
+Near a lake, the incised stream reference can sit below lake backwater. V4 raises
+only nonchannel bank references to the nearby lake level when the difference is
+within the configured inset; channel water retains the native lake blending.
+Audit gross added wet-grass positions against the native lake bitmap, smooth
+shore coverage and saved water. A net decrease can conceal new shore leaks.
+The native `lakeNear` radius is measured in grid cells, not blocks.
+
+Native lateral junction pooling can lower the upstream side of a tight meander
+toward a nearby downstream bend across a dry neck, leaving an uphill obstruction.
+V4 accepts that lowering only across a face-connected channel crossing; rounded
+diagonal samples need an orthogonal wet-plan bridge. Sources, outlets and nearby
+lakes retain native pooling. For diagnosis use `-PtdProbe.carveTrace=x,z,radius`
+on fresh chunks and inspect `[SR-STACK]`; saved water alone cannot identify which
+native grade adjustment caused a pocket.
+
+V4 bank finishing handles two distinct cases. A narrow raster corner lacking a
+local downhill channel connection gets a one-block soil excavation; native water
+fills it without adding a source. Other shallow lateral openings receive a soil
+crest with one block of freeboard for settling at steps. Dry cliff-side gaps may
+need up to six blocks of supported fill; never overwrite existing fluid or solid
+non-soil material. Check each highest incoming arm separately: a connected lower/equal arm,
+or an uphill-only detour, must not hide a disconnected upstream arm. Dry tall
+grass can occupy both blocks of a bank opening, so checking for air alone misses
+it. Both operations preserve native structure/biome protection and skip lakes,
+sources, outlets and existing fluid blocks. They run only during v4 generation.
+Equal-height disconnected arms also need the corner; a sole arm is not a gap.
+
+The bank regression oracle must check **both** newly inundated grass and actual
+downhill connectivity. Some native diagonal gaps were previously joined only by
+water spilling over grass; blocking that spill alone dams the river. Compare the
+footprint reachable from the same mainstem entry separately from disconnected
+aquifer water elsewhere in a scanned vertical volume. The full-volume grass
+audit remains a separate check; lowering its count alone cannot prove containment.
+
+V4 validation (seed 6187795302574383407, scale 5, Streams 2.13.5): the fixed
+50-transect comparison recorded 266 to 116 river encounters, with median gaps
+95 to 219 blocks. These are sample results, not a universal spacing guarantee.
+The two retained coastal routes (1,559 and 3,104 blocks of planned length) passed
+strict face-connected, nonascending saved-water traversal from their first wet
+headwater sample to sea. All 18 inland bank boxes had zero outside-channel wet
+grass after fluid ticks and restart. Saved graphs/profile remained byte-identical
+with the current enable flag set false. Lake regressions separately passed the
+gross-footprint oracle above. Actual client views of narrow headwaters, a major
+confluence and the marine mouth were inspected; this remains block-based native
+Streams flow, not a sediment/erosion or discharge simulation.
+
+V2's high accumulation threshold removed the fine
+headwater network along with excess coastal channels. V3 restores the native
+minimum of 6 (preserving larger native overrides), uses growth multiplier 1,
+and expands the routing plate to 5,120 blocks at scale 5. Width remains tied to
+accumulation with 45% of the native width coefficient. Distances below are
+implementation targets, not universal real-river dimensions.
+
+The selector operates on the **plate-local** native directed graph before its
+indices and persistent cache are rebuilt. It can reject a short complete
+single-terminal coastal component (mainstem below 0.375 plate scales), while
+preserving components touching lakes or the plate boundary. On valid coastal
+trees it also prunes short source leaves below 0.0625 plate scales in one pass,
+keeping at least one incoming branch. Each candidate leaf, including its
+collapsed self geometry, must avoid protected lake/boundary reaches. Thus a
+lake elsewhere downstream does not preserve every tiny twig. Unknown,
+cyclic and multiple-terminal components remain untouched. This is conservative
+local selection, not a globally routed drainage-area model.
+
+Native node identity is `Math.round(coordinate * 16)`. Rounded parallel geometry
+must not create extra tributaries; collapsed self-edges can be native connection
+placeholders. After selection, retain original sink objects/order wherever
+retained endpoint geometry still supports them; do not reconstruct native sink
+semantics from a simplified graph. Lake metadata and relief are preserved.
+
+Large plates caused repeated TD tile reconstruction with the 64-entry cache.
+V3 uses a bounded 512-entry heightmap cache; server cleanup restores 64. This is
+an entry limit, not a bound on all caller-held or pending tile memory. Geometry
+and biome calculations are unchanged.
+
+The design follows the importance of small headwaters in real networks
+([EPA](https://www.epa.gov/cwa-404/learn-about-streams)) and upstream catchment
+connectivity ([USGS](https://water.usgs.gov/themes/hydrofabric/)). Hydraulic
+geometry relates width to discharge, with site-dependent coefficients
+([USGS](https://pubs.usgs.gov/pp/0252/report.pdf)); neither a universal minimum
+width nor fixed mouth spacing follows from those sources. CSV widths are plan
+widths; prove actual wetted widths from saved blocks separately.
+
+V3 scale-5 validation (seed 6187795302574383407, Streams 2.13.5): fresh candidate
+`build/watershed-v3-validation/worlds-c3/natural` completed two directed coastal
+routes of 1,559 and 3,104 planned blocks. Saved FULL chunks contained downhill
+water paths of 1,802 and 3,242 positions respectively, allowing face neighbours
+and one-block descending edge cascades. All 24-block-spaced samples with plan
+width at least 2 found nearby actual water. The first 25–250 blocks had sampled
+wetted-width medians of 2.5 and 3.5 blocks; the second route also crossed a
+25-block-wide water section. These are raster water transects, not bankfull
+measurements or a claim that every headwater stays narrow. The successful paths
+use known FULL chunks; the search also encountered three missing/unfinished
+neighbour chunks, which were not treated as water.
+
+All 1,157 selected FULL chunks became tickable and advanced 100 server ticks;
+native source, confluence, terminal and flow checks passed. Restart with the
+opposite opt-out flag retained profile 3, matched the topology snapshot and
+preserved all four native network files plus the marker byte-for-byte.
+Evidence: `physical-water.json`, `v3-physical.log`, `v3-restart-verified.json` in
+that validation directory. A source-to-terminal water path alone does not prove
+that every terminal in the world reaches an ocean.
+
+In the same 3,072-block-square plan window, length-weighted width below 8 blocks
+increased from 3.0% (v2) to 68.4% (v3). Marine-adjacent terminal counts were 4
+and 6, compared with 19 in the original v1 fixture. Boundary protection leaves
+one 138-block coastal stream; this is not a universal minimum length or mouth
+spacing guarantee. `river_routes.py` reports the largest source-to-terminal
+**shortest directed path** per marine terminal, including cyclic/multiple-outlet
+graphs; `river_hierarchy.py` restricts its basin-length metrics to valid DAGs.
+Do not equate their outlet subsets or label planned widths as physical water.
+
+The production CUDA JAR (without diagnostic classes) also passed the NeoForge
+build and Fabric Java compilation. A separate Prism instance/world named
+`TD Watershed Rivers v3` was installed from the verified saved chunks; actual F2
+screenshots were inspected at the thin headwater, confluence and estuary
+(`in-game-headwater.png`, `in-game-confluence.png`, `in-game-estuary.png`).
+The estuary camera is approximately (-2580,115,260), yaw 165, pitch 30.
+The native endpoint at (-2529,62,217) extends seaward beyond the visible shore
+crossing: framing only that endpoint misses the river mouth upstream to its west.
+F1 hides the HUD **and prevents this client from opening chat**; restore it
+before issuing observation commands. Use Save and Quit for integrated-server
+persistence; its command dispatcher does not expose `save-all flush`.
+
+Frozen **profile v2** raises minimum accumulation to 128 and the
+growth multiplier to at least 2 (effective threshold 256 with native
+`growFromWater=true`). These are summed upstream wetness/grid-cell units, not
+square kilometres or a promised mouth spacing. The native drainage selection
+removes insufficiently supplied channels before geometry, retaining native
+downstream routing rather than cutting connected graph segments after carving.
+The nominal ocean source-chain minimum is 640 blocks at scales 1/2 and 1,600
+at scale 5. Native dry/lake/junction exemptions remain. Width still follows
+the square root of accumulated drainage area, but its coefficient is halved;
+the base width and maximum remain intact. Slope-driven widening is reduced
+from .85 to .25 and delta-mouth strength from .10 to .02. This targets excessive
+minor-channel/estuary width without assigning every river the same width.
+Neither global basin rerouting across Streams plates nor a universal fixed
+distance between mouths is introduced.
+
+Existing **profile v1/v2** worlds keep their previous configuration and
+`td-natural-v1`/`td-natural-v2` caches; v3 uses `td-natural-v3`, and v4 uses
+`td-natural-v4`. Never move native graphs between these namespaces in a player
+world. Synthetic bank-only controls may copy a graph solely to isolate carving;
+they are not generation or playable-world acceptance evidence.
+
+For lateral-spread regression checks, `-PtdProbe.containmentAudit=true` freezes
+game ticks at server start, generates a fixed FULL chunk cohort, snapshots dry
+grass and water, schedules ordinary fluid ticks, then verifies at least 200
+actual game ticks. Existing submerged channel substrate is reported separately
+from newly inundated dry grass and water over outside-channel grass. Successful
+Gradle exit alone is not success: inspect `river_containment_audit.status` and
+`td-containment-comparison.json`. `containmentDetails=true` adds bounded native
+plan and block-state neighborhoods for diagnosis. Use fresh terrain to test
+carving; a restart cannot exercise generation-only bank corrections.
+
+`test_natural_adapter.py --frozen-jar PATH` additionally compares saved profiles
+1–3 against a preserved production binary at scales 2, 5 and 6 for every supplied
+native JAR. Without this explicit artifact, the tool reports that comparison as
+skipped; its native layout and adapter checks still run.
+The persisted version and namespace provide isolation: native graph loading
+warns about a fingerprint mismatch but still accepts that graph. A fingerprint
+is not a fail-closed migration barrier. Never switch an already generated
+world's marker to a newer version.
+Create a fresh world to inspect the new profile.
+
+Profile v1 raises the native accumulation minimum from 6 to at least 24 and
+raises the growth threshold multiplier to at least 1. Coastal minimum chain
+length is 256 blocks at scales 1/2, scaled to 640 at scale 5, converted to native
+grid nodes with ceiling division. This is a nominal grid-chain threshold, not a
+measured shoreline setback. Scope 1 targets ocean source chains and preserves
+tributary/lake joins; native dry-channel exceptions still apply. Confinement
+follows low terrain after native meandering. Native terrain/climate hydraulic
+shaping provides asymmetric beds and variable widths; reduced bar/delta strength
+avoids making every lowland river a braid. `streamDepth` is capped at 0.12 of
+full width (native bed shaping still varies it); existing native maximum width
+and world-scale policy remain the bounds. Global Streams TOML is not edited.
+
+The grade module preserves x/z, widths, speeds, topology and exact grades at
+sources, outlets and junctions. It only lowers gentle unbranched chain kinks,
+by at most one additional block, and skips lake approaches, steep or invalid
+chains. It never flattens TD mountains to force a level river. This is bounded
+grade smoothing, **not a continuous sub-block water renderer** or a hydraulic
+simulation: native integer water levels and natural terrain drops remain.
+No periodic eight-block drop pattern or fluid-tick settling is introduced.
+Major floodplain creation, erosion history and full-size 100+ block rivers are
+outside the currently audited native geometry envelope.
+
+Native graph files for v1 use `streamsreflowing/minecraft_overworld/td-natural-v1/`.
+The native seed/config fingerprint is diagnostic, not a load rejection. Do not change the profile's
+algorithm/constants in place for released worlds: introduce a new saved version,
+cache namespace and matching flow-cache fingerprint, retaining the old policy.
+Streams config/model/scale changes likewise need fresh comparison worlds.
+
+Before adding an upgraded Streams version to the audited allowlist, run
+`python tools/streams_probe/test_natural_adapter.py` against the actual JAR,
+then run a fresh-world and restart topology/tick probe. Public config and assembly
+checks reduce porting work; they do not promise automatic future compatibility.
+Use `--jar VERSION=PATH` (repeatable) and `--java-home PATH` to check other local
+artifacts without editing the test. Review the actual constructor injection sites
+and retained network metadata before changing the version allowlist.
+Do not use `DeadEndResolver` for coastal thinning: in 2.13.5 it admits otherwise
+discarded no-water dead ends, rather than filtering normal marine outlets.
+
+For a same-seed comparison, `prepare-natural-comparison.py --template-world WORLD
+--output NEW_DIRECTORY` stages two chunk-empty dedicated worlds, retaining TD
+scale and datapacks and copying no old river caches. Run the baseline with
+`-PtdRiver.natural=false` and natural with `-PtdRiver.natural=true` through the
+probe init script on their first load. Add `-PtdProbe.naturalRiverAudit=true`
+and the same `topologyCenterX/Z` plus `naturalRadius` (default 768) to export
+`td-natural-river-network.csv` and the effective profile. `river_metrics.py CSV
+--bounds MIN_X MIN_Z MAX_X MAX_Z --baseline BASELINE_CSV` compares clipped plan
+length density and widths; repeated `--transect X1 Z1 X2 Z2` counts centerline
+crossings. Plan crossings are not a physical walking/water audit. Keep the
+existing topology, marine-connectivity and 100-tick checks for actual blocks.
+`naturalCenterX/Z` can place the export separately from the physical topology
+probe. With `naturalCoastAudit=true`, `td-natural-coast-terminals.csv` lists
+downstream graph terminals in those bounds. `marineWithin32=true` additionally
+requires a grade at most sea level + 2 and a sampled original TD marine-mask
+column within 32 blocks. These are marine-adjacent **planned** terminals, not
+confirmed physical mouths; lake/sea connectivity still needs the block audit.
+`naturalPlanOnly=true` stops after the export and explicitly reports zero physical
+chunks checked. `river_hierarchy.py` measures width-length distributions and
+source-to-first-confluence paths using full exported topology before clipping.
+`saved_water.py` reads actual FULL Anvil chunks and samples water transects;
+missing or unfinished chunks cannot establish a dry-channel defect.
+For long physical routes, `chunksFile` accepts a UTF-8 file with `X,Z` chunk
+coordinates separated by semicolons or newlines, avoiding command-line length
+limits. It is mutually exclusive with `chunks`.
+`river_routes.py` reconstructs directed source-to-terminal shortest paths even
+where braids/cycles prevent simple tree statistics. Its reported maximum is
+the largest of those shortest paths, not a longest simple path or basin size.
+In Windows PowerShell, quote complete Gradle properties such as
+`'-Pneoforge_version=21.1.249'`; an unquoted dotted value can become `21` and
+incorrectly trigger the plugin's newer-Minecraft fallback.
+
+Validated v1 fixture: Streams 2.13.5 + C2ME, seed `6187795302574383407`, scale 5,
+bounds X `-4341..-2805`, Z `-676..860`. Same-seed plan length fell from 20,073 to
+10,098 blocks (49.7%); in-bounds source nodes from 143 to 29. Two fixed horizontal
+centerline transects at Z 600/700 crossed 16/10 channels before and 9/6 after.
+These are plan measurements, not a walking or all-seeds aesthetic claim.
+Four actual source/junction/outlet/flow chunks passed topology and 100 ticks on
+first generation and restart. Restart with the opposite JVM opt-out retained
+enabled v1; the profile, network CSV and four native graph files kept identical
+SHA-256 values. Marine validation found 32/32 sampled planned centers wet and
+physical terminal water on TD's ocean mask at `-3575,62,701`; the direct biome
+was beach, so this is the `td_marine_mask_connection` result, not the stricter
+direct-ocean-biome result or a full continuous source-to-sea route proof.
+Evidence is under `build/natural-river-validation/`; it is not packaged.
+
+V2 coastal acceptance (same seed, scale 5, Streams 2.13.5 + C2ME): expanded
+bounds X `-5036..-1964`, Z `-936..2136` contain 19 marine-adjacent planned
+terminals in v1 and 4 in v2. Two fixed plan transects at Z 600/700 change
+13/12 crossings to 2/1. Plan length changes 19,393 to 5,691 blocks. The same
+central mouth at `-3571,704` changes full planned width 59.5 to 19.4 blocks;
+do not compare terminal median widths as though the removed minor streams
+were still in the sample. One pair of retained terminals is about 51 blocks
+apart; there is no hard universal minimum spacing.
+
+The v2 physical run generated 331 selected FULL chunks, passed topology and
+100 ticks, and retained identical profile/native graph hashes after restart
+with the opposite JVM opt-out. A saved-block search found an 871-position
+downhill water path from `-3620,91,243` to `-3571,62,704`, through 55 FULL
+chunks, without missing chunks or a search-budget cutoff. Descending corner
+steps are allowed for native one-block cascades. Marine sampling was 25/25
+wet and separately reached TD's original marine mask at `-3575,62,701`.
+The path search bounds must cover the actual planned bend (X reaches -3425);
+the earlier narrower X bound cut off that bend and was not a connectivity
+failure. v1 marker/four pre-existing network files also retained exact hashes
+when loaded by the new code. Evidence, plan plots and measured-block maps are
+under `build/coastal-v2-validation/`; plots are not in-game screenshots.
+The production CUDA JAR was also launched in the separate Prism
+`TD-Streams-Coastal-v2` instance with Sodium and Xaero's World Map. Actual
+in-game inspection covered the central estuary, an upstream bend and the
+remaining nearby mouth pair; F2 captures are `in-game-estuary.png` and
+`in-game-mainstem.png` in that evidence directory. Existing player instances
+and worlds were not overwritten.
+
+### Legacy integration and previous validation
+
 The active river implementation is **Streams Reflowing 2.13.1**, with Terrain
 Diffusion providing the base terrain. Keep Streams rivers, lakes, vegetation and
 water-flow settings enabled. The separate finite TD preview must be disabled in

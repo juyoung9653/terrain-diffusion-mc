@@ -76,10 +76,18 @@ public final class LocalTerrainProvider {
     private static record CacheEntry(HeightmapData data, AtomicLong lastAccessed) {}
 
     private static final int MAX_CACHE_SIZE = 64;
+    private static volatile int activeCacheSize = MAX_CACHE_SIZE;
     private static final int MAX_CACHE_SIZE_HEADROOM = 8;
     private static final Map<CacheKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
     private static final AtomicLong CACHE_CLOCK = new AtomicLong();
     private static final Map<CacheKey, Future<HeightmapData>> PENDING = new ConcurrentHashMap<>();
+
+    /** Larger native river plates revisit a bounded working set across sampler threads. */
+    public static void setLargeRiverPlanningCache(boolean enabled) {
+        activeCacheSize = enabled ? 512 : MAX_CACHE_SIZE;
+        LOG.info("Terrain heightmap cache target: {} tiles", activeCacheSize);
+        evictLruTo(activeCacheSize);
+    }
     /** Single thread for pipeline.get() so MemoryTileStore is not accessed concurrently. */
     private static final ExecutorService INFERENCE_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "terrain-diffusion-inference");
@@ -356,7 +364,7 @@ public final class LocalTerrainProvider {
                     "Terrain Diffusion ({}) finished generating region {}x{} ({} newly computed windows)",
                     OnnxModel.getResolvedInferenceProvider(), regionWidth, regionHeight, newlyComputedWindowCount);
             CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
-            evictLruTo(MAX_CACHE_SIZE);
+            evictLruTo(activeCacheSize);
             PENDING.remove(key);
             return data;
         });
@@ -383,7 +391,7 @@ public final class LocalTerrainProvider {
         if (CACHE.size() > maxSize + headroomHalf) {
             CACHE.entrySet().stream()
                 .sorted(Comparator.comparingLong(e -> e.getValue().lastAccessed.get()))
-                .limit(MAX_CACHE_SIZE_HEADROOM)
+                .limit(Math.max(MAX_CACHE_SIZE_HEADROOM, CACHE.size() - maxSize))
                 .map(Map.Entry::getKey)
                 .forEach(CACHE::remove);
         }
