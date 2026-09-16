@@ -32,7 +32,7 @@ public final class WorldNaturalRiverState extends SavedData {
      * Each routing revision has a separate namespace. Existing worlds retain
      * their stored profile when new worlds adopt a later revision.
      */
-    private static final int VERSION = 4;
+    private static final int VERSION = NaturalRiverProfile.VERSION;
     private static final Settings DISABLED = new Settings(false, 0, 0L, WorldScaleManager.DEFAULT_SCALE);
     private static final Map<ServerLevel, Settings> SETTINGS = new ConcurrentHashMap<>();
     private static volatile boolean adapterAvailable;
@@ -115,7 +115,9 @@ public final class WorldNaturalRiverState extends SavedData {
         boolean nativeCacheExists = Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v1"))
                 || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v2"))
                 || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v3"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v4"));
+                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v4"))
+                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v5"))
+                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v6"));
         WorldNaturalRiverState state = level.getDataStorage().computeIfAbsent(TYPE, DATA_NAME);
         if (state.settings.version == 0) {
             // DimensionDataStorage logs and swallows malformed NBT/load failures. Do not

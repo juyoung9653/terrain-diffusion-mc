@@ -21,7 +21,7 @@ public final class StreamsRiverRasterMixin {
             at=@At(value="INVOKE",target="Ldev/streamsreflowing/core/RiverEngine;insetFor(DLdev/streamsreflowing/core/config/StreamsConfig;)I"),
             require=1,remap=false)
     private int terrainDiffusion$stableInset(double width,@Coerce Object config,Operation<Integer> original) {
-        return original.call(StreamsNaturalRiverAdapter.version(config)==4 ? 3.0 : width,config);
+        return original.call(StreamsNaturalRiverAdapter.version(config)>=4 ? 3.0 : width,config);
     }
     @Inject(method={"a(DDLdev/streamsreflowing/core/river/RiverSample;Z)Ldev/streamsreflowing/core/compose/ColumnPlan;",
             "a(DDLdev/streamsreflowing/core/river/RiverSample;Z[Ldev/streamsreflowing/core/plate/PlateKey;)Ldev/streamsreflowing/core/compose/ColumnPlan;"},

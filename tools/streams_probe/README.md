@@ -10,7 +10,7 @@ with `probe.init.gradle` enabled.
 ### TD natural river profile (new worlds)
 
 New real NeoForge TD Overworlds with audited Streams 2.13.1/2.13.5 pin natural
-profile v4 in `data/terrain_diffusion_natural_rivers.dat`. Legacy worlds, Fabric,
+profile v6 in `data/terrain_diffusion_natural_rivers.dat`. Legacy worlds, Fabric,
 worlds without an audited adapter and finite-preview worlds remain disabled.
 `-Dtd.rivers.natural=false` opts out **only before the first world creation**;
 the saved choice wins on restart. Missing/corrupt profile data beside an existing
@@ -28,7 +28,7 @@ connections, indexing, water flow and bank decoration remain in Streams.
 the native types. The shipped JARs strip the Java Record attribute: use audited
 accessor/constructor layouts, never reflection field order or `isRecord()` alone.
 
-New worlds use **profile v4**. Profiles 1–3 retain their saved configuration and
+New worlds use **profile v6**. Profiles 1–5 retain their saved configuration and
 cache namespaces. V4 adds a deterministic directed-graph selection after the V3
 watershed policy: optional tributaries need 0.15 plate scales of remaining path
 and 0.05 plate scales of source clearance from retained channels (768 and 256
@@ -40,6 +40,92 @@ that mainstem. Other mandatory upstream paths are completed before
 optional admission so their geometry participates in spacing. A monotone width
 response narrows intermediate channels while retaining the source taper and
 full widths of 24 blocks or more. Actual wetted width still needs engine checks.
+
+V5 preserves the v4 routing, widths, water grades, lake blending and connectivity
+repairs. It adds a bounded dry-bank finishing pass before corner/containment
+repairs: only narrow inland corridors may lose up to three soil blocks of bank
+height. A one-block freeboard above nearby planned channel water is retained;
+gentle reaches get a softer bank ramp than steep reaches. Lakes, sources,
+outlets, protected structures/biomes, fluids and non-soil obstructions are
+excluded. Exposed material varies in coherent patches rather than per-block
+random speckles. The pass runs only while generating new v5 chunks; it does not
+reshape a player's saved v4 terrain. V5 uses its own `td-natural-v5` namespace.
+For a bounded regression run, `-PtdProbe.naturalBankShapeAudit=true` reports
+edited columns and removed blocks; `-PtdRiver.bankTrace=true` emits exact
+before/after bank heights for checking cut limits against saved blocks. These
+counters alone do not prove water containment or aesthetic quality.
+
+V5's dry-bank trimming did not resolve deeply incised narrow rivers: saved
+samples included water 8–11 blocks below physical ground only four blocks to
+either side, while its inherited containment pass could build soil crests.
+V6 instead raises eligible graph-node grades toward the uncarved TD surface.
+It queries the generator's base height directly, bypassing native grade
+filtering/calibration. The target water is one block below the original top
+solid block, bounded by nearby terrain, a 12-block maximum lift, and a width
+fade to zero at half-width four. A graph-wide difference-constraint solver
+limits additional descent to half a block per horizontal block and prevents
+new downstream ascents; existing sharp falls may flatten without that limit. Final grades are floored to 1/64-block policy precision.
+Wide nodes, terminals and sampled lake/border-intersecting reaches pin the
+correction. These constraints mean not every stream can achieve the shallow
+target. Native indexing is rebuilt before writing the separate v6 cache.
+
+V6 disables TD soil-crest construction beside narrow tributaries and V5 dry-bank trimming, retains
+corner connectivity repairs, and suppresses only an audited native dry-bank
+AIR write where existing soil should remain. This adds no soil or water. The
+hook is ordinal six in `RiverCarverFeature.place` (bytecode 6982 in 2.13.1,
+7198 in 2.13.5); the smoke test pins both layouts. Its retained-write counter
+does not prove bank containment: later native cleanup and water ticks still
+require physical validation. Compare actual saved water and uncarved base
+heights as well as images; a passed no-flood audit alone is not naturalness.
+
+The fresh v6 scale-5 validation (seed `6187795302574383407`) generated
+1,354 FULL chunks and settled 100 ticks; all seven corridor bank boxes and a
+200-tick containment audit passed without newly inundated grass. Both freshly
+selected source-to-marine routes have strictly nonascending, face-connected
+saved water (1,155/1,155 required chunks FULL). At the fixed 22 v5 narrow
+samples, all 22 still contain water. Median ground height above water at
+4/8/12 blocks to either side changed from 3/4/6 to 2/2/4 blocks. At
+`(-3932,-1433)`, actual water rose from Y216 to Y225 against an original top
+solid of Y227. These are sampled results, not a universal shallow-depth bound.
+Restarting with `tdRiver.natural=false` retained profile 6 and all four SRN
+files byte-for-byte, with topology and settled-water checks passing again.
+The retention hook recorded zero writes in this cohort, so the cohort does not
+prove its active path; its placement is separately bytecode-audited.
+
+Do not infer grade-only invariants from two separately generated native caches:
+C1 and C2 already received different segment counts before shallow refinement.
+The upstream reproducibility cause is unresolved. A same-input replay over
+6,836 real edges verified preserved XY/width/speed, no lowering or new uphill
+edges, a maximum lift of 12, and 6,070 unchanged wide endpoints. Native
+reassembly retains the supplied lake list; cross-world lake identity is not a
+passing claim. Validate saved routes against each candidate's own graph.
+
+Read current bank tops from `MOTION_BLOCKING_NO_LEAVES`, not `OCEAN_FLOOR_WG`:
+after CARVERS, `ProtoChunk.setBlockState` maintains the final heightmaps only.
+The stale worldgen map can point at already-carved air and silently skip most
+bank edits; it may also be unprimed at the native cut site. V6 retention
+checks the existing dry block directly without a heightmap query. Validate on fresh chunks and require actual edit traces. Serialize
+ordinary builds and live probe runs: an ordinary compile can remove diagnostic
+classes from the shared output while a running probe still needs them.
+For a new-world test, `-PtdProbe.expectedNaturalProfile=6` rejects a disabled or
+wrong saved profile before exporting plans or requesting chunks. A chunk-empty
+copy still needs `Data.initialized=0`; removing caches alone does not make an
+initialized legacy world eligible for first-world enablement. Use
+`prepare-natural-comparison.py` rather than copying `level.dat` unchanged.
+
+V5 scale-5 validation (seed 6187795302574383407, Streams 2.13.5): a genuinely
+new enabled world passed the 1,354-FULL-chunk/100-tick native topology audit,
+a 200-tick containment check with zero newly inundated grass, and seven inland
+bank boxes with zero outside-channel wet grass. The finishing trace recorded
+1,626 lowered columns (1,510 one-block and 116 two-block cuts). Saved FULL
+chunks verified 1,508 of those tops; 118 unfinished halo columns were excluded.
+Fresh exported graph routes in bounds `-4300,-1700,-2450,750` yielded actual
+nonascending, face-connected water paths of 3,511 and 2,032 positions to
+sea-level endpoints; all 1,155 requested route chunks were FULL. This is
+sampled route/containment evidence, not an all-world guarantee.
+Restarting that world with `-PtdRiver.natural=false` retained its enabled v5
+marker and all four native graph files byte-for-byte; native topology matched,
+and loading saved terrain produced no further bank edits.
 
 At voxel resolution, v4 raises positive sub-voxel plan half-widths to 0.71
 (just over half a block diagonal), including the native source taper. Otherwise

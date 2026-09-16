@@ -256,12 +256,16 @@ river generation and flowing-water behavior. This repository supplies biome
 compatibility, a structure shield, and a NeoForge integration for Streams 2.13.1 that defers
 speculative watershed prefetch on TD terrain. Streams retains its native river
 routing, confluences, outlets, vegetation and water flow. New NeoForge TD worlds
-with audited Streams 2.13.1/2.13.5 use a persisted **natural river profile v4**:
+with audited Streams 2.13.1/2.13.5 use a persisted **natural river profile v6**:
 fine tributaries feed larger drainage-scaled rivers across a larger routing area,
 while short independent coastal systems and unprotected short source twigs are
 reduced. V4 additionally admits long tributaries with source spacing, preserves
 complete protected headwater paths, and extends the narrow part of the width
-progression. Terrain-confined bends, shallower asymmetric beds and restrained bars
+progression. V6 fits narrow tributary elevations closer to the original terrain
+before caching the connected graph, and retains existing bank soil instead of
+building raised dirt crests. Grade transitions remain downstream-compatible;
+wide channels, lake connections and plate boundaries constrain the correction.
+Terrain-confined bends, shallower asymmetric beds and restrained bars
 remain. A TD-owned module conservatively smooths
 gentle grades before Streams caches the graph. Existing worlds retain their
 previous profile; installing the JAR does not rewrite saved rivers. See the

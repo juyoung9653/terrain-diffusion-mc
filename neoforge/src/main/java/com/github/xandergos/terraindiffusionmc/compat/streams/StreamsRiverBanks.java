@@ -9,16 +9,17 @@ import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
-/** New v4 chunks only: connect raster corners, then contain shallow lateral water steps. */
+/** Connect raster corners and contain lateral steps; v5 first softens dry narrow-stream banks. */
 public final class StreamsRiverBanks {
     private StreamsRiverBanks() { }
     public static void finish(WorldGenLevel level, int minX, int minZ) {
-        if (WorldNaturalRiverState.version(level.getLevel()) != 4) return;
+        if (WorldNaturalRiverState.version(level.getLevel()) < 4) return;
         try {
             Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen");
             Object engine = worldgen.getMethod("engine", WorldGenLevel.class).invoke(null, level);
             Object config = engine.getClass().getMethod("config").invoke(engine);
-            if (StreamsNaturalRiverAdapter.version(config) != 4) return;
+            int version = StreamsNaturalRiverAdapter.version(config);
+            if (version < 4) return;
             if ((Boolean) engine.getClass().getMethod("lakeNearChunk", int.class, int.class, int.class)
                     .invoke(engine, minX, minZ, 8)) return;
             Class<?> carver = Class.forName("dev.streamsreflowing.worldgen.RiverCarverFeature");
@@ -29,6 +30,9 @@ public final class StreamsRiverBanks {
             Method blockedBiome = Class.forName("dev.streamsreflowing.worldgen.StreamBiomeBlacklist")
                     .getMethod("isBlocked", Holder.class);
             int sea = (int) StreamsNaturalNetwork.n(config, "seaLevel");
+            if (version == 5) {
+                StreamsNaturalBanks.refine(level, minX, minZ, engine, sea, protection, shielded, blockedBiome);
+            }
             Method plan = engine.getClass().getMethod("plan", int.class, int.class);
             Class<?> column = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
             Method channel = column.getMethod("inChannel"), corridor = column.getMethod("inCorridor"),
@@ -60,6 +64,9 @@ public final class StreamsRiverBanks {
                     // Native fluid ticks fill a successful excavation; no water source is added.
                     continue;
                 }
+                // V6's narrow tributaries use original containing soil.  Keep
+                // the preceding wide-river repair outside that guarded scope.
+                if (version >= 6 && p.width < 4.0) continue;
                 int crest = Integer.MIN_VALUE;
                 for (BankPlan n : new BankPlan[]{plans[x-1][z],plans[x+1][z],plans[x][z-1],plans[x][z+1]})
                     if (n.channel && n.surface <= p.surface+6) crest = Math.max(crest,n.surface+1);

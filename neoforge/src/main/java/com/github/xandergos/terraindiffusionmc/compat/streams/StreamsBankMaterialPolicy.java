@@ -6,6 +6,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankShape;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Blocks;
@@ -80,11 +81,41 @@ public final class StreamsBankMaterialPolicy {
         return COHERENT_POINT_BAR_EVALUATIONS.get();
     }
 
+    /**
+     * Selects only the exposed top of a TD v5 narrow-bank shelf.  Unlike the
+     * point-bar interception above, this runs after Streams has finished its
+     * geometry pass, so it deliberately never changes a depth fill.
+     */
+    public static BlockState refinedBankTop(WorldGenLevel level, int blockX, int blockZ,
+                                            BlockState retainedSoil, boolean nearEdge) {
+        if (retainedSoil.is(Blocks.MUD)) return retainedSoil;
+        short terrainBiomeId = terrainBiome(level, blockX, blockZ);
+        if (terrainBiomeId == ShoreClassifier.STONY_SHORE) return Blocks.STONE.defaultBlockState();
+        if (terrainBiomeId == GRAVEL_BEACH) return Blocks.GRAVEL.defaultBlockState();
+        if (!nearEdge) return retainedSoil;
+        double exposure = NaturalRiverBankShape.exposure(blockX, blockZ);
+        if (exposure >= .72) return Blocks.GRAVEL.defaultBlockState();
+        if (exposure >= .54) return Blocks.COARSE_DIRT.defaultBlockState();
+        return retainedSoil;
+    }
+
     private static FastNoiseLite pointBarSediment() {
         FastNoiseLite noise = new FastNoiseLite(419731);
         noise.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
         noise.SetFrequency(1f / 96f);
         return noise;
+    }
+
+    private static short terrainBiome(WorldGenLevel level, int blockX, int blockZ) {
+        if (!(level.getLevel().getChunkSource().getGenerator().getBiomeSource()
+                instanceof TerrainDiffusionBiomeSource source) || !source.naturalBiomes()) return 0;
+        int size = TerrainDiffusionConfig.tileSize();
+        int tileX = Math.floorDiv(blockX, size) * size;
+        int tileZ = Math.floorDiv(blockZ, size) * size;
+        LocalTerrainProvider.HeightmapData tile = LocalTerrainProvider.getInstance()
+                .fetchHeightmap(tileZ, tileX, tileZ + size, tileX + size);
+        return tile == null || tile.ecology == null ? 0
+                : tile.ecology.terrainBiomeId(blockX - tileX, blockZ - tileZ);
     }
 
     private static short terrainId(String id) {

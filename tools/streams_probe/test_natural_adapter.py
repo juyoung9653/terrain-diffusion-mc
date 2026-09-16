@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import os
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -81,6 +82,10 @@ def bytecode_layout(jar: Path, version: str) -> None:
     for field in ("bendAsymmetry", "channelBars"):
         require((" " + field + ";") in hydraulic, "HydraulicGeometry component missing: " + field)
     normalized_carver = " ".join(carver.split())
+    place = carver.split("public boolean place(", 1)[1].split("\n  private ", 1)[0]
+    writes = re.findall(r"(?m)^\s*(\d+): invokeinterface .*WorldGenLevel\.setBlock:", place)
+    require(len(writes) > 6 and writes[6] == ("6982" if version == "2.13.1" else "7198"),
+            "RiverCarverFeature dry-bank AIR write ordinal 6 moved; re-audit its branch before applying v6 retention")
     normalized_blacklist = " ".join(blacklist.split())
     normalized_column = " ".join(column.split())
     normalized_engine = " ".join(engine.split())
@@ -180,7 +185,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--java-home", type=Path, help="JDK 21 home; defaults to JAVA_HOME then known installed locations")
     parser.add_argument("--jar", action="append", metavar="VERSION=PATH", help="repeatable audited native JAR override")
-    parser.add_argument("--frozen-jar", type=Path, help="optional preserved V3 JAR for profile 1-3 config comparison")
+    parser.add_argument("--frozen-jar", type=Path, help="preserved JAR for configuration comparison through its supported profile version")
     args = parser.parse_args()
     global JAVA_HOME, JAVAC, JAVA, JAVAP
     JAVA_HOME = find_java_home(args.java_home)

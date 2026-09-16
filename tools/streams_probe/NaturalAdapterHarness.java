@@ -91,7 +91,7 @@ public final class NaturalAdapterHarness {
         require(number(customV2, "minRiverAccumulation") == 500.0, "v2 retains a larger native threshold");
         require(number(customV2, "growDensity") == 3.0, "v2 retains a larger native growth density");
         boolean rejectedUnknownVersion = false;
-        try { StreamsNaturalConfig.apply(original, scale, 5); }
+        try { StreamsNaturalConfig.apply(original, scale, 7); }
         catch (IllegalArgumentException expected) { rejectedUnknownVersion = true; }
         require(rejectedUnknownVersion, "profile dispatch must reject an unknown version");
         Object v3 = StreamsNaturalConfig.apply(original, scale, 3);
@@ -103,6 +103,10 @@ public final class NaturalAdapterHarness {
         require(configValues(original).equals(originalValues), "v3 must not mutate original config");
         Object v4 = StreamsNaturalConfig.apply(original, scale, 4);
         require(configValues(v4).equals(configValues(v3)), "v4 keeps the frozen native routing settings; hierarchy/width response is separate");
+        Object v5 = StreamsNaturalConfig.apply(original, scale, 5);
+        require(configValues(v5).equals(configValues(v4)), "v5 bank finishing must not change routing, widths, water grades or lake settings");
+        Object v6 = StreamsNaturalConfig.apply(original, scale, 6);
+        require(configValues(v6).equals(configValues(v5)), "v6 regrades the selected graph without changing native routing settings");
         double previous = 0;
         for (int i = 0; i <= 3200; i++) {
             double width = i / 100.0, narrowed = NaturalRiverProfile.narrowHalfWidthV4(width);

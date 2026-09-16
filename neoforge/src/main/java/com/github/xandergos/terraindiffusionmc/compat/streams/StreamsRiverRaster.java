@@ -12,7 +12,7 @@ public final class StreamsRiverRaster {
         if (column == null || !flag(column,"inCorridor")) return column;
         try {
             Object config = engine.getClass().getMethod("config").invoke(engine);
-            if (StreamsNaturalRiverAdapter.version(config) != 4) return column;
+            if (StreamsNaturalRiverAdapter.version(config) < 4) return column;
             double width = number(column,"width");
             // Half a voxel diagonal keeps a continuous centreline face-connected.
             // Sub-voxel source taper must not turn a spring into isolated puddles.
@@ -45,7 +45,7 @@ public final class StreamsRiverRaster {
             Object engine = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen")
                     .getMethod("engine",WorldGenLevel.class).invoke(null,level);
             Object config = engine.getClass().getMethod("config").invoke(engine);
-            if (StreamsNaturalRiverAdapter.version(config) != 4) return proposed;
+            if (StreamsNaturalRiverAdapter.version(config) < 4) return proposed;
             Method plan = engine.getClass().getMethod("plan",int.class,int.class);
             Object centre = plan.invoke(engine,x,z);
             if (flag(centre,"source") || flag(centre,"terminal")

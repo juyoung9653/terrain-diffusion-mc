@@ -97,6 +97,12 @@ public final class StreamsReflowingProbe {
         String terminal = "success";
         try {
             ServerLevel level = server.overworld();
+            int expectedNaturalProfile = Integer.getInteger("td.streamsProbe.expectedNaturalProfile", 0);
+            if (expectedNaturalProfile > 0 && (!com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.enabled(level)
+                    || com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.version(level) != expectedNaturalProfile)) {
+                throw new IllegalStateException("Expected enabled natural river profile " + expectedNaturalProfile
+                        + "; check the fresh template's initialized flag and saved profile before generating chunks");
+            }
             auditCustomBiomes(level, receipts);
             if (Boolean.getBoolean("td.streamsProbe.previewSessionAudit")) emit(receipts, auditPreviewSession());
             if (Boolean.getBoolean("td.streamsProbe.playerPrefetchAudit")) {
@@ -378,6 +384,13 @@ public final class StreamsReflowingProbe {
             }
             if (Boolean.getBoolean("td.streamsProbe.previewSessionAudit")) {
                 emit(receipts, json("streams_bank_material_audit", "status", "observed", "counters", streamsBankCounters()));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.naturalBankShapeAudit")) {
+                emit(receipts, json("natural_bank_shape", "status", "observed",
+                        "shapedColumns", com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNaturalBanks.shapedColumns(),
+                        "removedBlocks", com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNaturalBanks.removedBlocks()));
+                emit(receipts, json("shallow_bank_retention", "status", "observed",
+                        "retainedWrites", com.github.xandergos.terraindiffusionmc.compat.streams.StreamsShallowBanks.retainedWrites()));
             }
             emit(receipts, json("complete", "status", terminal, "elapsedMs",
                     TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started),

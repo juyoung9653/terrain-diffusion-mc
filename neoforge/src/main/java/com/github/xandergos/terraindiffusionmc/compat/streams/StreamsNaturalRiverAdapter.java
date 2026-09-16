@@ -9,12 +9,15 @@ import java.util.IdentityHashMap;
 import java.util.Map;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.WorldGenLevel;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.levelgen.Heightmap;
 import org.slf4j.LoggerFactory;
 import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
 
 /** World-scoped native boundary. All geometry policy belongs to TD, not a patched Streams JAR. */
 public final class StreamsNaturalRiverAdapter {
     private static final Map<Object, Integer> CONFIGS = Collections.synchronizedMap(new IdentityHashMap<>());
+    private static final Map<Object, ServerLevel> TERRAIN_LEVELS = Collections.synchronizedMap(new IdentityHashMap<>());
     private StreamsNaturalRiverAdapter() { }
 
     public static Object configure(WorldGenLevel level, Object nativeConfig) {
@@ -22,6 +25,7 @@ public final class StreamsNaturalRiverAdapter {
         int version = WorldNaturalRiverState.version(level.getLevel());
         Object config = StreamsNaturalConfig.apply(nativeConfig, StreamsScalePolicy.activeScale(level), version);
         CONFIGS.put(config, version);
+        if (version == 6) TERRAIN_LEVELS.put(config, level.getLevel());
         if (version >= 3) LocalTerrainProvider.setLargeRiverPlanningCache(true);
         LoggerFactory.getLogger("TerrainDiffusion/NaturalRivers").info(
                 "Natural river profile v{}: accumulation {}, coastal chain {} cells, terrain confinement, asymmetric banks",
@@ -32,6 +36,15 @@ public final class StreamsNaturalRiverAdapter {
 
     public static boolean active(Object config) { return CONFIGS.containsKey(config); }
     public static int version(Object config) { return CONFIGS.getOrDefault(config, 0); }
+
+    /** Uncarved TD density boundary, independent of native grade calibration/filtering. */
+    static com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverMorphology.Ground originalTerrain(Object config) {
+        ServerLevel level = TERRAIN_LEVELS.get(config);
+        if (level == null) throw new IllegalStateException("Missing v6 terrain binding");
+        var generator = level.getChunkSource().getGenerator();
+        var randomState = level.getChunkSource().randomState();
+        return (x, z) -> generator.getBaseHeight(x, z, Heightmap.Types.OCEAN_FLOOR_WG, level, randomState);
+    }
 
     /** Per-build bounded TD ocean query. Heightmap coordinates are Z,X, matching LocalTerrainProvider. */
     static boolean tdMarineWithin16(int x, int z, Map<Long, LocalTerrainProvider.HeightmapData> tiles) {
@@ -72,7 +85,7 @@ public final class StreamsNaturalRiverAdapter {
                 } catch (ReflectiveOperationException failure) { return false; }
             };
             Object selected = StreamsWatershedNetwork.select(network, domain, terrain, config, marine);
-            return version(config) == 4 ? StreamsHierarchyNetwork.select(selected, domain, config) : selected;
+            return version(config) >= 4 ? StreamsHierarchyNetwork.select(selected, domain, config) : selected;
         } catch (ReflectiveOperationException | RuntimeException failure) {
             LoggerFactory.getLogger("TerrainDiffusion/NaturalRivers").warn(
                     "Natural river profile v{} network adaptation failed open; preserving native network", version(config), failure);
@@ -85,6 +98,7 @@ public final class StreamsNaturalRiverAdapter {
     }
     public static void clear() {
         CONFIGS.clear();
+        TERRAIN_LEVELS.clear();
         LocalTerrainProvider.setLargeRiverPlanningCache(false);
     }
 }

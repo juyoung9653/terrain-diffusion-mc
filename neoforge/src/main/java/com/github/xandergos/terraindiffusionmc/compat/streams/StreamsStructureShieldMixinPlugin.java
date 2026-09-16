@@ -17,6 +17,7 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsNaturalRiverMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsNaturalNetworkMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsRiverBanksMixin",
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsShallowBanksMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsRiverRasterMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsBankMaterialMixin");

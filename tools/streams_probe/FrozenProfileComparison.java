@@ -11,16 +11,19 @@ public final class FrozenProfileComparison {
         URL nativeJar = Path.of(args[1]).toUri().toURL();
         try (URLClassLoader frozen = loader(Path.of(args[0]).toUri().toURL(), nativeJar);
              URLClassLoader current = loader(Path.of(args[2]).toUri().toURL(), nativeJar)) {
+            String policy = "com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile";
+            int preserved = Math.min(Class.forName(policy, true, frozen).getField("VERSION").getInt(null),
+                    Class.forName(policy, true, current).getField("VERSION").getInt(null));
             for (int scaleIndex = 3; scaleIndex < args.length; scaleIndex++) {
                 int scale = Integer.parseInt(args[scaleIndex]);
-                for (int profile = 1; profile <= 3; profile++) {
+                for (int profile = 1; profile <= preserved; profile++) {
                     if (!config(frozen, scale, profile).equals(config(current, scale, profile))) {
-                        throw new AssertionError("scale " + scale + " profile " + profile + " differs from frozen-v3");
+                        throw new AssertionError("scale " + scale + " profile " + profile + " differs from frozen JAR");
                     }
                 }
             }
+            System.out.println("FrozenProfileComparison: PASS profiles 1-" + preserved);
         }
-        System.out.println("FrozenProfileComparison: PASS scales 2,5,6 profiles 1-3");
     }
 
     private static URLClassLoader loader(URL first, URL nativeJar) {
