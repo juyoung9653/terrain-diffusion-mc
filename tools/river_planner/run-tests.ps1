@@ -14,9 +14,11 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
   (Join-Path $PSScriptRoot 'RiverGeometryTest.java') `
   (Join-Path $PSScriptRoot 'RiverPreviewCacheTest.java') `
   (Join-Path $PSScriptRoot 'NaturalRiverBankShapeTest.java') `
+  (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverConfluenceWidths.java') `
+  (Join-Path $PSScriptRoot 'NaturalRiverConfluenceWidthsTest.java') `
   (Join-Path $PSScriptRoot 'NaturalRiverShallowProfileTest.java')
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-foreach ($testName in @('DrainagePlannerTest', 'RiverGeometryTest', 'RiverPreviewCacheTest', 'NaturalRiverBankShapeTest', 'NaturalRiverShallowProfileTest')) {
+foreach ($testName in @('DrainagePlannerTest', 'RiverGeometryTest', 'RiverPreviewCacheTest', 'NaturalRiverBankShapeTest', 'NaturalRiverShallowProfileTest', 'NaturalRiverConfluenceWidthsTest')) {
   & (Join-Path $JavaHome 'bin\java.exe') -ea -cp $out $testName
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }

@@ -1,0 +1,6 @@
+{
+  "type": "neoforge:remove_features",
+  "biomes": "#terrain-diffusion-mc:ecology",
+  "features": "#terrain-diffusion-mc:lush_ecology_vegetation",
+  "steps": "vegetal_decoration"
+}

@@ -1,0 +1,21 @@
+{
+  "replace": false,
+  "values": [
+    {
+      "id": "immersive_weathering:earthen_clay",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:sandy_dirt",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:loam",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:permafrost",
+      "required": false
+    }
+  ]
+}

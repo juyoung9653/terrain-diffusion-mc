@@ -1,0 +1,9 @@
+{
+  "replace": false,
+  "values": [
+    {
+      "id": "lush:lush_vegetation",
+      "required": false
+    }
+  ]
+}

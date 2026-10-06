@@ -11,7 +11,7 @@ public final class StreamsShallowNetwork {
     private StreamsShallowNetwork() { }
 
     public static Object refine(Object network, Object domain, Object config) {
-        if (StreamsNaturalRiverAdapter.version(config) != 6) return network;
+        if (StreamsNaturalRiverAdapter.version(config) < 6) return network;
         try {
             var segments = (java.util.List<?>) network.getClass().getMethod("segments").invoke(network);
             var input = StreamsNaturalNetwork.reaches(segments);
@@ -87,7 +87,8 @@ public final class StreamsShallowNetwork {
                 }
             }
             LoggerFactory.getLogger("TerrainDiffusion/NaturalRivers").info(
-                    "Natural river v6 shallow grades: {} changed segments; maximum lift {}", changed, largest);
+                    "Natural river v{} shallow grades: {} changed segments; maximum lift {}",
+                    StreamsNaturalRiverAdapter.version(config), changed, largest);
             return StreamsNaturalNetwork.reassemble(network, updated, config);
         } catch (ReflectiveOperationException e) {
             throw new IllegalStateException("Unsupported Streams shallow-network adapter", e);

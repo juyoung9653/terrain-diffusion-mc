@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNaturalRiverAdapter;
+import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin;
 import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
 import net.minecraft.server.MinecraftServer;
@@ -28,5 +29,9 @@ public final class StreamsNaturalLifecycleMixin {
     }
 
     @Inject(method = "stopServer", at = @At("TAIL"))
-    private void terrainDiffusion$clearNaturalAdapter(CallbackInfo ci) { StreamsNaturalRiverAdapter.clear(); }
+    private void terrainDiffusion$clearNaturalAdapter(CallbackInfo ci) {
+        if (!TerrainDiffusionLifecycle.isPreviewServer((MinecraftServer) (Object) this)) {
+            StreamsNaturalRiverAdapter.clear();
+        }
+    }
 }

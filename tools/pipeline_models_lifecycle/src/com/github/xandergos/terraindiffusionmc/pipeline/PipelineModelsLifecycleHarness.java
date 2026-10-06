@@ -7,15 +7,53 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Runs production PipelineModels against model-free stubs. */
 public final class PipelineModelsLifecycleHarness {
     private static final int WAITER_COUNT = 48;
 
     public static void main(String[] args) throws Exception {
+        if (args.length > 0 && args[0].equals("shutdown")) {
+            checkShutdownWaitsForNativeConstruction();
+            System.out.println("PipelineModelsLifecycleHarness: shutdown PASS");
+            return;
+        }
         checkSuccessfulCloseReload();
         checkFailedLoadIsSharedAndSticky();
         System.out.println("PipelineModelsLifecycleHarness: PASS");
+    }
+
+    private static void checkShutdownWaitsForNativeConstruction() throws Exception {
+        CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+        CountDownLatch stopping = new CountDownLatch(1), stopped = new CountDownLatch(1);
+        AtomicBoolean restored = new AtomicBoolean();
+        OnnxModel.blockConstruction(entered, release);
+        PipelineModels.load();
+        require(entered.await(5, TimeUnit.SECONDS), "native constructor did not start");
+        Thread closer = new Thread(() -> {
+            Thread.currentThread().interrupt();
+            stopping.countDown();
+            PipelineModels.stopLoadingAndAwait();
+            restored.set(Thread.currentThread().isInterrupted());
+            stopped.countDown();
+        }, "pipeline-models-shutdown");
+        closer.start();
+        require(stopping.await(5, TimeUnit.SECONDS), "shutdown did not start");
+        require(!stopped.await(100, TimeUnit.MILLISECONDS), "shutdown returned during native construction");
+        release.countDown();
+        require(stopped.await(5, TimeUnit.SECONDS), "shutdown did not finish after construction");
+        closer.join(5000);
+        require(restored.get(), "shutdown lost caller interruption");
+        PipelineModels loaded = PipelineModels.getInstance();
+        require(loaded != null, "shutdown interrupted native construction");
+        PipelineModels.awaitLoad();
+        require(PipelineModels.getInstance() == loaded, "loaded models unavailable for same-JVM diagnostic reopen");
+        loaded.close();
+        PipelineModels.load();
+        require(PipelineModels.getInstance() == null && ModelAssetManager.ensureCalls() == 1,
+                "shutdown admitted new native construction");
+        PipelineModels.stopLoadingAndAwait();
     }
 
     private static void checkSuccessfulCloseReload() {

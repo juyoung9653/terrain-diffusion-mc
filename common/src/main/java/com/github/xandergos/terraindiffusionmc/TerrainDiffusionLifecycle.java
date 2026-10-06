@@ -10,6 +10,7 @@ import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionDensityFunc
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoSurfaceFeature;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoTreesFeature;
+import com.github.xandergos.terraindiffusionmc.world.ecology.EcoGroundcoverFeature;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -38,6 +39,7 @@ public final class TerrainDiffusionLifecycle {
     public static final ResourceLocation TERRAIN_DIFFUSION_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "terrain_diffusion");
     public static final ResourceLocation ECO_TREES_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_trees");
     public static final ResourceLocation ECO_SURFACE_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_surface");
+    public static final ResourceLocation ECO_GROUNDCOVER_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_groundcover");
     private static boolean initialized;
 
     private TerrainDiffusionLifecycle() {
@@ -83,6 +85,7 @@ public final class TerrainDiffusionLifecycle {
     public static void registerEcologyFeatures(CodecRegistrar<Feature<?>> registrar) {
         registrar.register(ECO_TREES_ID, new EcoTreesFeature());
         registrar.register(ECO_SURFACE_ID, new EcoSurfaceFeature());
+        registrar.register(ECO_GROUNDCOVER_ID, new EcoGroundcoverFeature());
     }
 
     @FunctionalInterface
@@ -91,10 +94,10 @@ public final class TerrainDiffusionLifecycle {
     }
 
     /**
-     * Called by each loader when the server is starting.
+     * Called before level creation (NeoForge AboutToStart / Fabric SERVER_STARTING).
      */
     public static void onServerStarting() {
-        LocalTerrainProvider.clearCache();
+        LocalTerrainProvider.beginGameplay();
     }
 
     /**
@@ -117,14 +120,30 @@ public final class TerrainDiffusionLifecycle {
     /**
      * Called by each loader when the server is stopping.
      */
-    public static void onServerStopping() {
+    public static void onServerStopping(net.minecraft.server.MinecraftServer server) {
+        com.github.xandergos.terraindiffusionmc.world.FastLocateCommand.stop(server);
         ExplorerServer.stop();
+    }
+
+    /** Server saving/chunk shutdown is complete; no new gameplay inference may start. */
+    public static void onServerStopped(net.minecraft.server.MinecraftServer server) {
+        LocalTerrainProvider.shutdownGameplay();
+        // A dedicated server can abort startup while native sessions are still being built.
+        // Integrated servers leave that shared client loader available for menus/previews.
+        if (server.isDedicatedServer()) PipelineModels.stopLoadingAndAwait();
+    }
+
+    /** Runs on ordinary client teardown, before System.exit can start OrtEnvCloser. */
+    public static void onClientStopping() {
+        ExplorerServer.stop();
+        LocalTerrainProvider.shutdownAll();
     }
 
     /**
      * Registers common server commands on the loader-provided command dispatcher.
      */
     public static void registerCommands(CommandDispatcher<CommandSourceStack> dispatcher) {
+        com.github.xandergos.terraindiffusionmc.world.FastLocateCommand.register(dispatcher);
         dispatcher.register(Commands.literal("td-explore").executes(TerrainDiffusionLifecycle::executeExplore));
     }
 

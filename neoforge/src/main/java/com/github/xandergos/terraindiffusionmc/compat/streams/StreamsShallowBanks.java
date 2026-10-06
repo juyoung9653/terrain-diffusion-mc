@@ -19,12 +19,12 @@ public final class StreamsShallowBanks {
      * suppressed.  It never writes a block, fluid, or heightmap itself.
      */
     public static boolean preserve(WorldGenLevel level, BlockPos pos, BlockState replacement) {
-        if (!replacement.isAir() || WorldNaturalRiverState.version(level.getLevel()) != 6) return false;
+        if (!replacement.isAir() || WorldNaturalRiverState.version(level.getLevel()) < 6) return false;
         try {
             Object engine = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen")
                     .getMethod("engine", WorldGenLevel.class).invoke(null, level);
             Object config = engine.getClass().getMethod("config").invoke(engine);
-            if (StreamsNaturalRiverAdapter.version(config) != 6
+            if (StreamsNaturalRiverAdapter.version(config) < 6
                     || (Boolean) engine.getClass().getMethod("lakeNearChunk", int.class, int.class, int.class)
                     .invoke(engine, pos.getX() & ~15, pos.getZ() & ~15, 8)) return false;
 

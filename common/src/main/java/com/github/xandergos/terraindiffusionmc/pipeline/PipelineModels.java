@@ -22,6 +22,7 @@ public final class PipelineModels implements AutoCloseable {
     private static volatile PipelineModels INSTANCE;
     private static volatile CountDownLatch loadDone;
     private static boolean loadStarted;
+    private static boolean stopping;
     private static volatile Throwable loadFailure;
 
     private final OnnxModel coarseModel;
@@ -30,6 +31,7 @@ public final class PipelineModels implements AutoCloseable {
 
     /** Starts loading models on a background thread. Returns immediately. */
     public static synchronized void load() {
+        if (stopping) return;
         if (INSTANCE != null) return;
         if (loadStarted) return;
         // A failed native runtime cannot be recovered by immediately trying the
@@ -98,6 +100,22 @@ public final class PipelineModels implements AutoCloseable {
 
     public static PipelineModels getInstance() {
         return INSTANCE;
+    }
+
+    /** No new native session construction during process teardown; wait outside the model lock. */
+    public static void stopLoadingAndAwait() {
+        CountDownLatch completion;
+        synchronized (PipelineModels.class) {
+            stopping = true;
+            completion = loadDone;
+        }
+        if (completion == null) return;
+        boolean interrupted = false;
+        for (;;) {
+            try { completion.await(); break; }
+            catch (InterruptedException ignored) { interrupted = true; }
+        }
+        if (interrupted) Thread.currentThread().interrupt();
     }
 
     private PipelineModels() {

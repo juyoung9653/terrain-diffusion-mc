@@ -11,6 +11,12 @@ gradle.projectsEvaluated {
         }
         neoforge.tasks.named('runServer') {
             systemProperty 'td.streamsProbe', 'true'
+            gradle.rootProject.properties.findAll { key, value -> key.startsWith('tdInference.') }.each { key, value ->
+                systemProperty "td.inference.${key.substring('tdInference.'.length())}", value.toString()
+            }
+            gradle.rootProject.properties.findAll { key, value -> key.startsWith('tdIncendium.') }.each { key, value ->
+                systemProperty "td.incendium.${key.substring('tdIncendium.'.length())}", value.toString()
+            }
             maxHeapSize = '6G'
             args 'nogui'
             if (gradle.rootProject.hasProperty('tdProbe.carveTrace')) {

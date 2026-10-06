@@ -1,0 +1,6 @@
+{
+  "type": "neoforge:remove_features",
+  "biomes": "#terrain-diffusion-mc:ecology",
+  "features": "#terrain-diffusion-mc:immersive_weathering_surface_soil",
+  "steps": "raw_generation"
+}

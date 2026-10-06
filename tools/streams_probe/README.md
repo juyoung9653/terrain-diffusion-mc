@@ -7,15 +7,38 @@ with `probe.init.gradle` enabled.
 
 ## Native Streams integration
 
+### Reusing the tested setup in a modpack
+
+Use the tested Terralith surface pack with `terralith=true` and
+`natural_biomes=true`, and keep `generateStreams`, `generateLakes`,
+`vanillaWaterFlow` and `flowVanillaRivers` enabled. Matching the mod JARs alone
+does not match the saved world's biome source, scale or selected datapacks.
+
+For a new scale-5 world, enable the pack first, then choose Terrain Diffusion,
+Customize, World Scale 5, Done, and Create. Customize sets both the dimension
+type and the pending runtime scale. A datapack dimension type alone does not
+set the runtime scale: first-load initialization otherwise defaults to 2.
+Make Customize the last world-type action before creation.
+
+If generation is disabled while vanilla-river flow remains enabled,
+`StreamFlowNet.onChunkSent` can first initialize Streams' calibration on the
+server thread and wait for distant TD heightmap tiles. Check this call path,
+actual settings and selected world datapacks when diagnosing missing chunks;
+keep the requested river features enabled during the comparison.
+
 ### TD natural river profile (new worlds)
 
-New real NeoForge TD Overworlds with audited Streams 2.13.1/2.13.5 pin natural
-profile v6 in `data/terrain_diffusion_natural_rivers.dat`. Legacy worlds, Fabric,
+New real NeoForge TD Overworlds with audited Streams 2.13.1/2.13.5/2.13.8 pin natural
+profile v7 in `data/terrain_diffusion_natural_rivers.dat`. Legacy worlds, Fabric,
 worlds without an audited adapter and finite-preview worlds remain disabled.
 `-Dtd.rivers.natural=false` opts out **only before the first world creation**;
 the saved choice wins on restart. Missing/corrupt profile data beside an existing
 natural cache, or loading an enabled world without its audited adapter, stops
 generation. Keep the complete world together when copying it.
+Do not recursively exclude `td-*` while copying a playtest world: that also
+removes `streamsreflowing/minecraft_overworld/td-natural-vN`, forcing native
+graph regeneration and delaying client flow-grid delivery. Preserve profile
+data, SRN graphs and raw flow tiles; compare their hashes after staging.
 The first marker is written and read back atomically before publishing it to
 generation threads: C2ME defers `DimensionDataStorage.save()`, so calling that
 method and immediately reading the file is not a synchronous persistence gate.
@@ -28,7 +51,7 @@ connections, indexing, water flow and bank decoration remain in Streams.
 the native types. The shipped JARs strip the Java Record attribute: use audited
 accessor/constructor layouts, never reflection field order or `isRecord()` alone.
 
-New worlds use **profile v6**. Profiles 1–5 retain their saved configuration and
+New worlds use **profile v7**. Profiles 1–5 retain their saved configuration and
 cache namespaces. V4 adds a deterministic directed-graph selection after the V3
 watershed policy: optional tributaries need 0.15 plate scales of remaining path
 and 0.05 plate scales of source clearance from retained channels (768 and 256
@@ -78,6 +101,167 @@ does not prove bank containment: later native cleanup and water ticks still
 require physical validation. Compare actual saved water and uncarved base
 heights as well as images; a passed no-flood audit alone is not naturalness.
 
+V7 inherits the shallow-grade and retained-soil behavior. Before shallow-grade
+refinement it changes only native segment widths: slow background growth,
+area-proxy contributions at joins, and a carried gradual widening target.
+Comparable native tributaries can recover the native main-river scale; tiny
+contributions have a weaker effect. Half-width growth limits are 0.001/block
+between joins and 0.02/block toward an outstanding join target. These are visual
+heuristics using squared native width, not measured discharge. Protected
+lake/border edges and outlets keep native widths, with a 128-block approach;
+native endpoint differences can remain there. Cyclic components stay native.
+Display clamps have small segment-subdivision sensitivity.
+
+V7 also suppresses native MUD skin/depth painting when no actual water exists
+within horizontal radius two and vertical distance two of the scanned surface.
+The original substrate remains, including any independently generated mud.
+The audited helper takes x, z, scanTop: v7 reads its positioned MutableBlockPos;
+legacy profiles 1?6 intentionally keep the old argument capture and behavior.
+All water-tag fluids count; this test is independent of planned river distance.
+
+For actual current checks, `-PtdProbe.itemFlowAudit=true` warms fixed loaded wet
+cells for 100 ticks, then measures ordinary dropped items for 100 server ticks.
+`-PtdProbe.itemFlowCells=x,y,z;x,y,z` selects exactly two predetermined samples.
+Zero flow or unavailable water is not a pass. The JSON report includes both
+initial/warmed vectors, downstream displacement and final water contact.
+This tests server physics, not the visible client water texture.
+Use the separate `client-flow.init.gradle` with `-PtdClientFlowProbe=true`
+for client grid/flow logging every 100 ticks near the player. It includes only
+`client-java`, never the automatic server probe. As with the server probe,
+do not package a production JAR with this init script enabled.
+
+Fresh v7 validation at scale 5 / seed `6187795302574383407` passed seven
+bank boxes and 200 settled ticks with no newly inundated grass. Both freshly
+derived source-to-marine routes have face-connected nonascending saved water
+(1,155/1,155 required chunks FULL). All 22 fixed narrow samples remain wet;
+median surrounding ground above water at offsets 4/8/12 remains 2/2/4 blocks.
+In the same seven boxes, exposed mud beyond the water-distance bound changed
+from 16 in v6 to zero in v7; 22 water-adjacent exposed and 89 submerged mud
+blocks remain. Saved blocks cannot distinguish native skin from terrain mud.
+Two predetermined wet cells passed 100-tick item drift after 100 warmup ticks.
+Restarting with the opt-out flag retained profile 7 and all four SRN files
+byte-for-byte. Evidence is under `build/river-v7-validation` and
+`build/river-v7-analysis`.
+The Sodium client also received 1,536-byte native flow grids and nonzero
+`FluidState.getFlow` at the fixed creek and junction after native initialization.
+Initial no-grid/zero-flow readings can persist during that warmup; enabled
+config alone does not prove immediate client readiness.
+
+### Narrow-river overflow and active physics
+
+Streams 2.13.5's `spillOverWater = true` overrides `FlowingFluid.isWaterHole`
+above source-water pools once its physics grid is available. On narrow TD
+cascades this can spread an upper sheet of flowing water onto dry banks.
+Use `spillOverWater = false` in `config/streamsreflowing-common.toml` while
+retaining `vanillaWaterFlow = true` and `flowVanillaRivers = true`: entity
+currents are controlled separately. This is a runtime setting, not a new
+terrain profile or a reason to deepen saved rivers.
+
+The earlier 200-tick bank checks did not explicitly activate native physics
+grids and cannot establish containment under player-loaded conditions.
+Use `-PtdProbe.warmFlowGrids=true` with a predetermined wet channel column
+(`flowGridFixedX` / `flowGridFixedZ`) and `-PtdProbe.containmentTicks=1200`.
+The probe requires an actual native physics angle there before ticking water.
+At the reported v7 location, identical pre-overflow copies produced 245 newly
+wet grass cells with spill enabled and zero with it disabled over 1,200 ticks.
+Three pre-existing flowing cells outside the native corridor remain separately
+reported; the strict all-water containment check does not call these a pass.
+
+Changing the setting alone does not retract an already-supported saved fan.
+On an isolated world copy only, `-PtdProbe.resetFlowingWater=true` clears ordinary
+non-source water inside the explicit containment bounds, asserts source count
+is unchanged, and lets ordinary scheduled fluid ticks refill it. It does not
+remove waterlogged blocks or alter soil. Preserve the original save and verify
+the repaired copy's source positions, terrain, settled water and item currents
+before using it. This flag is diagnostic-only and is absent from release JARs.
+
+The saved-location repair retained all 266 ordinary source-water coordinates;
+the bounded 97×97×81 block comparison found 559 changes, all air/water only.
+Flowing cells beyond the native half-width plus one block fell from 236 to zero.
+Two wet-grass fringe cells remain inside that tolerance, so the stricter
+all-wet-grass diagnostic still reports failure. All 262 assessed local native
+segments retained a nonascending face-connected water path; this is not a
+global outlet proof. Both fixed item samples moved downstream (3.51 / 3.36
+blocks) but ended on banks, failing the item audit's final-water-contact gate.
+Client play at the original position received a native 1,536-byte flow grid
+and nonzero current; after saving, all 310 settled water cells matched the
+server result and none of the original 236 escaped cells were wet again.
+
+That repair covered only its explicit bounds, not the whole saved world. A later
+report at `(-4504,171,23)` was outside those bounds. Both manually removed source
+cells match the native planned pool height (Y171); stale flowing water at Y172
+was the spreading sheet. Recomputing only flowing water preserved both sources
+and removed the distant spread. Fresh generation of the same 36-chunk cohort
+with spill disabled passed 1,200 active-physics ticks with no new wet grass.
+Do not infer incorrect source placement solely because replacing a source with
+a block changes the resulting flow.
+
+For a complete saved-world pass, `inventory_saved_water.py --world <copy>
+--output-dir <inventory>` inventories ordinary non-source water above sea level
+in every saved FULL chunk, using packed section palettes. It writes exact target
+positions, a one-chunk load halo, hashes and an explicit missing-FULL halo count.
+Require that count to be zero before loading the cohort. The default sea level
+is 63; pass `--sea-level` if the world uses another value. Empty region files are
+allowed; malformed chunk storage fails rather than being treated as dry ground.
+
+Run the dedicated probe on the copy with `-PtdProbe.expectedNaturalProfile=7`,
+`-PtdProbe.savedWaterPositions=<inventory>/flow-candidate-positions.txt` and
+`-PtdProbe.savedWaterChunks=<inventory>/flow-candidate-halo1-chunks.txt`.
+`SavedWaterSettlement` validates the complete target list before mutation,
+freezes fluid ticks while clearing it, uses normal server block updates (including
+lighting and heightmaps), and schedules ordinary reflow from preserved sources.
+It then runs 1,200 ticks and checks that no source positions disappeared.
+Its `settled` receipt means the operation completed, not that every water cell
+in the world passed a containment test. Validate reported locations and fresh
+generation separately. Preserve the user's player/entity data when installing
+a tested terrain copy; do not copy diagnostic server level settings over it.
+
+The complete v7 saved-world pass inventoried 7,578 FULL chunks and reset 4,036
+ordinary flowing-water cells in 307 chunks, with all 1,137 halo chunks ticking.
+After 1,200 ticks, none of the 26,756 captured source positions disappeared;
+normal fluid physics added seven sources. This is source-preservation evidence,
+not a global containment guarantee. Client inspection at the latest saved
+position and the earlier reported bend showed the spreading sheets cleared;
+the latest position received a 1,536-byte native grid and nonzero current.
+The two reported client regions retained exactly the settled water states after
+saving (85 intersecting chunks). The whole-world block diff is not air/water-only:
+normal loaded-chunk updates also change leaf distance properties, trigger loose
+gravel and plants, and turn 64 ordinary source blocks into bubble columns.
+Do not describe this broader operation as preserving every solid block state.
+The delivered copy restricts replacement to the 1,137 verified halo chunks,
+copying complete settled chunk records (including lighting and heightmaps) into
+original region files. Other chunk records and original entity/player data are
+preserved. This excludes unrelated falling-gravel updates outside the cohort.
+
+Streams 2.13.8 uses a separate `StreamsBankMaterial2138Mixin`: its bank helper
+adds engine and geometry arguments. The plugin selects exactly one bank-material
+hook for 2.13.1/2.13.5 or 2.13.8 and rejects other adapter versions. V7 reads the
+mutable surface; legacy profiles retain their original x/scan-top mapping.
+The extra 2.13.8 pool-grade call is `berm lake level-out`, with a proposal of
+`max(current, lakeLevel)`. `StreamsRiverRaster.poolGrade` passes that native raise
+through its first guard; it must not be treated as a lowering junction-pool call.
+The dry-bank AIR write remains ordinal 6 (bytecode 7843); water stays ordinal 7.
+`test_natural_adapter.py` runs `audit_streams_compat.py` for both 2.13.5 and 2.13.8,
+pinning descriptors, local positions, write ordinals and the extra call's operands.
+Supporting another native version requires another audit, not a blanket gate bypass.
+
+The paired v7 36-chunk carve test uses identical saved native graphs for 2.13.5
+and 2.13.8. After 1,200 active physics ticks, all 221 water positions and levels
+match exactly and neither exceeds the native width plus one block. The 2.13.8
+strict wet-grass gate still reports one cell at `(-4518,177,12)`: its ground is
+grass instead of 2.13.5's mud, while the water above it is unchanged. Record that
+failure rather than presenting this as a universal containment pass. The settled
+saved-v7 fixture on 2.13.8 has zero added/removed water and zero newly wet grass
+after a further 1,200 ticks.
+An additional cache-free 2.13.8 run exercised native network construction and
+v7 confluence refinement, then generated the same 36-chunk cohort. It also had
+zero flow beyond width plus one and one strict wet-grass fringe (this time
+`(-4492,165,43)`); do not claim the stricter gate passed. Actual 2.13.8 client
+play received a 1,536-byte grid and nonzero current. After visiting and saving
+both reported locations, the 85-chunk bounded comparison found no water-state
+changes. The production NeoForge build excludes the diagnostic package; the
+tested copied save is installed separately from the v7 baseline and RPG pack.
+
 The fresh v6 scale-5 validation (seed `6187795302574383407`) generated
 1,354 FULL chunks and settled 100 ticks; all seven corridor bank boxes and a
 200-tick containment audit passed without newly inundated grass. Both freshly
@@ -107,7 +291,7 @@ bank edits; it may also be unprimed at the native cut site. V6 retention
 checks the existing dry block directly without a heightmap query. Validate on fresh chunks and require actual edit traces. Serialize
 ordinary builds and live probe runs: an ordinary compile can remove diagnostic
 classes from the shared output while a running probe still needs them.
-For a new-world test, `-PtdProbe.expectedNaturalProfile=6` rejects a disabled or
+For a new-world test, `-PtdProbe.expectedNaturalProfile=7` rejects a disabled or
 wrong saved profile before exporting plans or requesting chunks. A chunk-empty
 copy still needs `Data.initialized=0`; removing caches alone does not make an
 initialized legacy world eligible for first-world enablement. Use
@@ -436,7 +620,105 @@ loaded TD chunks; foreground generation/urgent flow callers remain untouched.
 Other biome sources retain Streams' normal behavior.
 Demanded new watersheds still need computation; this is not instant generation.
 
-Streams performs its own cold terrain calibration before origin warmup. Preserve
+For **new TD Overworlds with Streams 2.13.8**, TD now chooses Streams' native
+exact host-terrain sampler before either generic calibration pass. The former
+form-sampler check visits two 15-by-15 lattices at spacing 211/512 blocks and can
+expand to 1,800 candidates; even its ocean classifier requests TD inference.
+The second fast-estimator calibration also samples remote terrain. Neither is
+needed when the exact host sampler is selected. Native river routing, actual
+height/biome queries, carving and flow remain active; required river-domain
+generation still has a cold cost. This does not defer calibration to player entry.
+
+`data/terrain_diffusion_streams_exact_v1.txt` pins this choice with the world's
+seed and scale before spawn generation. The marker is written only for a genuinely
+new world with no prior native Streams state. Existing unmarked worlds retain
+their sampler and caches even if they have never initialized Streams. Marked
+worlds keep the exact choice across restarts and `streams.lazy_prefetch` changes;
+invalid markers or an unsupported Streams version fail before new generation.
+The marker must stay with its own world. New exact-mode river layouts need not
+match older approximate-calibration layouts, whose accepted height error was
+bounded but not zero. No existing river network is migrated.
+
+`python tools/streams_probe/test_startup.py` verifies the installed 2.13.8
+bytecode targets and exact-mode branch, and runs JDK-only fresh/legacy/restart,
+world-isolation and marker-failure checks. Runtime verification must additionally
+measure a fresh engine initialization and first FULL chunks, then check rivers
+and flow; JDK checks do not prove mixin application or a wall-clock improvement.
+
+The 2026-10-06 startup repair's scale-1 four-chunk probe improved from 598.7s
+to 72.4s (442 to 77 terrain tile requests). Its C2ME river probe passed seven
+FULL chunks, source/junction/terminal water and bed checks, and 100 ticks.
+A restart matched the persisted topology and passed the enabled-player audit,
+but then crashed in `onnxruntime.dll` during JVM exit while the daemon inference
+thread was still running. Treat the functional receipts and clean process exit
+as separate gates: a `complete=success` receipt does not certify safe shutdown.
+The follow-up shutdown repair closes each world's inference admission after
+server saving completes, cancels queued work without interrupting native calls,
+and waits for the actual worker to return. A cancelled Future alone is not a
+drain barrier. Streams callbacks retain their originating provider, so an old
+world cannot silently submit into a reopened world's pipeline. Preview sessions
+have separate scopes; client teardown drains all scopes and model loading before
+`Minecraft.destroy()` reaches `System.exit` (a TAIL injection is too late).
+NeoForge scope initialization belongs in `ServerAboutToStartEvent`, because
+`ServerStartingEvent` follows level loading.
+
+The CUDA/C2ME runtime audits in `build/shutdown-repair/active-stop.log` and
+`build/shutdown-repair/final-active-stop.log` deliberately
+submitted active and queued inference after world save. It verified zero active
+and queued work after gameplay stop, rejected stale-provider requests, reopened
+a different-seed provider in the same JVM, then drained an active preview on
+global shutdown. This is a server/process and provider-lifecycle test, not an
+interactive client world-switch test. Use the opt-in probe properties
+`tdProbe.inferenceShutdownAudit=true` and `tdProbe.inferenceReopenAudit=true`;
+require the final `[TD-SHUTDOWN-AUDIT] passed` receipt and a successful JVM exit.
+Do not interrupt an active ONNX call or conceal failures with forced exit.
+The final run exited with code 0 and no native crash report; NeoForge release
+build and installed-JAR hash verification passed. Fabric compilation was not
+validated because its offline dependency cache was incomplete. The dedicated
+model-loading barrier has a deterministic blocked-constructor harness; a real
+startup-abort event and interactive client quit still require runtime coverage.
+
+### Chunk performance checks
+
+`tdProbe.performanceAudit=true` runs cold and repeated density/biome queries in
+isolated preview scopes. `tdProbe.performanceParity=true` additionally compares
+every cell of sampled 16x16 regions against the original configured full-tile
+result, including raw short heights and all ecology fields. Cover scales 1–6,
+negative coordinates, tile edges, land and water. The first small-native-read
+implementation changed a height by one block: `WorldPipeline.get` reconstruction
+is sensitive to request shape. Preserve the original native bounds and halo;
+crop outputs afterward. Coordinate-invariant test fixtures cannot establish this
+property, so retain the native-model differential check.
+
+`tdInference.legacySampling=true` restores full-tile sampling for comparison.
+`tdInference.metrics=true` enables model-session creation, native execution,
+input preparation and output-copy wall times. Provider shutdown summaries report
+cache reuse, shared requests, evictions and queue durations. The shared native
+lane remains serial; priorities cannot cross seed-mutation barriers, and a bounded
+urgent streak lets background work progress. Native reference arrays have both
+32 MiB and eight-entry limits, separate from complete and partial output caches.
+
+For Incendium, `tdProbe.incendiumAudit=true` waits for exactly one helper, the
+permanent origin ticket, and release of the temporary ticket. Compare with
+`tdIncendium.deferOrigin=false`. `ServerChunkCache.getChunkFuture` itself blocks
+on the server thread; use a region ticket with nonblocking chunk/entity-readiness
+checks instead. Only exact audited function bodies are intercepted. Helper-based
+Incendium actions may be unavailable until origin readiness; total background
+generation is not removed. Unknown function bodies retain their original behavior.
+
+Always validate diagnostic receipts as well as JVM exit:
+
+```text
+python tools/streams_probe/check_receipts.py path/to/run.log --require terrain_performance_audit
+```
+
+Gradle can report success after a diagnostic emits a fatal/error receipt. GPU
+residency comparisons also need VRAM sampling during active inference; an idle
+sample is not a peak measurement. Dedicated-server headroom does not certify a
+full client with shaders and resource packs.
+
+For existing unmarked worlds and older audited Streams versions, Streams still
+performs its own cold terrain calibration before origin warmup. Preserve
 the same world's `streamsreflowing/minecraft_overworld/fastcal-v10.txt` and native
 network store on restart. Do not transplant calibration between seeds or changed
 TD model settings: its native header does not fingerprint the TD model/seed.
@@ -762,7 +1044,7 @@ and soil variation uses 64 model-pixel cells with moisture amplitude 0.12.
 Run `tools/test_terralith.py` for the pure continuity and resource checks, then
 validate new terrain in the engine at the intended scale.
 
-Streams 2.13.1 and 2.13.5 have audited hook layouts. Native `plateScale` is
+Streams 2.13.1, 2.13.5 and 2.13.8 have audited hook layouts. Native `plateScale` is
 already in blocks: scale 5 adapts the installed 768-block setting to 1,920,
 width factor 1.0 to 1.3, and maximum half-width 16 to 32. Keep native
 headwater width and drainage/merging logic. The compatibility policy applies
@@ -777,3 +1059,88 @@ The endpoint's original TD model elevation was -1 with vanilla ocean ID 41.
 This proves that sampled mainstem reaches TD marine water; it does not prove
 every headwater or every native terminal reaches the sea. Sparse center samples
 can hit dry bars even when a continuous adjacent water lane exists.
+
+
+## Chunk performance checks
+
+The opt-in init script forwards `-PtdInference.*` and `-PtdIncendium.*` to
+`td.inference.*` and `td.incendium.*` system properties. Use
+`-PtdProbe.performanceAudit=true` with `-PtdProbe.performanceParity=true` and
+`-PtdProbe.performanceScales=1,2,3,4,5,6` for native sampling parity; check the
+TerrainPerformanceAudit for fixture coordinates and emitted receipts.
+Full-tile derivation is the production default. Explicitly pass
+`-PtdInference.legacySampling=false` to exercise experimental partial sampling.
+The latter passed sparse parity but regressed dense Streams startup: repeated
+large reference reconstruction dominated watchdog stacks. The cache regression
+test must revisit interleaved regions, not only eight nearby sample points. `-PtdInference.metrics=true` enables ONNX session/run counters.
+
+Native inference must retain the original full reference query bounds: shrinking
+those bounds can change Laplacian floating-point results and round a height to a
+different block. Crop derived outputs only, with the original interpolation order.
+The strict audit compares heights, vanilla/Terralith IDs and all ecology samples,
+including land fixtures and negative tile boundaries.
+
+Gradle can return success after a diagnostic failure. Always additionally run
+`python -B tools/streams_probe/check_receipts.py <log> --require terrain_performance_audit`.
+The Incendium audit uses `-PtdProbe.incendiumAudit=true`; compare with
+`-PtdIncendium.deferOrigin=false` in a separate fixture. Check one helper,
+persistent origin ticket, removed temporary ticket and server callback latency.
+Helper-dependent Incendium features wait until the origin is ready.
+
+Keep user worlds out of these fixtures. Measure VRAM with the real shader-enabled
+client before generalizing isolated server figures. On restricted Windows runners,
+Gradle dependency JAR access denial can also surface as BootstrapLauncher
+NoSuchElementException; use the approved local execution context rather than
+changing mod dependencies to work around the sandbox.
+
+
+Repeated full-tile reads use one weak recent-entry hint per worker. Reuse requires
+matching provider, bounds, scale and invalidation generation; evicted entries are
+marked invalid. Previews retain their own cache. `td.inference.recentTileCache=false`
+disables the hint for comparison. Hit counts still count every hit (LongAdder is
+an approximate concurrent snapshot); recency is refreshed every 64 consecutive
+hint hits. Run `python -B tools/test_terrain_sampling.py --benchmark` for warmed
+lookup cost only, not chunks/second or full client loading performance.
+
+Use the `Terrain cache before river cleanup` receipt for gameplay cache capacity
+and evictions. The later shutdown snapshot follows the 512-to-64 capacity shrink
+and can otherwise be mistaken for gameplay cache thrashing.
+
+Greeneries sand guards do not suppress ordinary grass/fern on dirt, grass blocks
+or podzol. Test against the installed mod with `test_greeneries_compat.py`. TD's
+EcoGroundcoverFeature directly places vanilla species, while Greeneries additional
+species depend on its biome tags; fewer visible variants alone do not establish
+lower placement density. Non-sand placements skip the guard's biome lookup.
+
+Ecotone regression: `-PtdProbe.locateBiomeAudit=true` compares bounded native
+biome searches with and without request-local reuse, including full position/Y.
+`-PtdProbe.aquaticPlacementFixture=true` temporarily prepares and restores sky
+columns in an isolated loaded test chunk to verify vanilla and Streams short/tall
+seagrass writes. Pair with `-PtdProbe.aquaticPlacementAudit=true` and require both
+passed receipts. This fixture proves hook behavior, not landscape appearance.
+
+Beach modifiers must use `eco_beach_surface` with constant count 1. Merely giving
+an empty-placement alias another registry key does not separate it: Minecraft's
+FeatureSorter keys PlacedFeature record values by equality. With Streams water
+skin this creates opposite land/beach ordering and a runtime feature cycle.
+`test_beach_order.py` covers the reduced cycle; generate fresh mixed beach/land
+chunks with installed modifiers for runtime confirmation. Constant count 1 keeps
+the origin and consumes no RNG. Saved FULL chunks can hide this failure.
+# Fast locate integration regression
+
+Use the probe init script with `-PtdProbe.fastLocateAudit=true`
+and `-PtdProbe.fastLocateOnly=true` against an isolated natural-world fixture with
+structure generation enabled. `FastLocateAudit` dispatches the actual command,
+rechecks returned biome coordinates through the normal biome source, verifies an
+actual shipwreck start, and checks unsupported placements, busy state and cancel.
+Require the `fast_locate_audit` receipt with `check_receipts.py`; a Gradle success
+alone does not mean the audit passed. Candidate exhaustion is valid command behavior
+but fails this particular positive-result fixture. Keep cold and warm observations
+separate when reporting speed.
+
+Remote asynchronous `STRUCTURE_STARTS` requests need a dedicated ticket until
+verification/drain completes: vanilla `UNKNOWN` tickets expire after one tick.
+The native C2ME fixture reproduced an unloaded `ChunkResult` without that ticket.
+Release the ticket and job ownership together on the server thread, or an old
+cleanup can remove a new job's same-chunk ticket. Retest the native command after
+changing this lifecycle; planner-only Java tests do not exercise it.

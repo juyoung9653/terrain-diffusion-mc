@@ -253,10 +253,10 @@ The terrain diversity far outpaces the biome diversity and there's a real opport
 
 Normal worlds use the separately installed **Streams Reflowing** mod for its
 river generation and flowing-water behavior. This repository supplies biome
-compatibility, a structure shield, and a NeoForge integration for Streams 2.13.1 that defers
+compatibility, a structure shield, and a versioned NeoForge integration that defers
 speculative watershed prefetch on TD terrain. Streams retains its native river
 routing, confluences, outlets, vegetation and water flow. New NeoForge TD worlds
-with audited Streams 2.13.1/2.13.5 use a persisted **natural river profile v6**:
+with audited Streams 2.13.1/2.13.5/2.13.8 use a persisted **natural river profile v7**:
 fine tributaries feed larger drainage-scaled rivers across a larger routing area,
 while short independent coastal systems and unprotected short source twigs are
 reduced. V4 additionally admits long tributaries with source spacing, preserves
@@ -265,12 +265,61 @@ progression. V6 fits narrow tributary elevations closer to the original terrain
 before caching the connected graph, and retains existing bank soil instead of
 building raised dirt crests. Grade transitions remain downstream-compatible;
 wide channels, lake connections and plate boundaries constrain the correction.
+V7 keeps background widening slow and concentrates gradual width growth after
+tributary joins, weighted by their native width contribution. Water-adjacent mud
+remains; distant native mud painting leaves the existing soil instead. This is
+a visual width heuristic, not a discharge simulation. Native currents remain enabled.
+For narrow TD rivers, set `spillOverWater = false` in Streams' common config;
+keep `vanillaWaterFlow` and `flowVanillaRivers` enabled. This restores vanilla
+water spreading while retaining downstream currents. Already flooded saved
+water can remain supported and needs separate repair in a world copy.
 Terrain-confined bends, shallower asymmetric beds and restrained bars
 remain. A TD-owned module conservatively smooths
 gentle grades before Streams caches the graph. Existing worlds retain their
 previous profile; installing the JAR does not rewrite saved rivers. See the
 [Streams integration setup and validation](tools/streams_probe/README.md).
 The Streams mod is installed separately.
+
+New TD Overworlds on Streams 2.13.8 select its native exact host-height sampler
+without running its two generic terrain calibration passes. Those passes can
+otherwise trigger hundreds of remote AI terrain tiles before the first chunk.
+The world-local `data/terrain_diffusion_streams_exact_v1.txt` marker preserves
+the choice on restart. Existing unmarked worlds keep their original sampler;
+do not delete or transplant the marker. New river layouts may differ from the
+previous approximate sampler, while TD's terrain and ecology rules stay unchanged.
+Demanded terrain and river-network generation still take time.
+
+The scale-1 same-seed four-chunk regression completed in 72.4 seconds versus
+598.7 seconds before this change, with 77 versus 442 requested terrain tiles.
+All 1,024 sampled original ground heights and ecology biome IDs matched.
+These are isolated server-probe timings, not full modpack client-entry timings.
+See the Streams probe guide for startup, persistence and river validation.
+
+World shutdown closes terrain requests after saving, discards queued calculations,
+and waits for running ONNX inference to finish. Late Streams requests remain bound
+to the world that created them. Client exit also drains preview work and model
+loading before JVM teardown; dedicated-server stop waits for model loading too.
+Quitting can therefore briefly wait for an in-progress calculation instead of
+interrupting native inference. Streams may log cancellation warnings for background
+prefetch abandoned during shutdown.
+
+Terrain queries reuse complete classified tiles by default. An experimental 16x16
+sampling path (`-Dtd.inference.legacySampling=false`) preserves numeric results but
+can repeatedly reconstruct large reference planes when Streams interleaves regions;
+it is unsuitable as the production default. Foreground requests can overtake queued
+background sampling without crossing world-state barriers, and background work
+retains bounded fairness.
+
+For GPUs with sufficient free VRAM, `inference.offload_models=false` keeps models
+resident and avoids repeated ONNX session creation. The default remains `true` for
+memory-constrained clients. Measure with the actual shader pack before assuming server
+probe VRAM usage represents client usage.
+
+On the audited Incendium 5.4.x function bodies, TD defers origin helper initialization
+until its chunk is ready, keeping server ticks responsive during generation. The helper
+and persistent origin ticket are still created once; dependent helper features become
+available after this brief initialization. Unknown function bodies retain vanilla
+execution. `-Dtd.incendium.deferOrigin=false` disables this compatibility behavior.
 
 The older experimental [finite river preview](tools/river_planner/README.md) is a separate
 Terrain Diffusion river planner and carver. It requires Streams river/lake
@@ -297,12 +346,160 @@ enabled. These generation changes require fresh chunks; use a new same-seed
 world for comparison rather than mixing old and new generation.
 
 New compatibility-preset worlds enable `natural_biomes: true`. Their land uses
-11 ecological biomes controlled by a continuous TD climate field, with a target
-filter radius of 1024 game blocks (rounded up to coarse cells). Forest, woodland and grassland in the same ecosystem
-share grass/foliage tints and decoration lists. Tree density, compatible species
+11 ecological biomes controlled by a continuous TD climate field, with a filter
+radius of 512 model pixels (1024 game blocks at scale two, rounded up to coarse
+cells). All eleven ecological biomes
+share grass/foliage tints and the ordered ecological vegetation list. Tree density, compatible species
 weights and broad soil patches depend on continuous climate controls, not biome
 labels. Biome IDs are never randomly dithered at a boundary. Terrain heights and
 native Streams generation stay in their existing generation paths.
+
+Ordinary soil-covered hills retain forest potential: the slope multiplier now
+tapers from rise/run 0.35 to 1.80 (about 19 to 61 degrees), retaining more than
+70% at 0.85/about 40 degrees. Actual substrate and clearance still decide whether
+a candidate tree survives; this does not plant trees on bare rock automatically.
+
+Groundcover now uses one column-based climate pass after trees, replacing the
+inherited biome-specific vegetation stage. Grass, ferns, flowers, berry bushes,
+azalea, moss, mushrooms, dry shrubs, cactus and bamboo have overlapping climate
+weights and spatial density patches. Placement respects dry air, substrate and
+plant survival; grass and ferns cannot use sand even if another mod relaxes
+survival. Coast, river and alpine terrain biomes remain outside this pass.
+Cold upland tree cover tapers between 900 and 1600 model-elevation metres before
+the alpine selector takes over; these are not Minecraft block Y coordinates.
+Temperate woodland gains sparse coarse-dirt floor patches, and conifer podzol
+uses the finer soil field. Grass/leaf tint remains a shared palette rather than
+a client-synchronized climate gradient. Other mods can still inject decorations
+through biome modifiers; those additions are not governed by this climate pass.
+The old biome-specific stage also included incidental vines, melons, pumpkins
+and sugar cane; this pass does not reproduce those placements.
+
+`EcotoneContinuityTest` traverses all eleven labels and checks expected plant
+rates across moisture/temperature boundaries, cold treeline taper and spatial
+continuity. These checks and the offline atlas do not replace a fresh-chunk
+in-game placement/appearance check. Existing chunks are not rewritten.
+Runtime probes with Streams 2.13.8 require NeoForge 21.1.173 or later (the
+isolated ecology probe uses 21.1.249). The normal 21.1.80 compile target can build
+successfully while that mod combination refuses to start; inspect the server
+receipts and logs rather than relying on Gradle's successful task exit alone.
+
+Ecological soil and tree groves use world-seeded, warped 128-model-pixel fields
+(256 blocks at scale two). Soil combines this with cached physical elevation,
+slow horizontal drift and a small detail field, so patches follow relief instead
+of independent small islands. Relative elevation and slope also adjust moisture
+retention within bounded limits; regional biome labels remain stable. This is an
+independent implementation inspired by the surface-mixing idea described by
+[Pufferfish's Biome Dither](https://www.curseforge.com/minecraft/mc-mods/puffish-biome-dither).
+Desert margins blend sand, coarse dirt and grass across moisture 0.14 to 0.38; the biome-label cutoff
+at 0.30 no longer switches the entire surface at once. Dry grassland retains a
+grass matrix, deep warm deserts retain sand, and moist conifer forests can have
+podzol. Sparse woodland forms groves and openings, while dense forest keeps a
+higher background tree probability. These are placement controls, not guaranteed
+canopy coverage: tree survival and other mods still affect the final result.
+Dry woodland spans moisture 0.52–0.65 instead of the former narrow 0.635–0.65
+interval; changing its label does not jump the continuous tree-cover control.
+
+The NeoForge beach feature attachment lets the surface pass repair dry sandy
+shores even in pure beach chunks; rocky, snowy and humid shores retain their
+substrates. Streams 2.13.8 bank correction wraps only its exposed top write,
+using local water observations and the same climate/material field. Depth fills
+and water geometry are unchanged; unsupported falling material becomes coarse dirt.
+
+Generated seagrass has separate vanilla and audited Streams 2.13.8 placement
+guards in natural TD worlds. Submerged patches vary with seed, depth, substrate
+and freshwater/marine context; exposed beach receives no seagrass. Tall pairs
+are accepted or rejected together. This does not remove saved or player-placed
+plants and does not change coral, kelp, or ordinary Greeneries grass.
+
+`/locate biome` retains Minecraft's candidate order, predicate and cave-height
+checks while reusing the current terrain tile within one search. Disable this
+reuse with `-Dtd.locate.biomeCache=false` for comparison. It reduces repeated
+lookups, not the number of distinct AI tiles required for a cold search.
+`/locate structure` retains its existing generation/presence checks.
+
+For ungenerated terrain, permission-level 2 users can use a separate bounded search:
+
+```text
+/td-locate biome terrain-diffusion-mc:ecology/temperate_forest 8192
+/td-locate structure minecraft:ruined_portal 8192
+/td-locate status
+/td-locate cancel
+```
+
+The optional radius defaults to 8192 blocks (16–32768), measured on each horizontal
+axis. Coarse climate ranks candidates first; only exact biome-source quart samples
+or valid generated `STRUCTURE_STARTS` are reported. The result is not necessarily
+the nearest. Biome samples can differ from later saved-chunk/F3 boundaries after
+river processing. Individual registry IDs have completion; tags are not supported.
+Concentric-ring and custom structure placements require vanilla `/locate`.
+
+One search runs per server, with a 60-second admission/verification budget, up to
+25 climate patches, 64 detailed biome tiles or 32 structure-start requests.
+An exhausted search does not prove absence. Already running native inference or
+chunk requests must drain safely and can exceed that time; cancellation suppresses
+results immediately and prevents another search until the worker drains. Structure
+generation may internally need additional terrain. Background ranking reduces
+unnecessary detailed generation, but shares CPU/GPU resources with gameplay and
+cannot promise zero lag or a fixed speedup. Ordinary `/locate` remains unchanged.
+
+On NeoForge, the eleven ecology biomes remove Immersive Weathering's raw-generation
+`earthen_clay`, `sandy_dirt`, `loam` and `permafrost` placements. Those ore-style
+soil patches replaced grass before TD's soil pass and escaped its vanilla soil
+filter, producing competing patterns. Removal runs in NeoForge's REMOVE phase,
+after ADD, with optional feature-tag entries for installations without IW.
+Vanilla biome tags, other biomes, silt/aquifers and decorations remain intact.
+
+NeoForge also checks the support of grass/fern candidates at `SimpleBlockFeature`
+placement in TD ecology biomes. Its normal survival test remains in effect, but
+sand (including Terrain Slabs' sand slab) is rejected even when another mod
+permits survival there. The candidate
+set includes vanilla grass/ferns and the optional Greeneries grass/fern tags;
+reeds, cattails, dead bushes and cacti are not in this set. This is a generation
+guard, not a cleanup of plants already stored in chunks. A saved-world audit
+found both vanilla and Greeneries plants on sand; Greeneries' replacement
+feature definitions alone do not establish which mod allowed their survival.
+
+A fresh-world follow-up identified Lush 2.2's `lush:lush_vegetation` as a
+separate direct-write route: it boosts unknown ecology IDs with grass/ferns and
+spills across chunks. This duplicate vegetation feature is now removed only from
+the eleven ecology biomes; Lush's rocks, mushrooms and other biomes are retained.
+`_WG` heightmaps stop updating after CARVERS, so neighbor decoration can exist
+above the ground when the later ecology surface pass converts it to sand. That
+conversion explicitly clears only grass/ferns and a matching double-plant upper
+half; it does not clear shrubs, aquatic plants or rewrite saved chunks.
+
+Greeneries reeds/cattails also retain vanilla survival checks and use a
+world-coordinate density mask on TD natural worlds. Ocean/beach candidates are
+rejected; river/swamp and other sheltered banks keep patchy vegetation. This is
+a biome/substrate approximation, not a simulated salinity field. Fine reed patches
+use fixed block distances so large terrain scales do not inflate individual clumps.
+
+For Nature X Depth's elevated-river cattail rendering, enable the resource-pack
+overlay `compat/nature-x-depth/terrain-diffusion-nature-x-depth` above Nature X
+Depth, with Continuity enabled. All five general cattail rules are paired with
+the base mask at Y=62..319 and restricted to explicit freshwater biome IDs. The
+surface-algae rule receives the same freshwater restriction. Ocean seagrass keeps
+the source pack's ordinary seagrass appearance. The source pack supplies the transparent tile;
+the overlay is not standalone. This changes rendering, not block identity:
+the block remains `minecraft:seagrass`. It retains the source pack's absolute
+height heuristic, which does not distinguish shallow water from deep highland
+lakes. `NATURE_X_PACK` can point to the installed ZIP when running
+`tools/ecology/test_cattail_compat.py` to verify those source resources.
+
+Use `python -B tools/ecology/audit_offline.py` to compile the production ecology
+math and render all eleven profiles without launching Minecraft (JDK 21+ and
+Python with Pillow required). Results go to
+`build/ecology-audit`, with material fractions, spatial transition measurements,
+tree-attempt probability maps and a climate classification map. The default
+seeds are 91357, 0 and -71421 at scales two and five. These are synthetic diagnostic
+inputs, not generated ONNX terrain or a simulation of other mods. The legacy
+surface comparison represents the old TD soil rule only, excluding mod-added
+soil patches. Existing saved chunks do not change when this generator is updated.
+For observed block/biome maps, run `python -B tools/ecology/map_saved.py --world
+"path/to/world" --x 5572 --z 1208 --radius 8`. This separate Pillow-based tool
+reads 256 chunks, skips vegetation, and writes `build/ecology-audit/saved`; it
+checks source-region hashes after reading and refuses output inside the save.
+Its maps show existing blocks, not the outcome of regenerating that world.
 
 Ocean, gravel coast, steep rock and cold alpine terrain retain selected Terralith
 biomes; underground biomes retain the depth-based Terralith selector. The legacy
@@ -313,6 +510,8 @@ Use the matching Minecraft 1.21.1 loader builds of Terrain Diffusion, Terralith
 2.6.2, and Lithostitched (Terralith requires at least 1.7.7). For NeoForge, build
 Terrain Diffusion with Java 21 using `./gradlew :neoforge:build -PuseDml=true`.
 The Windows variant also requires the existing `libs/onnxruntime-dml.jar`.
+For an offline NeoForge-only build, add `--configure-on-demand --offline` to
+avoid configuring Fabric Loom and requiring its separate Minecraft cache.
 
 Enable the generated pack in
 `compat/terralith/terrain-diffusion-terralith-surface` **when creating a new world**,

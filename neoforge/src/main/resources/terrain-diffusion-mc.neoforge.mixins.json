@@ -5,8 +5,15 @@
   "compatibilityLevel": "JAVA_21",
   "plugin": "com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin",
   "mixins": [
+    "IncendiumFunctionMixin",
+    "IncendiumOriginLifecycleMixin",
+    "GreeneriesSimpleBlockFeatureMixin",
+    "SeagrassFeatureMixin",
+    "StreamsSeagrassFeatureMixin",
     "StreamsStructureShieldMixin",
     "StreamsWorldgenPrefetchMixin",
+    "StreamsStartupMixin",
+    "StreamsStartupLifecycleMixin",
     "StreamsWorldgenScaleMixin",
     "StreamsNaturalRiverMixin",
     "StreamsNaturalNetworkMixin",
@@ -15,7 +22,8 @@
     "StreamsRiverRasterMixin",
     "StreamsNaturalLifecycleMixin",
     "StreamsPlayerPrefetchMixin",
-    "StreamsBankMaterialMixin"
+    "StreamsBankMaterialMixin",
+    "StreamsBankMaterial2138Mixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -1,0 +1,9 @@
+{
+  "feature": "terrain-diffusion-mc:eco_surface",
+  "placement": [
+    {
+      "type": "minecraft:count",
+      "count": 1
+    }
+  ]
+}

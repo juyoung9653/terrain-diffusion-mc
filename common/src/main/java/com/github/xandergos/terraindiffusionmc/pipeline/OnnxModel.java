@@ -17,6 +17,7 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Thin wrapper around ONNX Runtime with aggressive VRAM optimization.
@@ -30,6 +31,30 @@ public final class OnnxModel implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(OnnxModel.class);
     private static final String OPTIMIZED_MODELS_DIR_NAME = "onnx-cache";
+    private static final boolean METRICS = Boolean.getBoolean("td.inference.metrics");
+    private static final LongAdder SESSION_ATTEMPTS = new LongAdder();
+    private static final LongAdder SESSION_NANOS = new LongAdder();
+    private static final LongAdder RUN_ATTEMPTS = new LongAdder();
+    private static final LongAdder RUN_NANOS = new LongAdder();
+    private static final LongAdder INPUT_NANOS = new LongAdder();
+    private static final LongAdder OUTPUT_NANOS = new LongAdder();
+
+    /** Opt-in wall-clock measurements; native run time includes runtime transfer costs. */
+    public record RuntimeMetrics(long sessionAttempts, long sessionNanos, long runAttempts,
+                                 long runNanos, long inputNanos, long outputNanos) { }
+
+    public static RuntimeMetrics runtimeMetrics() {
+        return new RuntimeMetrics(SESSION_ATTEMPTS.sum(), SESSION_NANOS.sum(), RUN_ATTEMPTS.sum(),
+                RUN_NANOS.sum(), INPUT_NANOS.sum(), OUTPUT_NANOS.sum());
+    }
+
+    private OrtSession createMeasuredSession(byte[] bytes, OrtSession.SessionOptions options) throws OrtException {
+        if (!METRICS) return env.createSession(bytes, options);
+        long started = System.nanoTime();
+        SESSION_ATTEMPTS.increment();
+        try { return env.createSession(bytes, options); }
+        finally { SESSION_NANOS.add(System.nanoTime() - started); }
+    }
 
     private static volatile String resolvedInferenceProvider = null;
     private static final AtomicBoolean providerLoggedOnce = new AtomicBoolean(false);
@@ -108,7 +133,7 @@ public final class OnnxModel implements AutoCloseable {
             OrtSession.SessionOptions optimizationOptions = new OrtSession.SessionOptions();
             optimizationOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT);
             optimizationOptions.setOptimizedModelFilePath(temporaryOptimizedModelPath.toAbsolutePath().toString());
-            try (OrtSession ignored = env.createSession(sourceModelBytes, optimizationOptions)) {
+            try (OrtSession ignored = createMeasuredSession(sourceModelBytes, optimizationOptions)) {
                 // Session creation materializes the optimized model on disk.
             }
             byte[] optimizedModelBytesFromDisk = Files.readAllBytes(temporaryOptimizedModelPath);
@@ -150,7 +175,7 @@ public final class OnnxModel implements AutoCloseable {
         if ("cpu".equals(TerrainDiffusionConfig.inferenceDevice())) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-            this.cpuSession = env.createSession(modelBytes, sessionOptions);
+            this.cpuSession = createMeasuredSession(modelBytes, sessionOptions);
             this.gpuSession = null;
             setResolvedProviderOnce("CPU");
             LOG.info("ONNX model '{}' loaded on CPU ({} KB) in {} ms",
@@ -166,7 +191,7 @@ public final class OnnxModel implements AutoCloseable {
                         "inference.offload_models=false is not supported with CoreML. " +
                         "Set inference.offload_models=true in terrain-diffusion-mc.properties.");
             }
-            this.gpuSession = env.createSession(modelBytes, sessionOptions);
+            this.gpuSession = createMeasuredSession(modelBytes, sessionOptions);
             this.cpuSession = null;
             LOG.info("ONNX model '{}' loaded on GPU ({} KB) in {} ms",
                     name, modelBytes.length / 1024, System.currentTimeMillis() - startMillis);
@@ -287,7 +312,7 @@ public final class OnnxModel implements AutoCloseable {
             OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
             opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
             addGpuProvider(opts);
-            activeGpuSession = env.createSession(optimizedModelBytes, opts);
+            activeGpuSession = createMeasuredSession(optimizedModelBytes, opts);
             gpuSlotHolder = this;
             LOG.debug("GPU session ready for '{}'", name);
         } catch (OrtException e) {
@@ -361,15 +386,24 @@ public final class OnnxModel implements AutoCloseable {
         Map<String, OnnxTensor> feed = new LinkedHashMap<>();
         OrtEnvironment env = OrtEnvironment.getEnvironment();
         try {
+            long inputStarted = METRICS ? System.nanoTime() : 0;
             for (Object[] inp : inputs) {
                 feed.put((String) inp[0],
                         OnnxTensor.createTensor(env, FloatBuffer.wrap((float[]) inp[1]), (long[]) inp[2]));
             }
-            try (OrtSession.Result result = session.run(feed)) {
+            if (METRICS) INPUT_NANOS.add(System.nanoTime() - inputStarted);
+            long runStarted = METRICS ? System.nanoTime() : 0;
+            OrtSession.Result rawResult;
+            if (METRICS) RUN_ATTEMPTS.increment();
+            try { rawResult = session.run(feed); }
+            finally { if (METRICS) RUN_NANOS.add(System.nanoTime() - runStarted); }
+            try (OrtSession.Result result = rawResult) {
+                long outputStarted = METRICS ? System.nanoTime() : 0;
                 OnnxTensor output = (OnnxTensor) result.get(0);
                 FloatBuffer buf = output.getFloatBuffer();
                 float[] out = new float[buf.remaining()];
                 buf.get(out);
+                if (METRICS) OUTPUT_NANOS.add(System.nanoTime() - outputStarted);
                 return out;
             }
         } catch (OrtException e) {

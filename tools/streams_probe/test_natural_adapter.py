@@ -10,6 +10,8 @@ import os
 import re
 from pathlib import Path
 
+from audit_streams_compat import audit_jar
+
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build" / "natural-adapter-test"
 JAVA_HOME: Path | None = None
@@ -32,6 +34,7 @@ FROZEN_COMPARISON = ROOT / "tools/streams_probe/FrozenProfileComparison.java"
 JARS = {
     "2.13.1": ROOT / "build/streams-probe/minimal-12345/mods/StreamsReflowing-1.21.1-neoforge-2.13.1.jar",
     "2.13.5": ROOT / "build/scale5-natural/v2135/mods/StreamsReflowing-1.21.1-neoforge-2.13.5.jar",
+    "2.13.8": Path(os.environ.get("APPDATA", "")) / "PrismLauncher/instances/1.21.1 neoforge rpg/minecraft/mods/StreamsReflowing-1.21.1-neoforge-2.13.8.jar",
 }
 
 
@@ -72,7 +75,7 @@ def bytecode_layout(jar: Path, version: str) -> None:
             "Worldgen.engine FileNetworkStore(path, seed, config) constructor call missing")
     require("assemble(dev.streamsreflowing.core.plate.PlateKey, java.util.List<dev.streamsreflowing.core.river.RiverSegment>, java.util.List<dev.streamsreflowing.core.river.Lake>, dev.streamsreflowing.core.config.StreamsConfig);" in normalized_tracer,
             "NetworkTracer base assemble signature missing")
-    if version == "2.13.5":
+    if version in {"2.13.5", "2.13.8"}:
         require("assemble(dev.streamsreflowing.core.plate.PlateKey, java.util.List<dev.streamsreflowing.core.river.RiverSegment>, java.util.List<dev.streamsreflowing.core.river.Lake>, java.util.List<dev.streamsreflowing.core.api.Sink>, dev.streamsreflowing.core.Relief, dev.streamsreflowing.core.config.StreamsConfig);" in normalized_tracer,
                 "NetworkTracer sinks/relief assemble signature missing")
     require("java.util.List<dev.streamsreflowing.core.river.NetworkTracer$Pt>, dev.streamsreflowing.core.config.StreamsConfig, java.util.List<dev.streamsreflowing.core.river.RiverSegment>" in tracer,
@@ -84,7 +87,8 @@ def bytecode_layout(jar: Path, version: str) -> None:
     normalized_carver = " ".join(carver.split())
     place = carver.split("public boolean place(", 1)[1].split("\n  private ", 1)[0]
     writes = re.findall(r"(?m)^\s*(\d+): invokeinterface .*WorldGenLevel\.setBlock:", place)
-    require(len(writes) > 6 and writes[6] == ("6982" if version == "2.13.1" else "7198"),
+    dry_air_offsets = {"2.13.1": "6982", "2.13.5": "7198", "2.13.8": "7843"}
+    require(len(writes) > 6 and writes[6] == dry_air_offsets[version],
             "RiverCarverFeature dry-bank AIR write ordinal 6 moved; re-audit its branch before applying v6 retention")
     normalized_blacklist = " ".join(blacklist.split())
     normalized_column = " ".join(column.split())
@@ -160,7 +164,7 @@ def find_java_home(requested: Path | None) -> Path:
     environment = os.environ.get("JAVA_HOME")
     if environment:
         candidates.append(Path(environment))
-    candidates.extend((Path(r"C:\Program Files\Java\jdk-21"), Path(r"C:\Program Files\Microsoft\jdk-21")))
+    candidates.extend((Path(r"C:\Program Files\Android\Android Studio\jbr"), Path(r"C:\Program Files\Java\jdk-21"), Path(r"C:\Program Files\Microsoft\jdk-21")))
     for candidate in candidates:
         if (candidate / "bin" / "javac.exe").is_file() and (candidate / "bin" / "java.exe").is_file() and (candidate / "bin" / "javap.exe").is_file():
             return candidate
@@ -201,6 +205,9 @@ def main() -> None:
     for version, jar in jars.items():
         try:
             bytecode_layout(jar, version)
+            if version in {"2.13.5", "2.13.8"}:
+                compatibility = audit_jar(JAVA_HOME, jar, version)
+                require(compatibility["passed"], "Streams compatibility audit failed: " + "; ".join(compatibility["failures"]))
             output = run([str(JAVA), "-ea", "-cp", str(OUT) + ";" + str(jar),
                           "com.github.xandergos.terraindiffusionmc.diagnostic.NaturalAdapterHarness"])
             print(version + ": " + output.strip())

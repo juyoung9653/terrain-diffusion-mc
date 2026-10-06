@@ -36,6 +36,7 @@ public final class StreamsNaturalConfig {
         // V5 only finishes dry banks after carving; native routing and water grades stay frozen.
         if (version == 5) return watershedProfile(config, scale);
         if (version == 6) return watershedProfile(config, scale);
+        if (version == 7) return watershedProfile(config, scale);
         if (version != 2) throw new IllegalArgumentException("Unsupported natural river profile " + version);
         Object legacy = apply(config, scale);
         Object hydraulics = StreamsRecordAccess.copy(StreamsRecordAccess.read(legacy, "hydraulics"), Map.of(

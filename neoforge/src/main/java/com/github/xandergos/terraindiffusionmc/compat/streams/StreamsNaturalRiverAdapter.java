@@ -18,6 +18,7 @@ import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverStat
 public final class StreamsNaturalRiverAdapter {
     private static final Map<Object, Integer> CONFIGS = Collections.synchronizedMap(new IdentityHashMap<>());
     private static final Map<Object, ServerLevel> TERRAIN_LEVELS = Collections.synchronizedMap(new IdentityHashMap<>());
+    private static final Map<Object, LocalTerrainProvider> PROVIDERS = Collections.synchronizedMap(new IdentityHashMap<>());
     private StreamsNaturalRiverAdapter() { }
 
     public static Object configure(WorldGenLevel level, Object nativeConfig) {
@@ -25,7 +26,8 @@ public final class StreamsNaturalRiverAdapter {
         int version = WorldNaturalRiverState.version(level.getLevel());
         Object config = StreamsNaturalConfig.apply(nativeConfig, StreamsScalePolicy.activeScale(level), version);
         CONFIGS.put(config, version);
-        if (version == 6) TERRAIN_LEVELS.put(config, level.getLevel());
+        PROVIDERS.put(config, LocalTerrainProvider.getInstance());
+        if (version >= 6) TERRAIN_LEVELS.put(config, level.getLevel());
         if (version >= 3) LocalTerrainProvider.setLargeRiverPlanningCache(true);
         LoggerFactory.getLogger("TerrainDiffusion/NaturalRivers").info(
                 "Natural river profile v{}: accumulation {}, coastal chain {} cells, terrain confinement, asymmetric banks",
@@ -43,11 +45,23 @@ public final class StreamsNaturalRiverAdapter {
         if (level == null) throw new IllegalStateException("Missing v6 terrain binding");
         var generator = level.getChunkSource().getGenerator();
         var randomState = level.getChunkSource().randomState();
-        return (x, z) -> generator.getBaseHeight(x, z, Heightmap.Types.OCEAN_FLOOR_WG, level, randomState);
+        LocalTerrainProvider provider = provider(config);
+        return (x, z) -> {
+            try {
+                return provider.withBinding(() -> generator.getBaseHeight(x, z,
+                        Heightmap.Types.OCEAN_FLOOR_WG, level, randomState));
+            } catch (RuntimeException failure) { throw failure; }
+            catch (Exception failure) { throw new IllegalStateException("Streams terrain sampling failed", failure); }
+        };
     }
 
     /** Per-build bounded TD ocean query. Heightmap coordinates are Z,X, matching LocalTerrainProvider. */
     static boolean tdMarineWithin16(int x, int z, Map<Long, LocalTerrainProvider.HeightmapData> tiles) {
+        return tdMarineWithin16(x, z, tiles, LocalTerrainProvider.getInstance());
+    }
+
+    private static boolean tdMarineWithin16(int x, int z,
+            Map<Long, LocalTerrainProvider.HeightmapData> tiles, LocalTerrainProvider provider) {
         int tileSize = TerrainDiffusionConfig.tileSize();
         int shift = Integer.numberOfTrailingZeros(tileSize);
         for (int dz = -16; dz <= 16; dz += 8) for (int dx = -16; dx <= 16; dx += 8) {
@@ -58,7 +72,7 @@ public final class StreamsNaturalRiverAdapter {
             LocalTerrainProvider.HeightmapData data = tiles.get(key);
             if (data == null && !tiles.containsKey(key)) {
                 int startX = tileX << shift, startZ = tileZ << shift;
-                data = LocalTerrainProvider.getInstance().fetchHeightmap(startZ, startX,
+                data = provider.fetchHeightmap(startZ, startX,
                         startZ + tileSize, startX + tileSize);
                 tiles.put(key, data);
             }
@@ -78,10 +92,11 @@ public final class StreamsNaturalRiverAdapter {
                     network.getClass().getClassLoader());
             java.lang.reflect.Method waterClass = sampler.getMethod("waterBiomeClass", int.class, int.class);
             Map<Long, LocalTerrainProvider.HeightmapData> tiles = new java.util.HashMap<>();
+            LocalTerrainProvider provider = provider(config);
             java.util.function.BiPredicate<Integer, Integer> marine = (x, z) -> {
                 try {
                     return ((Number) waterClass.invoke(terrain, x, z)).intValue() == 2
-                            || tdMarineWithin16(x, z, tiles);
+                            || tdMarineWithin16(x, z, tiles, provider);
                 } catch (ReflectiveOperationException failure) { return false; }
             };
             Object selected = StreamsWatershedNetwork.select(network, domain, terrain, config, marine);
@@ -97,9 +112,25 @@ public final class StreamsNaturalRiverAdapter {
         return version != null ? nativePath.resolve("td-natural-v" + version) : nativePath;
     }
     public static void clear() {
+        java.util.Set<LocalTerrainProvider> providers;
+        synchronized (PROVIDERS) {
+            providers = new java.util.HashSet<>(PROVIDERS.values());
+        }
+        for (LocalTerrainProvider provider : providers) {
+            LoggerFactory.getLogger("TerrainDiffusion/NaturalRivers").info(
+                    "Terrain cache before river cleanup (before capacity shrink): {}",
+                    provider.performanceSnapshot());
+        }
         CONFIGS.clear();
         TERRAIN_LEVELS.clear();
+        PROVIDERS.clear();
         LocalTerrainProvider.setLargeRiverPlanningCache(false);
+    }
+
+    private static LocalTerrainProvider provider(Object config) {
+        LocalTerrainProvider provider = PROVIDERS.get(config);
+        if (provider == null) throw new java.util.concurrent.CancellationException("Streams world has stopped");
+        return provider;
     }
 }
 

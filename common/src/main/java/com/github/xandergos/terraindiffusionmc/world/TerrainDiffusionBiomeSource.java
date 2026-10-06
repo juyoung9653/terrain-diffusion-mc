@@ -15,6 +15,7 @@ import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.Holder;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.HolderGetter;
 import net.minecraft.core.QuartPos;
 import net.minecraft.core.registries.Registries;
@@ -25,6 +26,8 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.biome.Climate;
+import net.minecraft.world.level.LevelReader;
+import net.minecraft.util.Mth;
 import net.minecraft.util.RandomSource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,10 +35,12 @@ import org.slf4j.LoggerFactory;
 import java.util.Map;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Predicate;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
+import java.util.stream.Collectors;
 
 import static java.util.Map.entry;
 
@@ -119,6 +124,30 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     public boolean naturalBiomes() { return naturalBiomes; }
     public String ecologyShowcase() { return ecologyShowcase; }
 
+    /** Immutable-source adapter for verified background searches; never fetches another tile. */
+    Holder<Biome> fastLocateBiome(int blockX, int blockY, int blockZ, int startX, int startZ,
+                                HeightmapData data) {
+        if (data == null || data.biomeIds == null)
+            throw new IllegalStateException("Exact biome tile unavailable");
+        return biomeFromTile(blockX, blockY, blockZ, startX, startZ, data);
+    }
+
+    /** Coarse labels are ranking hints only, including in the natural ecology preset. */
+    Holder<Biome> fastLocateHint(int x, int z,
+            com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimate climate,
+            CoarseBiomeHints hints) {
+        if (naturalBiomes) {
+            if (!ecologyShowcase.isEmpty()) return showcaseBiome();
+            var v = climate.sample(x, z);
+            var selection = EcologyClassifier.select(x, z, v.elevation(), 0, false,
+                    v.temperature(), v.precipitation(), v.elevation());
+            return selection.terrainBiomeId() != 0 ? terralithBiomes.get(selection.terrainBiomeId())
+                    : ecologicalBiomes.get(selection.sample().biomeId());
+        }
+        Holder<Biome> hint = terralith ? terralithBiomes.get(hints.terralithAt(x, z)) : null;
+        return hint != null ? hint : biomeIdMap.get(hints.vanillaAt(x, z));
+    }
+
     private Holder<Biome> showcaseBiome() {
         return ecologicalBiomes.get(EcologyClassifier.BIOMES.indexOf(ecologyShowcase) + 1);
     }
@@ -179,7 +208,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         int blockX = QuartPos.toBlock(x);
         int blockZ = QuartPos.toBlock(z);
 
-        int tileSize = TerrainDiffusionConfig.tileSize();
+        int tileSize = LocalTerrainProvider.sampleTileSize();
         int tileShift = Integer.numberOfTrailingZeros(tileSize);
 
         int tileX = blockX >> tileShift;
@@ -190,7 +219,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         int blockEndX = blockStartX + tileSize;
         int blockEndZ = blockStartZ + tileSize;
 
-        HeightmapData data = LocalTerrainProvider.getInstance().fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
+        HeightmapData data = LocalTerrainProvider.getInstance().fetchBiomeHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
         return biomeFromTile(blockX, QuartPos.toBlock(y), blockZ, blockStartX, blockStartZ, data);
     }
 
@@ -230,7 +259,42 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         return biomeIdMap.get((short) 1);
     }
 
-    /** Called only by concentric-ring placement; ordinary biome searches remain unchanged. */
+    /** Exact /locate biome traversal with request-local reuse of consecutive tile reads. */
+    @Override
+    public Pair<BlockPos, Holder<Biome>> findClosestBiome3d(BlockPos pos, int radius,
+            int horizontalStep, int verticalStep, Predicate<Holder<Biome>> biomePredicate,
+            Climate.Sampler sampler, LevelReader level) {
+        // A subclass may override getNoiseBiome; preserve its virtual dispatch.
+        if (getClass() != TerrainDiffusionBiomeSource.class
+                || "false".equalsIgnoreCase(System.getProperty("td.locate.biomeCache")))
+            return super.findClosestBiome3d(pos, radius, horizontalStep, verticalStep,
+                    biomePredicate, sampler, level);
+        Set<Holder<Biome>> accepted = possibleBiomes().stream().filter(biomePredicate)
+                .collect(Collectors.toUnmodifiableSet());
+        if (accepted.isEmpty()) return null;
+        Predicate<Holder<Biome>> matches = accepted::contains;
+        int steps = Math.floorDiv(radius, horizontalStep);
+        int[] heights = Mth.outFromOrigin(pos.getY(), level.getMinBuildHeight() + 1,
+                level.getMaxBuildHeight(), verticalStep).toArray();
+        // Only these two modes return before all Y-dependent cave selection in biomeFromTile.
+        boolean verticallyInvariant = !terralith || !ecologyShowcase.isEmpty();
+        ExactBiomeSearch<HeightmapData, Holder<Biome>> search = new ExactBiomeSearch<>(
+                LocalTerrainProvider.sampleTileSize(),
+                (x, z, size) -> LocalTerrainProvider.getInstance()
+                        .fetchBiomeHeightmap(z, x, z + size, x + size),
+                this::biomeFromTile, verticallyInvariant);
+        // Keep Minecraft's own spiral and vertical sequence: first-hit/tie order is unchanged.
+        for (BlockPos.MutableBlockPos offset : BlockPos.spiralAround(BlockPos.ZERO, steps,
+                Direction.EAST, Direction.SOUTH)) {
+            int x = pos.getX() + offset.getX() * horizontalStep;
+            int z = pos.getZ() + offset.getZ() * horizontalStep;
+            ExactBiomeSearch.Match<Holder<Biome>> match = search.findColumn(x, z, heights, matches);
+            if (match != null) return Pair.of(new BlockPos(x, match.blockY(), z), match.biome());
+        }
+        return null;
+    }
+
+    /** Called only by concentric-ring placement; separate from the command search above. */
     public Pair<BlockPos, Holder<Biome>> findRingBiome(int x, int y, int z, int radius,
                                                      Predicate<Holder<Biome>> preferred, RandomSource random) {
         requireBiomeIdMap();

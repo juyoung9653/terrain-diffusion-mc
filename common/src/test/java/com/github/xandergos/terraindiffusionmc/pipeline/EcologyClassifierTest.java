@@ -35,7 +35,35 @@ public final class EcologyClassifierTest {
         require(EcologyClassifier.select(0, 0, 0, .1f, true, 15, 800, 300).terrainBiomeId() != 0, "coast retained");
         require(EcologyClassifier.select(0, 0, -100, .1f, false, 15, 800, 300).sample().biomeId() == 0, "ocean retained");
         checkRegionalLandIdentity();
+        checkDryWoodlandBand();
+        checkSoilCoveredHills();
         System.out.println("EcologyClassifierTest: PASS (11 ecosystems, " + transitions + " continuous label transitions)");
+    }
+
+    private static void checkSoilCoveredHills() {
+        float flat = EcologyClassifier.select(0, 0, 300, 0, false, 15, 1200, 300).sample().treeCover();
+        float previous = flat;
+        for (int step = 0; step <= 200; step++) {
+            float slope = step / 100f;
+            float cover = EcologyClassifier.select(0, 0, 300, slope, false, 15, 1200, 300).sample().treeCover();
+            require(cover <= previous && previous - cover < .012f, "hillside canopy must taper smoothly");
+            if (slope <= .85f) require(cover > .70f * flat, "ordinary soil-covered hills must retain forest potential");
+            if (slope >= 1.8f) require(cover == 0, "very steep faces must still exclude trees");
+            previous = cover;
+        }
+    }
+
+    private static void checkDryWoodlandBand() {
+        for (float t : new float[]{18, 22, 28, 35}) {
+            for (float m : new float[]{.54f, .58f, .62f}) {
+                var sample = EcologyClassifier.select(0, 0, 100, .1f, false,
+                        t, m * (500 + 20 * t), 100).sample();
+                require(sample.biomeId() == 7, "dry woodland must span a substantial moisture band");
+            }
+            var grass = EcologyClassifier.select(0, 0, 100, .1f, false,
+                    t, .45f * (500 + 20 * t), 100).sample();
+            require(grass.biomeId() == 8, "dry grassland must remain represented");
+        }
     }
 
     private static void checkRegionalLandIdentity() {

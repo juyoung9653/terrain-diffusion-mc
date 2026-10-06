@@ -22,7 +22,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
         int z = pos.blockZ();
         int y = pos.blockY();
 
-        int tileSize = TerrainDiffusionConfig.tileSize();
+        int tileSize = LocalTerrainProvider.sampleTileSize();
         int tileShift = Integer.numberOfTrailingZeros(tileSize);
 
         int tileX = x >> tileShift;
@@ -35,7 +35,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
         int blockEndZ = blockStartZ + tileSize;
 
         HeightmapData data = LocalTerrainProvider.getInstance()
-                .fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
+                .fetchGroundHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
 
         if (data == null || data.heightmap == null) {
             return 0.0;
@@ -61,7 +61,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
         }
 
         void init(int x, int z) {
-            int tileSize = TerrainDiffusionConfig.tileSize();
+            int tileSize = LocalTerrainProvider.sampleTileSize();
             int tileShift = Integer.numberOfTrailingZeros(tileSize);
 
             int tileX = x >> tileShift;
@@ -73,7 +73,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
             this.blockEndZ = blockStartZ + tileSize;
 
             this.data = LocalTerrainProvider.getInstance()
-                .fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
+                .fetchGroundHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
         }
     }
 

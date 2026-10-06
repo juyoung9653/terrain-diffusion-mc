@@ -35,7 +35,7 @@ final class MacroBiomeContext {
             smooth[r * fieldW + c] = sampleWorld(elevation, 0, nativeI0, nativeJ0, nativeH, nativeW,
                     scale, fieldI0 + r, fieldJ0 + c);
 
-        int[] oceanDistance = coastDistance(smooth, fieldH, fieldW);
+        int[] oceanDistance = coastDistance(smooth, fieldH, fieldW, height, width);
         int n = height * width;
         float[] e = new float[n], slope = new float[n], temp = new float[n], precip = new float[n], cv = new float[n];
         boolean[] coast = new boolean[n];
@@ -51,7 +51,7 @@ final class MacroBiomeContext {
             temp[out] = BiomeClassifier.terralithTemperature(sampleChannel(climate, 0, nativeI0, nativeJ0, nativeH, nativeW, scale, anchorI, anchorJ), anchorI, anchorJ);
             precip[out] = BiomeClassifier.terralithPrecipitation(sampleChannel(climate, 2, nativeI0, nativeJ0, nativeH, nativeW, scale, anchorI, anchorJ), anchorI, anchorJ);
             cv[out] = sampleChannel(climate, 3, nativeI0, nativeJ0, nativeH, nativeW, scale, anchorI, anchorJ);
-            int local = (r + CONTEXT_PAD) * fieldW + c + CONTEXT_PAD;
+            int local = out;
             coast[out] = oceanDistance[local] <= COAST_BLOCKS * COAST_BLOCKS;
             // The bounded distance transform is exact only within the coast radius.
             distance[out] = coast[out] ? (float) Math.sqrt(oceanDistance[local]) : Float.POSITIVE_INFINITY;
@@ -107,23 +107,24 @@ final class MacroBiomeContext {
     }
 
     /** Squared Euclidean distance to an ocean cell, with row passes instead of a 49x49 scan per cell. */
-    private static int[] coastDistance(float[] elevation, int h, int w) {
-        int[] horizontal = new int[h * w], result = new int[h * w];
+    private static int[] coastDistance(float[] elevation, int h, int w, int outH, int outW) {
+        int[] horizontal = new int[h * w], result = new int[outH * outW];
         final int inf = 1_000_000;
         for (int r = 0; r < h; r++) {
             int left = inf; for (int c = 0; c < w; c++) { if (elevation[r*w+c] < 0) left = 0; else if (left < inf) left++; horizontal[r*w+c] = left; }
             int right = inf; for (int c = w - 1; c >= 0; c--) { if (elevation[r*w+c] < 0) right = 0; else if (right < inf) right++; horizontal[r*w+c] = Math.min(horizontal[r*w+c], right); }
         }
-        for (int r = 0; r < h; r++) for (int c = 0; c < w; c++) {
+        // Only requested cells consume distances; the halo supplies neighbors, not outputs.
+        for (int r = 0; r < outH; r++) for (int c = 0; c < outW; c++) {
             int best = inf;
             for (int dy = -COAST_BLOCKS; dy <= COAST_BLOCKS; dy++) {
-                int rr = r + dy;
+                int rr = r + CONTEXT_PAD + dy;
                 if (rr >= 0 && rr < h) {
-                    int dx = horizontal[rr*w+c];
+                    int dx = horizontal[rr*w+c+CONTEXT_PAD];
                     if (dx < inf) best = Math.min(best, dx * dx + dy * dy);
                 }
             }
-            result[r*w+c] = best;
+            result[r*outW+c] = best;
         }
         return result;
     }

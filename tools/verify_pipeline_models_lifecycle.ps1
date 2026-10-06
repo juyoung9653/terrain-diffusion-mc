@@ -20,6 +20,8 @@ try {
     & (Join-Path $JavaHome 'bin\javac.exe') -d $outputRoot @sources
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     & (Join-Path $JavaHome 'bin\java.exe') -cp $outputRoot com.github.xandergos.terraindiffusionmc.pipeline.PipelineModelsLifecycleHarness
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $JavaHome 'bin\java.exe') -cp $outputRoot com.github.xandergos.terraindiffusionmc.pipeline.PipelineModelsLifecycleHarness shutdown
     exit $LASTEXITCODE
 } finally {
     $resolvedOutput = (Resolve-Path -LiteralPath $outputRoot).Path

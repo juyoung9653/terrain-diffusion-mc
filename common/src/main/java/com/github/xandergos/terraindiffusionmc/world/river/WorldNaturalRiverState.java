@@ -117,7 +117,8 @@ public final class WorldNaturalRiverState extends SavedData {
                 || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v3"))
                 || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v4"))
                 || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v5"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v6"));
+                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v6"))
+                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v7"));
         WorldNaturalRiverState state = level.getDataStorage().computeIfAbsent(TYPE, DATA_NAME);
         if (state.settings.version == 0) {
             // DimensionDataStorage logs and swallows malformed NBT/load failures. Do not

@@ -8,7 +8,7 @@ import org.spongepowered.asm.mixin.extensibility.IMixinInfo;
 import java.util.List;
 import java.util.Set;
 
-/** Applies compatibility hooks only to the audited Streams 2.13.1 and 2.13.5 layouts. */
+/** Applies compatibility hooks only to audited Streams layouts. */
 public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlugin {
     private static final Set<String> AUDITED_MIXINS = Set.of(
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin",
@@ -19,8 +19,11 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsRiverBanksMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsShallowBanksMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsRiverRasterMixin",
-            "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin",
-            "com.github.xandergos.terraindiffusionmc.mixin.StreamsBankMaterialMixin");
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsPlayerPrefetchMixin");
+    private static final String LEGACY_BANK_MATERIAL_MIXIN =
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsBankMaterialMixin";
+    private static final String BANK_MATERIAL_2138_MIXIN =
+            "com.github.xandergos.terraindiffusionmc.mixin.StreamsBankMaterial2138Mixin";
 
     @Override
     public void onLoad(String mixinPackage) {
@@ -33,18 +36,40 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
-        return !AUDITED_MIXINS.contains(mixinClassName) || hasAuditedStreamsVersion();
+        if (LEGACY_BANK_MATERIAL_MIXIN.equals(mixinClassName)) {
+            return hasStreamsVersion(StreamsStructureShieldMixinPlugin::isLegacyBankMaterialVersion);
+        }
+        if (BANK_MATERIAL_2138_MIXIN.equals(mixinClassName)
+                || mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.StreamsSeagrassFeatureMixin")) {
+            return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2138);
+        }
+        if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.StreamsStartupMixin")) {
+            return hasStartupAdapter();
+        }
+        return !AUDITED_MIXINS.contains(mixinClassName) || hasStreamsVersion(StreamsStructureShieldMixinPlugin::isAuditedVersion);
     }
 
-    private static boolean hasAuditedStreamsVersion() {
+    private static boolean hasStreamsVersion(java.util.function.Predicate<String> versionPredicate) {
         return FMLLoader.getLoadingModList().getMods().stream()
                 .filter(mod -> "streamsreflowing".equals(mod.getModId()))
                 .map(mod -> mod.getVersion().toString())
-                .anyMatch(StreamsStructureShieldMixinPlugin::isAuditedVersion);
+                .anyMatch(versionPredicate);
+    }
+
+    public static boolean hasStartupAdapter() {
+        return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2138);
     }
 
     public static boolean isAuditedVersion(String version) {
+        return isLegacyBankMaterialVersion(version) || is2138(version);
+    }
+
+    private static boolean isLegacyBankMaterialVersion(String version) {
         return "2.13.1".equals(version) || "2.13.5".equals(version);
+    }
+
+    private static boolean is2138(String version) {
+        return "2.13.8".equals(version);
     }
 
     @Override

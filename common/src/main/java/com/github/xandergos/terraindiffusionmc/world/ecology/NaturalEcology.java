@@ -9,8 +9,18 @@ import net.minecraft.world.level.chunk.ChunkGenerator;
 
 /** Feature-facing read-only lookup; uses the same cached fields as biome assignment. */
 public final class NaturalEcology {
+    public record SurfaceSample(EcologyClassifier.Sample climate, short terrainBiomeId, float elevation) { }
+
     private NaturalEcology() { }
+
+    /** Vegetation keeps its existing land-only eligibility. */
     public static EcologyClassifier.Sample sample(ChunkGenerator generator, int x, int z) {
+        SurfaceSample surface = surfaceSample(generator, x, z);
+        return surface == null || surface.climate().biomeId() == 0 ? null : surface.climate();
+    }
+
+    /** Surface-only lookup retains shore climate without enabling land vegetation on shores. */
+    public static SurfaceSample surfaceSample(ChunkGenerator generator, int x, int z) {
         if (!(generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource source) || !source.naturalBiomes())
             return null;
         int size = TerrainDiffusionConfig.tileSize();
@@ -18,12 +28,15 @@ public final class NaturalEcology {
         var data = LocalTerrainProvider.getInstance().fetchHeightmap(z0, x0, z0 + size, x0 + size);
         if (data == null || data.ecology == null) throw new IllegalStateException("Natural ecology tile unavailable");
         var result = data.ecology.sample(x - x0, z - z0);
+        short terrainId = data.ecology.terrainBiomeId(x - x0, z - z0);
+        float elevation = data.heightmap[z - z0][x - x0];
         if (!source.ecologyShowcase().isEmpty()) {
             if (EcologyShowcaseProfile.retainsTerrainBiome(data.ecology.terrainBiomeId(x - x0, z - z0))
                     || EcologyShowcaseProfile.isVanillaOcean(data.biomeIds[z - z0][x - x0]))
                 return null;
-            return EcologyShowcaseProfile.sample(source.ecologyShowcase(), x, z, result.slope());
+            return new SurfaceSample(EcologyShowcaseProfile.sample(source.ecologyShowcase(), x, z, result.slope()),
+                    (short) 0, elevation);
         }
-        return result.biomeId() == 0 ? null : result;
+        return new SurfaceSample(result, terrainId, elevation);
     }
 }

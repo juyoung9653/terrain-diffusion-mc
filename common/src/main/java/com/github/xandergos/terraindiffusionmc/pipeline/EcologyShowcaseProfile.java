@@ -14,8 +14,7 @@ public final class EcologyShowcaseProfile {
             Map.entry("boreal_forest", new Climate(2.0F, 1.25F)),
             Map.entry("boreal_woodland", new Climate(2.0F, .80F)),
             Map.entry("cold_grassland", new Climate(0.0F, .50F)),
-            // .64 stays above the woodland cover cut-off and below the dry-climate moisture limit.
-            Map.entry("dry_woodland", new Climate(22.0F, .64F)),
+            Map.entry("dry_woodland", new Climate(22.0F, .60F)),
             Map.entry("dry_grassland", new Climate(22.0F, .33F)),
             Map.entry("tropical_forest", new Climate(28.0F, 1.50F)),
             Map.entry("tropical_woodland", new Climate(28.0F, .85F)),

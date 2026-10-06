@@ -20,6 +20,29 @@ SPECS = {
     "desert": ("desert", "desert", 2.),
 }
 
+VEGETAL_FEATURES = [
+    "minecraft:glow_lichen",
+    "terrain-diffusion-mc:eco_trees",
+    "terrain-diffusion-mc:eco_groundcover",
+]
+
+
+def write_groundcover_resources(output):
+    resources = {
+        "configured_feature/eco_groundcover.json": {
+            "type": "terrain-diffusion-mc:eco_groundcover",
+            "config": {},
+        },
+        "placed_feature/eco_groundcover.json": {
+            "feature": "terrain-diffusion-mc:eco_groundcover",
+            "placement": [],
+        },
+    }
+    for relative, body in resources.items():
+        path = output / "data/terrain-diffusion-mc/worldgen" / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+
 
 def generate(vanilla, output):
     with ZipFile(vanilla) as jar:
@@ -56,7 +79,7 @@ def generate(vanilla, output):
             removed += [f for f in features if tree_reference(f)]
             biome["features"][index] = [f for f in features if not tree_reference(f)]
         biome["features"][2].append("terrain-diffusion-mc:eco_surface")
-        biome["features"][9].append("terrain-diffusion-mc:eco_trees")
+        biome["features"][9] = list(VEGETAL_FEATURES)
         biome["temperature"] = temperature
         biome["downfall"] = .65
         biome["has_precipitation"] = name != "desert"
@@ -86,6 +109,7 @@ def generate(vanilla, output):
         old["values"].extend(value for value in additions if value not in existing)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(old, indent=2) + "\n", encoding="utf-8")
+    write_groundcover_resources(output)
     return report
 
 

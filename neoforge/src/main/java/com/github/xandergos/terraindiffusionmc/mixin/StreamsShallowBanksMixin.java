@@ -11,9 +11,9 @@ import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 
 /**
- * Audited Streams 2.13.1/2.13.5: ordinal six is the dry, non-log bank AIR
- * write in RiverCarverFeature.place (2.13.1 bytecode 6982; 2.13.5 bytecode
- * 7198).  The adjacent ordinals are log removal, water placement, and lower
+ * Audited Streams 2.13.1/2.13.5/2.13.8: ordinal six is the dry, non-log bank AIR
+ * write in RiverCarverFeature.place (bytecode 6982, 7198 and 7843 respectively).
+ * The adjacent ordinals are log removal, water placement, and lower
  * cleanup and deliberately remain native.
  */
 @Pseudo

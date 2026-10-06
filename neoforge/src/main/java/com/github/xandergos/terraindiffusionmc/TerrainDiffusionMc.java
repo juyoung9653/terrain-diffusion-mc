@@ -8,8 +8,9 @@ import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.level.LevelEvent;
-import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.server.ServerAboutToStartEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
+import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.registries.RegisterEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,6 +34,7 @@ public class TerrainDiffusionMc {
         NeoForge.EVENT_BUS.addListener(this::onServerStarting);
         NeoForge.EVENT_BUS.addListener(this::onLevelLoad);
         NeoForge.EVENT_BUS.addListener(this::onServerStopping);
+        NeoForge.EVENT_BUS.addListener(this::onServerStopped);
         NeoForge.EVENT_BUS.addListener(this::onRegisterCommands);
     }
 
@@ -46,7 +48,7 @@ public class TerrainDiffusionMc {
                 TerrainDiffusionLifecycle.registerEcologyFeatures(helper::register));
     }
 
-    private void onServerStarting(ServerStartingEvent event) {
+    private void onServerStarting(ServerAboutToStartEvent event) {
         if (!TerrainDiffusionLifecycle.isPreviewServer(event.getServer())) TerrainDiffusionLifecycle.onServerStarting();
     }
 
@@ -57,7 +59,11 @@ public class TerrainDiffusionMc {
     }
 
     private void onServerStopping(ServerStoppingEvent event) {
-        if (!TerrainDiffusionLifecycle.isPreviewServer(event.getServer())) TerrainDiffusionLifecycle.onServerStopping();
+        if (!TerrainDiffusionLifecycle.isPreviewServer(event.getServer())) TerrainDiffusionLifecycle.onServerStopping(event.getServer());
+    }
+
+    private void onServerStopped(ServerStoppedEvent event) {
+        if (!TerrainDiffusionLifecycle.isPreviewServer(event.getServer())) TerrainDiffusionLifecycle.onServerStopped(event.getServer());
     }
 
     private void onRegisterCommands(RegisterCommandsEvent event) {

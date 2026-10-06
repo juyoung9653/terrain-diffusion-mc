@@ -103,7 +103,43 @@ public final class StreamsReflowingProbe {
                 throw new IllegalStateException("Expected enabled natural river profile " + expectedNaturalProfile
                         + "; check the fresh template's initialized flag and saved profile before generating chunks");
             }
+            String savedWaterPositions = System.getProperty("td.streamsProbe.savedWaterPositions", "").trim();
+            if (!savedWaterPositions.isEmpty()) {
+                String savedWaterChunks = System.getProperty("td.streamsProbe.savedWaterChunks", "").trim();
+                if (savedWaterChunks.isEmpty()) throw new IllegalArgumentException("savedWaterChunks is required for saved-water settlement");
+                emit(receipts, SavedWaterSettlement.run(server, java.nio.file.Path.of(savedWaterPositions),
+                        java.nio.file.Path.of(savedWaterChunks)));
+                return;
+            }
             auditCustomBiomes(level, receipts);
+            if (Boolean.getBoolean("td.streamsProbe.fastLocateAudit")) {
+                emit(receipts, FastLocateAudit.run(server));
+                if (Boolean.getBoolean("td.streamsProbe.fastLocateOnly")) return;
+            }
+            if (Boolean.getBoolean("td.streamsProbe.locateBiomeAudit"))
+                emit(receipts, server.submit(() -> LocateBiomeAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            if (Boolean.getBoolean("td.streamsProbe.startupEngineAudit")) {
+                long initStarted = System.nanoTime();
+                boolean wasPresent = server.submit(() -> {
+                    try {
+                        Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen");
+                        boolean present = worldgen.getMethod("engineIfPresent", ServerLevel.class)
+                                .invoke(null, level) != null;
+                        Object engine = worldgen.getMethod("engine", net.minecraft.world.level.WorldGenLevel.class)
+                                .invoke(null, level);
+                        if (engine == null) throw new IllegalStateException("Streams startup engine missing");
+                        return present;
+                    } catch (ReflectiveOperationException failure) {
+                        throw new IllegalStateException("Streams startup engine audit failed", failure);
+                    }
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                emit(receipts, json("startup_engine_audit", "status", "passed", "serverThread", true,
+                        "engineAlreadyPresent", wasPresent,
+                        "elapsedMs", TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - initStarted)));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.incendiumAudit")) emit(receipts, IncendiumStartupAudit.run(server));
+            if (Boolean.getBoolean("td.streamsProbe.performanceAudit")) emit(receipts, TerrainPerformanceAudit.run(level));
             if (Boolean.getBoolean("td.streamsProbe.previewSessionAudit")) emit(receipts, auditPreviewSession());
             if (Boolean.getBoolean("td.streamsProbe.playerPrefetchAudit")) {
                 if ("enabled".equalsIgnoreCase(System.getProperty("td.streamsProbe.playerPrefetchMode", "disabled"))) {
@@ -208,12 +244,32 @@ public final class StreamsReflowingProbe {
             if (Boolean.getBoolean("td.streamsProbe.ecologyOverview")) {
                 emit(receipts, writeEcologyOverview(server));
             }
+            if (Boolean.getBoolean("td.streamsProbe.aquaticPlacementFixture") && !completed.isEmpty()) {
+                ChunkReceipt first = completed.getFirst();
+                emit(receipts, server.submit(() -> {
+                    level.getChunk(first.chunkX, first.chunkZ);
+                    return AquaticPlacementAudit.runFixture(level, first.chunkX, first.chunkZ);
+                })
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.aquaticPlacementAudit"))
+                emit(receipts, server.submit(() -> AquaticPlacementAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
 
             if (Boolean.getBoolean("td.streamsProbe.containmentAudit") && !completed.isEmpty()) {
                 tickAuditForcedChunks.addAll(server.submit(() -> forceTickAuditChunks(level, completed))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
                 Tickability ready = awaitTickableChunks(server, level, completed, 60_000L);
                 if (ready.tickableCount != completed.size()) throw new IllegalStateException("Containment cohort is not tickable");
+                int containmentTicks = Config.bounded("td.streamsProbe.containmentTicks", 200, 200, 6000);
+                FlowGridWarmup.Result flowGridWarmup = null;
+                if (Boolean.getBoolean("td.streamsProbe.warmFlowGrids")) {
+                    List<ChunkPos> flowGridChunks = new ArrayList<>();
+                    for (ChunkReceipt receipt : completed) flowGridChunks.add(new ChunkPos(receipt.chunkX, receipt.chunkZ));
+                    // The probe worker is off the server thread, matching Streams' native prefetch build path.
+                    flowGridWarmup = FlowGridWarmup.warm(level, flowGridChunks);
+                    emit(receipts, flowGridWarmup.json());
+                }
                 int minX = integerProperty("td.streamsProbe.containmentMinX", -4056);
                 int maxX = integerProperty("td.streamsProbe.containmentMaxX", -3961);
                 int minZ = integerProperty("td.streamsProbe.containmentMinZ", -168);
@@ -222,20 +278,43 @@ public final class StreamsReflowingProbe {
                 int maxY = integerProperty("td.streamsProbe.containmentMaxY", 215);
                 var beforeWater = server.submit(() -> RiverContainmentAudit.capture(level, minX, maxX, minY, maxY, minZ, maxZ))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                if (Boolean.getBoolean("td.streamsProbe.resetFlowingWater")) {
+                    var resetBeforeWater = beforeWater;
+                    RiverContainmentAudit.ResetResult reset = server.submit(() -> RiverContainmentAudit.resetFlowingWater(level, resetBeforeWater))
+                            .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                    emit(receipts, reset.toJson());
+                    beforeWater = reset.immediateAfter();
+                }
+                final var auditedBeforeWater = beforeWater;
                 var root = server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT);
-                RiverContainmentAudit.write(root.resolve("td-containment-before.json"), beforeWater);
+                RiverContainmentAudit.write(root.resolve("td-containment-before.json"), auditedBeforeWater);
+                if (flowGridWarmup != null) {
+                    int fixedFlowX = integerProperty("td.streamsProbe.flowGridFixedX", -4533);
+                    int fixedFlowZ = integerProperty("td.streamsProbe.flowGridFixedZ", 124);
+                    FlowGridWarmup.Active physics = server.submit(() -> {
+                        try { return FlowGridWarmup.verifyFixedChannel(level, auditedBeforeWater, fixedFlowX, fixedFlowZ); }
+                        catch (Exception e) { throw new IllegalStateException(e); }
+                    }).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                    emit(receipts, physics.json());
+                    if (!physics.active()) throw new IllegalStateException("Flow-grid physics is inactive at fixed channel " + fixedFlowX + "," + fixedFlowZ);
+                }
                 int initialOutsideGrass = server.submit(() -> {
-                    try { return RiverContainmentAudit.writePlans(level, root.resolve("td-containment-plans-before.csv"), beforeWater); }
+                    try { return RiverContainmentAudit.writePlans(level, root.resolve("td-containment-plans-before.csv"), auditedBeforeWater); }
                     catch (Exception e) { throw new IllegalStateException(e); }
                 }).get(config.timeoutSeconds, TimeUnit.SECONDS);
-                int scheduled = server.submit(() -> RiverContainmentAudit.scheduleWaterTicks(level, beforeWater))
+                var initialFlowingPlans = server.submit(() -> {
+                    try { return RiverContainmentAudit.writeFlowingPlans(level, root.resolve("td-containment-flowing-plans-before.csv"), auditedBeforeWater); }
+                    catch (Exception e) { throw new IllegalStateException(e); }
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                int scheduled = server.submit(() -> RiverContainmentAudit.scheduleWaterTicks(level, auditedBeforeWater))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS);
                 long startGameTime = server.submit(level::getGameTime).get(config.timeoutSeconds, TimeUnit.SECONDS);
                 long startWaterTick = server.submit(() -> {
                     server.tickRateManager().setFrozen(false);
                     return (long) server.getTickCount();
                 }).get(config.timeoutSeconds, TimeUnit.SECONDS);
-                Tickability advanced = awaitServerTicks(server, level, completed, startWaterTick + 200, 90_000L);
+                long containmentWaitMillis = Math.max(90_000L, containmentTicks * 100L);
+                Tickability advanced = awaitServerTicks(server, level, completed, startWaterTick + containmentTicks, containmentWaitMillis);
                 var afterWater = server.submit(() -> RiverContainmentAudit.capture(level, minX, maxX, minY, maxY, minZ, maxZ))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS);
                 RiverContainmentAudit.write(root.resolve("td-containment-after.json"), afterWater);
@@ -243,17 +322,34 @@ public final class StreamsReflowingProbe {
                     try { return RiverContainmentAudit.writePlans(level, root.resolve("td-containment-plans-after.csv"), afterWater); }
                     catch (Exception e) { throw new IllegalStateException(e); }
                 }).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                var finalFlowingPlans = server.submit(() -> {
+                    try { return RiverContainmentAudit.writeFlowingPlans(level, root.resolve("td-containment-flowing-plans-after.csv"), afterWater); }
+                    catch (Exception e) { throw new IllegalStateException(e); }
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS);
                 long gameTicks = server.submit(level::getGameTime).get(config.timeoutSeconds, TimeUnit.SECONDS) - startGameTime;
-                var spread = RiverContainmentAudit.compare(beforeWater, afterWater);
+                var spread = RiverContainmentAudit.compare(auditedBeforeWater, afterWater);
                 java.nio.file.Files.writeString(root.resolve("td-containment-comparison.json"), spread.toJson());
-                boolean passed = scheduled > 0 && gameTicks >= 200 && advanced.tick >= startWaterTick + 200
+                java.nio.file.Files.writeString(root.resolve("td-containment-flowing-summary.json"),
+                        "{\"initialOutsideChannel\":" + initialFlowingPlans.outsideChannel()
+                                + ",\"initialEscapedBeyondWidthPlusOne\":" + initialFlowingPlans.escapedBeyondWidthPlusOne()
+                                + ",\"finalOutsideChannel\":" + finalFlowingPlans.outsideChannel()
+                                + ",\"finalEscapedBeyondWidthPlusOne\":" + finalFlowingPlans.escapedBeyondWidthPlusOne() + "}\n");
+                boolean passed = scheduled > 0 && gameTicks >= containmentTicks && advanced.tick >= startWaterTick + containmentTicks
                         && advanced.tickableCount == completed.size()
-                        && spread.newlyInundatedOriginalDryGrass() == 0 && finalOutsideGrass == 0;
+                        && spread.newlyInundatedOriginalDryGrass() == 0 && initialOutsideGrass == 0 && finalOutsideGrass == 0
+                        && initialFlowingPlans.escapedBeyondWidthPlusOne() == 0
+                        && finalFlowingPlans.escapedBeyondWidthPlusOne() == 0;
                 emit(receipts, json("river_containment_audit", "status", passed ? "passed" : "failed",
-                        "scheduledWaterCells", scheduled, "startTick", startWaterTick, "endTick", advanced.tick, "gameTicks", gameTicks,
-                        "newlyInundatedGrass", spread.newlyInundatedOriginalDryGrass(), "initialWetGrass", beforeWater.wetGrassCount(),
+                        "scheduledWaterCells", scheduled, "requestedContainmentTicks", containmentTicks,
+                        "startTick", startWaterTick, "endTick", advanced.tick, "gameTicks", gameTicks,
+                        "newlyInundatedGrass", spread.newlyInundatedOriginalDryGrass(), "initialWetGrass", auditedBeforeWater.wetGrassCount(),
                         "finalWetGrass", afterWater.wetGrassCount(), "initialOutsideChannelGrass", initialOutsideGrass,
-                        "finalOutsideChannelGrass", finalOutsideGrass, "addedWater", spread.addedWater(), "removedWater", spread.removedWater()));
+                        "finalOutsideChannelGrass", finalOutsideGrass,
+                        "initialOutsideChannelFlowing", initialFlowingPlans.outsideChannel(),
+                        "initialEscapedFlowingBeyondWidthPlusOne", initialFlowingPlans.escapedBeyondWidthPlusOne(),
+                        "finalOutsideChannelFlowing", finalFlowingPlans.outsideChannel(),
+                        "finalEscapedFlowingBeyondWidthPlusOne", finalFlowingPlans.escapedBeyondWidthPlusOne(),
+                        "addedWater", spread.addedWater(), "removedWater", spread.removedWater()));
                 if (!passed) terminal = "incomplete";
             }
             String corridorBanksFile = System.getProperty("td.streamsProbe.corridorBanksFile", "").trim();
@@ -276,6 +372,12 @@ public final class StreamsReflowingProbe {
                 boolean passed = boxes > 0 && outsideGrass == 0;
                 emit(receipts,json("river_corridor_banks", "status",passed ? "passed" : "failed", "sampleBoxes",boxes,"outsideChannelWetGrass",outsideGrass));
                 if (!passed) terminal = "incomplete";
+            }
+            if (Boolean.getBoolean("td.streamsProbe.itemFlowAudit")) {
+                emit(receipts, FlowItemDriftAudit.configuredReceipt());
+                String flowReceipt = FlowItemDriftAudit.run(server, level, config.timeoutSeconds);
+                emit(receipts, flowReceipt);
+                if (!flowReceipt.contains("\"status\":\"passed\"")) terminal = "incomplete";
             }
             if (Boolean.getBoolean("td.streamsProbe.streamsTopologyAudit") && !completed.isEmpty()) {
                 List<ChunkPos> newlyForced = server.submit(() -> forceTickAuditChunks(level, completed))

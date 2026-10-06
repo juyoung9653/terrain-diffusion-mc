@@ -3,6 +3,7 @@ package com.github.xandergos.terraindiffusionmc.mixin;
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNaturalNetwork;
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNaturalRiverAdapter;
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsShallowNetwork;
+import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsConfluenceNetwork;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
@@ -24,6 +25,7 @@ public final class StreamsNaturalNetworkMixin {
             network = StreamsNaturalRiverAdapter.selectWatersheds(network, domain, terrain, config);
         }
         network = StreamsNaturalNetwork.refine(network, terrain, config);
+        network = StreamsConfluenceNetwork.refine(network, domain, config);
         cir.setReturnValue(StreamsShallowNetwork.refine(network, domain, config));
     }
 }

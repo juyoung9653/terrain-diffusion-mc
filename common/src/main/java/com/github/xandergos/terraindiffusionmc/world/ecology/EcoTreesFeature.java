@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.world.ecology;
 
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
+import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
@@ -41,7 +42,9 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
         BlockPos origin = context.origin();
         ChunkGenerator generator = context.chunkGenerator();
         EcologyClassifier.Sample sample = NaturalEcology.sample(generator, origin.getX(), origin.getZ());
-        if (sample == null || context.random().nextFloat() >= sample.treeCover() * 0.5F) return false;
+        if (sample == null || context.random().nextFloat() >= FeatureEcologyMath.treePlacementChance(
+                sample.treeCover(), context.level().getSeed(), origin.getX(), origin.getZ(),
+                WorldScaleManager.getCurrentScale())) return false;
 
         WorldGenLevel level = context.level();
         FluidState fluid = level.getFluidState(origin);

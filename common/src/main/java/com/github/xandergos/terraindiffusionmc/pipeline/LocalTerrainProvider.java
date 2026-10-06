@@ -2,9 +2,11 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 
 import com.github.xandergos.terraindiffusionmc.infinitetensor.FloatTensor;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
+import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.ref.WeakReference;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -12,12 +14,10 @@ import java.util.Random;
 import java.util.Comparator;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Provides terrain heightmap and biome data from the local WorldPipeline.
@@ -72,78 +72,228 @@ public final class LocalTerrainProvider {
         }
     }
 
-    private static record CacheKey(int i1, int j1, int i2, int j2) {}
-    private static record CacheEntry(HeightmapData data, AtomicLong lastAccessed) {}
+    private static record CacheKey(int i1, int j1, int i2, int j2, int scale) {}
+    private static final class CacheEntry {
+        final HeightmapData data;
+        final AtomicLong lastAccessed;
+        volatile boolean valid = true;
+
+        CacheEntry(HeightmapData data, AtomicLong lastAccessed) {
+            this.data = data;
+            this.lastAccessed = lastAccessed;
+        }
+    }
+
+    // One weak entry per worker: idle threads retain neither old worlds nor evicted tiles.
+    private static final ThreadLocal<RecentTile> RECENT_TILE = new ThreadLocal<>();
+    private static final boolean RECENT_TILE_CACHE_ENABLED =
+            Boolean.parseBoolean(System.getProperty("td.inference.recentTileCache", "true"));
+    private static final class RecentTile {
+        final WeakReference<LocalTerrainProvider> provider;
+        final WeakReference<CacheEntry> entry;
+        final CacheKey key;
+        final long generation;
+        int hits;
+
+        RecentTile(LocalTerrainProvider provider, CacheEntry entry, CacheKey key, long generation) {
+            this.provider = new WeakReference<>(provider);
+            this.entry = new WeakReference<>(entry);
+            this.key = key;
+            this.generation = generation;
+        }
+    }
 
     private static final int MAX_CACHE_SIZE = 64;
     private static volatile int activeCacheSize = MAX_CACHE_SIZE;
     private static final int MAX_CACHE_SIZE_HEADROOM = 8;
-    private static final Map<CacheKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
-    private static final AtomicLong CACHE_CLOCK = new AtomicLong();
-    private static final Map<CacheKey, Future<HeightmapData>> PENDING = new ConcurrentHashMap<>();
+    private final Map<CacheKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
+    private final AtomicLong CACHE_CLOCK = new AtomicLong();
+    private final Map<CacheKey, FutureTask<HeightmapData>> PENDING = new LinkedHashMap<>();
+    private final Object cacheLock = new Object();
+
+    private final Map<PartialKey, HeightmapData> partialCache = new LinkedHashMap<>(16, .75f, true);
+    private final Map<PartialKey, FutureTask<HeightmapData>> partialPending = new LinkedHashMap<>();
+    private record PartialKey(CacheKey bounds, boolean biomes, int referenceTileSize) { }
+    // Native postprocessing is request-shape dependent. Preserve the original full-tile
+    // bounds while sharing a small, byte-bounded set of reference planes across sparse reads.
+    private final Map<CacheKey, float[][]> referenceCache = new LinkedHashMap<>(8, .75f, true);
+    private static final long MAX_REFERENCE_BYTES = 32L * 1024 * 1024;
+    private static final int MAX_REFERENCE_ENTRIES = 8;
+    private long referenceBytes;
+    private final AtomicLong referenceHits = new AtomicLong(), referenceMisses = new AtomicLong(), referenceEvictions = new AtomicLong();
+    private volatile long cacheGeneration;
+    private final LongAdder hits = new LongAdder();
+    private final AtomicLong misses = new AtomicLong(), joined = new AtomicLong(), evictions = new AtomicLong();
+    private final AtomicLong computedWindows = new AtomicLong(), executionNanos = new AtomicLong();
+    private static final ThreadLocal<InferenceExecutor.Priority> REQUEST_PRIORITY =
+            ThreadLocal.withInitial(() -> InferenceExecutor.Priority.FOREGROUND);
+    public static final int SAMPLE_TILE_SIZE = 16;
+    public static int sampleTileSize() { return legacySampling() ? TerrainDiffusionConfig.tileSize() : Math.min(SAMPLE_TILE_SIZE, TerrainDiffusionConfig.tileSize()); }
+
+    public record PerformanceSnapshot(long hits, long misses, long pendingJoins, long evictions,
+                                      long computedWindows, long executionNanos, int fullTiles, int partialTiles,
+                                      long referenceHits, long referenceMisses, long referenceEvictions, long referenceBytes, int referenceTiles,
+                                      InferenceExecutor.Snapshot inference) { }
+
+    /** Hit totals are exact after callers drain; a live LongAdder snapshot may lag concurrent hits. */
+    public PerformanceSnapshot performanceSnapshot() {
+        synchronized (cacheLock) {
+            return new PerformanceSnapshot(hits.sum(), misses.get(), joined.get(), evictions.get(),
+                    computedWindows.get(), executionNanos.get(), CACHE.size(), partialCache.size(),
+                    referenceHits.get(), referenceMisses.get(), referenceEvictions.get(), referenceBytes, referenceCache.size(), INFERENCE_EXECUTOR.snapshot());
+        }
+    }
+
+    /** Reset while callers are idle when an exact measurement boundary is required. */
+    public void resetPerformanceMetrics() {
+        hits.reset(); misses.set(0); joined.set(0); evictions.set(0); computedWindows.set(0); executionNanos.set(0);
+        referenceHits.set(0); referenceMisses.set(0); referenceEvictions.set(0);
+        INFERENCE_EXECUTOR.resetMetrics();
+    }
+
+    private InferenceExecutor.Priority requestPriority() {
+        return previewOwner == null ? REQUEST_PRIORITY.get() : InferenceExecutor.Priority.BACKGROUND;
+    }
+
+    public static boolean legacySampling() { return Boolean.parseBoolean(System.getProperty("td.inference.legacySampling", "true")); }
+
+    public <T> T withPriority(InferenceExecutor.Priority priority, Callable<T> action) throws Exception {
+        InferenceExecutor.Priority previous = REQUEST_PRIORITY.get();
+        REQUEST_PRIORITY.set(priority);
+        try { return action.call(); } finally { REQUEST_PRIORITY.set(previous); }
+    }
 
     /** Larger native river plates revisit a bounded working set across sampler threads. */
     public static void setLargeRiverPlanningCache(boolean enabled) {
         activeCacheSize = enabled ? 512 : MAX_CACHE_SIZE;
         LOG.info("Terrain heightmap cache target: {} tiles", activeCacheSize);
-        evictLruTo(activeCacheSize);
+        LocalTerrainProvider current = INSTANCE;
+        if (current != null) current.evictLruTo(activeCacheSize);
     }
     /** Single thread for pipeline.get() so MemoryTileStore is not accessed concurrently. */
-    private static final ExecutorService INFERENCE_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "terrain-diffusion-inference");
-        t.setDaemon(true);
-        return t;
-    });
-
+    private static final InferenceExecutor INFERENCE_EXECUTOR =
+            new InferenceExecutor("terrain-diffusion-inference");
+    private static final Object INIT_LOCK = new Object();
+    private static InferenceExecutor.Scope gameplayScope = INFERENCE_EXECUTOR.openScope();
     private static volatile LocalTerrainProvider INSTANCE;
-    private static long instanceSeed;
-
+    private final InferenceExecutor.Scope scope;
+    private volatile long seed;
     private final WorldPipeline pipeline;
     private PreviewSession previewOwner;
     private static final ThreadLocal<PreviewSession> PREVIEW = new ThreadLocal<>();
+    private static final ThreadLocal<LocalTerrainProvider> BOUND_PROVIDER = new ThreadLocal<>();
 
-    private static final Object INIT_LOCK = new Object();
-
-    private LocalTerrainProvider(long seed, PipelineModels models) {
+    private LocalTerrainProvider(long seed, PipelineModels models, InferenceExecutor.Scope scope) {
+        this.seed = seed;
+        this.scope = scope;
         this.pipeline = new WorldPipeline(seed, models);
     }
 
-    /** Seed is 64-bit world seed. Creates provider once; later worlds only update seed and clear caches (lightweight). */
-    public static synchronized void init(long seed) {
-        PipelineModels.awaitLoad();
-        PipelineModels models = PipelineModels.getInstance();
-        if (models == null) throw new IllegalStateException("PipelineModels failed to load");
-        if (INSTANCE == null) {
-            INSTANCE = new LocalTerrainProvider(seed, models);
-            instanceSeed = seed;
-        } else if (instanceSeed != seed) {
-            INSTANCE.pipeline.setSeed(seed);
-            instanceSeed = seed;
-            CACHE.clear();
-            PENDING.clear();
+    /** Every real server receives an isolated provider/cache lifetime, including same-seed reopen. */
+    public static void beginGameplay() {
+        InferenceExecutor.Scope old;
+        synchronized (INIT_LOCK) {
+            old = gameplayScope;
+            old.close();
+            gameplayScope = INFERENCE_EXECUTOR.openScope();
+            INSTANCE = null;
+        }
+        old.awaitDrained();
+    }
+
+    /** Saving may still need terrain; call only after the server has saved/stopped. */
+    public static void shutdownGameplay() {
+        InferenceExecutor.Scope old;
+        LocalTerrainProvider stoppedProvider;
+        synchronized (INIT_LOCK) {
+            stoppedProvider = INSTANCE;
+            old = gameplayScope;
+            old.close();
+            INSTANCE = null;
+        }
+        LOG.info("Draining gameplay terrain inference: {}", INFERENCE_EXECUTOR.snapshot());
+        old.awaitDrained();
+        LOG.info("Gameplay terrain inference drained: {}", INFERENCE_EXECUTOR.snapshot());
+        if (stoppedProvider != null) LOG.info("Terrain request metrics: {}", stoppedProvider.performanceSnapshot());
+    }
+
+    /** Client teardown, before the JVM starts ONNX Runtime's independent environment shutdown hook. */
+    public static void shutdownAll() {
+        LOG.info("Draining all terrain inference: {}", INFERENCE_EXECUTOR.snapshot());
+        INFERENCE_EXECUTOR.shutdownAndDrain();
+        PipelineModels.stopLoadingAndAwait();
+        LOG.info("All terrain inference drained: {}", INFERENCE_EXECUTOR.snapshot());
+    }
+
+    public static InferenceExecutor.Snapshot inferenceSnapshot() { return INFERENCE_EXECUTOR.snapshot(); }
+
+    /** Mutations of a pipeline's seed and tile store share the native inference lane. */
+    public static void init(long seed) {
+        LocalTerrainProvider provider = getInstance();
+        try {
+            provider.scope.submit(() -> {
+                provider.pipeline.setSeed(seed);
+                provider.seed = seed;
+                provider.clearLocalCache();
+                return null;
+            }).get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted initializing terrain seed", interrupted);
+        } catch (java.util.concurrent.ExecutionException failed) {
+            throw new IllegalStateException("Could not initialize terrain seed", failed.getCause());
         }
     }
 
     public static LocalTerrainProvider getInstance() {
         PreviewSession preview = PREVIEW.get();
         if (preview != null) return preview.provider();
-        if (INSTANCE != null) return INSTANCE;
-
-        synchronized(INIT_LOCK) {
-            if (INSTANCE != null) return INSTANCE;
-            PipelineModels.awaitLoad();
-            PipelineModels models = PipelineModels.getInstance();
-            if (models == null) throw new IllegalStateException("PipelineModels failed to load");
-            INSTANCE = new LocalTerrainProvider(0L, models);
-            instanceSeed = 0L;
+        LocalTerrainProvider bound = BOUND_PROVIDER.get();
+        if (bound != null) { bound.scope.requireOpen(); return bound; }
+        LocalTerrainProvider current = INSTANCE;
+        if (current != null) { current.scope.requireOpen(); return current; }
+        synchronized (INIT_LOCK) {
+            gameplayScope.requireOpen();
+            if (INSTANCE == null) {
+                PipelineModels.awaitLoad();
+                PipelineModels models = PipelineModels.getInstance();
+                if (models == null) throw new IllegalStateException("PipelineModels failed to load");
+                INSTANCE = new LocalTerrainProvider(0L, models, gameplayScope);
+            }
+            return INSTANCE;
         }
+    }
 
-        return INSTANCE;
+    /** Bind a long-lived external producer to the world in which it was created. */
+    public <T> T withBinding(Callable<T> action) throws Exception {
+        scope.requireOpen();
+        LocalTerrainProvider previous = BOUND_PROVIDER.get();
+        BOUND_PROVIDER.set(this);
+        try { return action.call(); }
+        finally {
+            if (previous == null) BOUND_PROVIDER.remove();
+            else BOUND_PROVIDER.set(previous);
+        }
     }
 
     public static void clearCache() {
-        CACHE.clear();
-        PENDING.clear();
+        LocalTerrainProvider provider = INSTANCE;
+        if (provider != null) provider.clearLocalCache();
+    }
+
+    private void clearLocalCache() {
+        synchronized (cacheLock) {
+            CACHE.values().forEach(entry -> entry.valid = false);
+            cacheGeneration++;
+            CACHE.clear();
+            partialCache.clear();
+            referenceCache.clear();
+            referenceBytes = 0;
+            partialPending.values().forEach(task -> task.cancel(false));
+            partialPending.clear();
+            PENDING.values().forEach(task -> task.cancel(false));
+            PENDING.clear();
+        }
     }
 
     // =========================================================================
@@ -154,7 +304,9 @@ public final class LocalTerrainProvider {
     public static long getSeed() {
         PreviewSession preview = PREVIEW.get();
         if (preview != null) return preview.seed;
-        return instanceSeed;
+        LocalTerrainProvider bound = BOUND_PROVIDER.get();
+        LocalTerrainProvider provider = bound != null ? bound : INSTANCE;
+        return provider == null ? 0L : provider.seed;
     }
 
     /** Thread-scoped preview scale; never changes the loaded world's saved/runtime scale. */
@@ -174,6 +326,7 @@ public final class LocalTerrainProvider {
     public static final class PreviewSession implements AutoCloseable {
         private final long seed;
         private final int scale;
+        private final InferenceExecutor.Scope scope = INFERENCE_EXECUTOR.openScope();
         private final Map<CacheKey, HeightmapData> cache = new LinkedHashMap<>(16, .75f, true);
         private final Map<CacheKey, FutureTask<HeightmapData>> pending = new LinkedHashMap<>();
         private LocalTerrainProvider provider;
@@ -205,7 +358,7 @@ public final class LocalTerrainProvider {
             synchronized (this) {
                 requireOpen();
                 if (provider == null) {
-                    provider = new LocalTerrainProvider(seed, models);
+                    provider = new LocalTerrainProvider(seed, models, scope);
                     provider.previewOwner = this;
                 }
                 return provider;
@@ -214,6 +367,7 @@ public final class LocalTerrainProvider {
 
         private void requireOpen() {
             if (closed) throw new CancellationException("Terrain preview session closed");
+            scope.requireOpen();
         }
 
         private HeightmapData fetch(CacheKey key) {
@@ -221,20 +375,24 @@ public final class LocalTerrainProvider {
             synchronized (this) {
                 requireOpen();
                 HeightmapData ready = cache.get(key);
-                if (ready != null) return ready;
+                if (ready != null) { provider.hits.increment(); return ready; }
                 future = pending.get(key);
                 if (future == null) {
                     LocalTerrainProvider local = provider;
-                    future = new FutureTask<>(() -> {
+                    local.misses.incrementAndGet();
+                    future = scope.submit(InferenceExecutor.Priority.BACKGROUND, () -> {
                         synchronized (this) { requireOpen(); }
                         try {
+                            long started = System.nanoTime(), before = local.pipeline.getTotalComputedWindowCount();
                             HeightmapData result = scale == 1
                                     ? local.handle1x(key.i1, key.j1, key.i2, key.j2)
                                     : local.handleUpsampled(key.i1, key.j1, key.i2, key.j2, scale);
+                            local.computedWindows.addAndGet(local.pipeline.getTotalComputedWindowCount() - before);
+                            local.executionNanos.addAndGet(System.nanoTime() - started);
                             synchronized (this) {
                                 requireOpen();
                                 cache.put(key, result);
-                                while (cache.size() > 16) cache.remove(cache.keySet().iterator().next());
+                                while (cache.size() > 16) { cache.remove(cache.keySet().iterator().next()); local.evictions.incrementAndGet(); }
                             }
                             return result;
                         } finally {
@@ -242,8 +400,7 @@ public final class LocalTerrainProvider {
                         }
                     });
                     pending.put(key, future);
-                    INFERENCE_EXECUTOR.execute(future);
-                }
+                } else { provider.joined.incrementAndGet(); }
             }
             try { return future.get(); }
             catch (InterruptedException interrupted) {
@@ -258,6 +415,7 @@ public final class LocalTerrainProvider {
         @Override public synchronized void close() {
             if (closed) return;
             closed = true;
+            scope.close();
             pending.values().forEach(future -> future.cancel(false));
             pending.clear();
             cache.clear();
@@ -273,7 +431,8 @@ public final class LocalTerrainProvider {
      * @return float[2]: [0] = elev (H*W), [1] = climate (5*H*W, or null)
      */
     public static float[][] getPipelineData(int i1, int j1, int i2, int j2, boolean withClimate) throws Exception {
-        return submitToInferenceThread(() -> getInstance().pipeline.get(i1, j1, i2, j2, withClimate));
+        LocalTerrainProvider provider = getInstance();
+        return provider.submitToInferenceThread(() -> provider.pipeline.get(i1, j1, i2, j2, withClimate));
     }
 
     /**
@@ -283,13 +442,15 @@ public final class LocalTerrainProvider {
      * @return FloatTensor with shape [7, ci1-ci0, cj1-cj0]
      */
     public static FloatTensor getPipelineCoarse(int ci0, int cj0, int ci1, int cj1) throws Exception {
-        return submitToInferenceThread(() -> getInstance().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
+        LocalTerrainProvider provider = getInstance();
+        return provider.submitToInferenceThread(() -> provider.pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
     }
 
     /** Coarse-only ecological overview; bounds are game blocks and maxima are exclusive. */
     public static BroadEcologyClimate getBroadEcologyClimate(int minX, int minZ, int maxX, int maxZ, int scale)
             throws Exception {
-        return submitToInferenceThread(() -> getInstance().pipeline.getBroadEcologyClimate(minZ, minX, maxZ, maxX, scale));
+        LocalTerrainProvider provider = getInstance();
+        return provider.submitToInferenceThread(() -> provider.pipeline.getBroadEcologyClimate(minZ, minX, maxZ, maxX, scale));
     }
 
     /** Coarse-only hint batch. Exact terrain is still fetched for every accepted search result. */
@@ -309,12 +470,11 @@ public final class LocalTerrainProvider {
      * Note: this also affects terrain generation for new Minecraft chunks.
      */
     public static void changeSeedFromExplorer(long newSeed) throws Exception {
-        submitToInferenceThread(() -> {
-            LocalTerrainProvider provider = getInstance();
+        LocalTerrainProvider provider = getInstance();
+        provider.submitToInferenceThread(() -> {
             provider.pipeline.setSeed(newSeed);
-            instanceSeed = newSeed;
-            CACHE.clear();
-            PENDING.clear();
+            provider.seed = newSeed;
+            provider.clearLocalCache();
             return null;
         });
     }
@@ -326,8 +486,8 @@ public final class LocalTerrainProvider {
         return newSeed;
     }
 
-    private static <T> T submitToInferenceThread(Callable<T> task) throws Exception {
-        return INFERENCE_EXECUTOR.submit(task).get();
+    private <T> T submitToInferenceThread(Callable<T> task) throws Exception {
+        return scope.submit(task).get();
     }
 
     /**
@@ -337,64 +497,304 @@ public final class LocalTerrainProvider {
      * If the caller is the server or a chunk worker, the game will stall until this returns.
      */
     public HeightmapData fetchHeightmap(int i1, int j1, int i2, int j2) {
-        CacheKey key = new CacheKey(i1, j1, i2, j2);
-        if (previewOwner != null) return previewOwner.fetch(key);
+        scope.requireOpen();
+        int scale = WorldScaleManager.getCurrentScale();
+        if (previewOwner != null) return previewOwner.fetch(new CacheKey(i1, j1, i2, j2, scale));
+        // Capture before lookup: a clear during a fetch must never stamp old data with a new generation.
+        long generation = cacheGeneration;
+        if (RECENT_TILE_CACHE_ENABLED) {
+            RecentTile recent = RECENT_TILE.get();
+            if (recent != null && recent.provider.get() == this && recent.generation == generation
+                    && recent.key.i1 == i1 && recent.key.j1 == j1
+                    && recent.key.i2 == i2 && recent.key.j2 == j2 && recent.key.scale == scale) {
+                CacheEntry entry = recent.entry.get();
+                if (entry != null && entry.valid) {
+                    hits.increment();
+                    // Approximate LRU, refreshed every 64 consecutive hits instead of two shared writes per hit.
+                    if ((++recent.hits & 63) == 0) entry.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+                    return entry.data;
+                }
+            }
+        }
+        CacheKey key = new CacheKey(i1, j1, i2, j2, scale);
         CacheEntry cached = CACHE.get(key);
-        if (cached != null) {
+        if (cached != null && cached.valid) {
+            hits.increment();
             cached.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+            if (RECENT_TILE_CACHE_ENABLED) RECENT_TILE.set(new RecentTile(this, cached, key, generation));
             return cached.data;
         }
 
-        return this.genHeightmap(key, i1, j1, i2, j2);
+        HeightmapData result = this.genHeightmap(key, i1, j1, i2, j2);
+        if (RECENT_TILE_CACHE_ENABLED) {
+            CacheEntry ready = CACHE.get(key);
+            if (ready != null && ready.valid && ready.data == result && cacheGeneration == generation)
+                RECENT_TILE.set(new RecentTile(this, ready, key, generation));
+        }
+        return result;
     }
 
     private HeightmapData genHeightmap(CacheKey key, int i1, int j1, int i2, int j2) {
-        int scale = WorldScaleManager.getCurrentScale();
-        FutureTask<HeightmapData> task = new FutureTask<>(() -> {
-            long computedWindowCountBefore = pipeline.getTotalComputedWindowCount();
-            HeightmapData data = scale <= 1
-                    ? handle1x(i1, j1, i2, j2)
-                    : handleUpsampled(i1, j1, i2, j2, scale);
-            long computedWindowCountAfter = pipeline.getTotalComputedWindowCount();
-
-            long newlyComputedWindowCount = computedWindowCountAfter - computedWindowCountBefore;
-            int regionWidth = j2 - j1;
-            int regionHeight = i2 - i1;
-            LOG.info(
-                    "Terrain Diffusion ({}) finished generating region {}x{} ({} newly computed windows)",
-                    OnnxModel.getResolvedInferenceProvider(), regionWidth, regionHeight, newlyComputedWindowCount);
-            CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
-            evictLruTo(activeCacheSize);
-            PENDING.remove(key);
-            return data;
-        });
-        Future<HeightmapData> existing = PENDING.putIfAbsent(key, task);
-        FutureTask<HeightmapData> toRun = (existing == null) ? task : (FutureTask<HeightmapData>) existing;
-        if (existing == null) {
-            int regionWidth = j2 - j1;
-            int regionHeight = i2 - i1;
-            LOG.info(
-                    "Terrain Diffusion ({}) uncached region requested: ({}, {})-({}, {}) size {}x{}",
-                    OnnxModel.getResolvedInferenceProvider(), j1, i1, j2, i2, regionWidth, regionHeight);
-            INFERENCE_EXECUTOR.submit(toRun);
+        int scale = key.scale;
+        FutureTask<HeightmapData> task;
+        synchronized (cacheLock) {
+            scope.requireOpen();
+            CacheEntry ready = CACHE.get(key); // Completion may have raced the optimistic lookup.
+            if (ready != null) {
+                hits.increment();
+                ready.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+                return ready.data;
+            }
+            task = PENDING.get(key);
+            if (task == null) {
+                misses.incrementAndGet();
+                long generation = cacheGeneration;
+                task = scope.submit(requestPriority(), () -> {
+                    try {
+                        long started = System.nanoTime();
+                        long before = pipeline.getTotalComputedWindowCount();
+                        HeightmapData data = scale <= 1
+                                ? handle1x(i1, j1, i2, j2)
+                                : handleUpsampled(i1, j1, i2, j2, scale);
+                        computedWindows.addAndGet(pipeline.getTotalComputedWindowCount() - before);
+                        executionNanos.addAndGet(System.nanoTime() - started);
+                        LOG.debug("Terrain Diffusion ({}) finished generating region {}x{} ({} newly computed windows)",
+                                OnnxModel.getResolvedInferenceProvider(), j2 - j1, i2 - i1,
+                                pipeline.getTotalComputedWindowCount() - before);
+                        synchronized (cacheLock) {
+                            scope.requireOpen();
+                            if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
+                            CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
+                            evictLruTo(activeCacheSize);
+                        }
+                        return data;
+                    } finally {
+                        synchronized (cacheLock) { if (generation == cacheGeneration) PENDING.remove(key); }
+                    }
+                });
+                PENDING.put(key, task);
+                LOG.debug("Terrain Diffusion ({}) uncached region requested: ({}, {})-({}, {}) size {}x{}",
+                        OnnxModel.getResolvedInferenceProvider(), j1, i1, j2, i2, j2 - j1, i2 - i1);
+            } else {
+                joined.incrementAndGet();
+                INFERENCE_EXECUTOR.promote(task, requestPriority());
+            }
         }
         try {
-            return toRun.get();
-        } catch (Exception e) {
-            PENDING.remove(key);
-            throw new RuntimeException("Terrain tile failed: " + key, e);
+            return task.get();
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new CancellationException("Terrain tile caller interrupted");
+        } catch (java.util.concurrent.ExecutionException failed) {
+            if (failed.getCause() instanceof CancellationException cancelled) throw cancelled;
+            throw new IllegalStateException("Terrain tile failed: " + key, failed.getCause());
         }
     }
 
-    private static void evictLruTo(int maxSize) {
+    private void evictLruTo(int maxSize) {
         int headroomHalf = MAX_CACHE_SIZE_HEADROOM / 2;
         if (CACHE.size() > maxSize + headroomHalf) {
             CACHE.entrySet().stream()
                 .sorted(Comparator.comparingLong(e -> e.getValue().lastAccessed.get()))
                 .limit(Math.max(MAX_CACHE_SIZE_HEADROOM, CACHE.size() - maxSize))
-                .map(Map.Entry::getKey)
-                .forEach(CACHE::remove);
+                .forEach(entry -> {
+                    if (CACHE.remove(entry.getKey(), entry.getValue())) {
+                        entry.getValue().valid = false;
+                        evictions.incrementAndGet();
+                    }
+                });
         }
+    }
+
+    /** Exact ground only; partial entries never masquerade as complete biome/ecology tiles. */
+    public HeightmapData fetchGroundHeightmap(int i1, int j1, int i2, int j2) {
+        return legacySampling() ? fetchCompleteRegion(i1, j1, i2, j2) : fetchPartial(i1, j1, i2, j2, false);
+    }
+
+    /** Original classifiers, including caves' ground and natural ecology, over a small region. */
+    public HeightmapData fetchBiomeHeightmap(int i1, int j1, int i2, int j2) {
+        return legacySampling() ? fetchCompleteRegion(i1, j1, i2, j2) : fetchPartial(i1, j1, i2, j2, true);
+    }
+
+    // Dense Streams sampling needs complete classified tiles across interleaved regions.
+    // Rebuilding large reference planes for tiny output crops can dominate startup.
+    private HeightmapData fetchCompleteRegion(int i1, int j1, int i2, int j2) {
+        int tile = TerrainDiffusionConfig.tileSize();
+        int ri = Math.floorDiv(i1, tile) * tile, rj = Math.floorDiv(j1, tile) * tile;
+        if (i2 <= i1 || j2 <= j1 || i2 > ri + tile || j2 > rj + tile)
+            throw new IllegalArgumentException("Terrain read crosses reference tile");
+        HeightmapData complete = fetchHeightmap(ri, rj, ri + tile, rj + tile);
+        if (i1 == ri && j1 == rj && i2 == ri + tile && j2 == rj + tile) return complete;
+        return cropData(complete, i1 - ri, j1 - rj, i2 - i1, j2 - j1);
+    }
+
+    private HeightmapData fetchPartial(int i1, int j1, int i2, int j2, boolean biomes) {
+        scope.requireOpen();
+        int scale = WorldScaleManager.getCurrentScale(), tile = TerrainDiffusionConfig.tileSize();
+        int ri = Math.floorDiv(i1, tile) * tile, rj = Math.floorDiv(j1, tile) * tile;
+        if (i2 <= i1 || j2 <= j1 || i2 - i1 > SAMPLE_TILE_SIZE || j2 - j1 > SAMPLE_TILE_SIZE)
+            throw new IllegalArgumentException("Partial read must fit the bounded sample tile");
+        if (i2 > ri + tile || j2 > rj + tile) throw new IllegalArgumentException("Partial read crosses reference tile");
+        CacheKey full = new CacheKey(ri, rj, ri + tile, rj + tile, scale);
+        if (legacySampling())
+            return cropData(fetchHeightmap(ri, rj, ri + tile, rj + tile), i1 - ri, j1 - rj, i2 - i1, j2 - j1);
+        PartialKey key = new PartialKey(new CacheKey(i1, j1, i2, j2, scale), biomes, tile);
+        FutureTask<HeightmapData> task;
+        synchronized (cacheLock) {
+            scope.requireOpen();
+            HeightmapData ready = partialCache.get(key);
+            if (ready == null && !biomes) ready = partialCache.get(new PartialKey(key.bounds, true, tile));
+            if (ready != null) { hits.increment(); return ready; }
+            CacheEntry complete = CACHE.get(full);
+            if (complete != null) {
+                hits.increment(); complete.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+                HeightmapData cropped = cropData(complete.data, i1 - ri, j1 - rj, i2 - i1, j2 - j1);
+                cachePartial(key, cropped);
+                return cropped;
+            }
+            task = partialPending.get(key);
+            if (task == null && !biomes) task = partialPending.get(new PartialKey(key.bounds, true, tile));
+            if (task == null) {
+                misses.incrementAndGet();
+                long generation = cacheGeneration;
+                task = scope.submit(requestPriority(), () -> {
+                    long start = System.nanoTime(), before = pipeline.getTotalComputedWindowCount();
+                    try {
+                        HeightmapData data = handlePartial(key, ri, rj, generation);
+                        computedWindows.addAndGet(pipeline.getTotalComputedWindowCount() - before);
+                        executionNanos.addAndGet(System.nanoTime() - start);
+                        synchronized (cacheLock) {
+                            scope.requireOpen();
+                            if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
+                            cachePartial(key, data);
+                        }
+                        return data;
+                    } finally {
+                        synchronized (cacheLock) { if (generation == cacheGeneration) partialPending.remove(key); }
+                    }
+                });
+                partialPending.put(key, task);
+            } else {
+                joined.incrementAndGet(); INFERENCE_EXECUTOR.promote(task, requestPriority());
+            }
+        }
+        try { return task.get(); }
+        catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt(); throw new CancellationException("Terrain sample interrupted");
+        } catch (java.util.concurrent.ExecutionException failed) {
+            if (failed.getCause() instanceof CancellationException cancelled) throw cancelled;
+            throw new IllegalStateException("Exact terrain sample failed: " + key, failed.getCause());
+        }
+    }
+
+    private void cachePartial(PartialKey key, HeightmapData data) {
+        partialCache.put(key, data);
+        while (partialCache.size() > 512) {
+            partialCache.remove(partialCache.keySet().iterator().next()); evictions.incrementAndGet();
+        }
+    }
+
+    /** Called on the single inference lane; publication also observes external cache invalidation. */
+    private float[][] referenceData(CacheKey bounds, boolean climate, long generation) {
+        synchronized (cacheLock) {
+            scope.requireOpen();
+            if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
+            float[][] ready = referenceCache.get(bounds);
+            if (ready != null && (!climate || ready[1] != null)) {
+                referenceHits.incrementAndGet();
+                return ready;
+            }
+            referenceMisses.incrementAndGet();
+        }
+        float[][] result = pipeline.get(bounds.i1, bounds.j1, bounds.i2, bounds.j2, climate);
+        synchronized (cacheLock) {
+            scope.requireOpen();
+            if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
+            long bytes = referenceSize(result);
+            if (bytes <= MAX_REFERENCE_BYTES) {
+                float[][] previous = referenceCache.remove(bounds);
+                if (previous != null) referenceBytes -= referenceSize(previous);
+                while (!referenceCache.isEmpty() && (referenceCache.size() >= MAX_REFERENCE_ENTRIES
+                        || referenceBytes + bytes > MAX_REFERENCE_BYTES)) {
+                    CacheKey oldest = referenceCache.keySet().iterator().next();
+                    referenceBytes -= referenceSize(referenceCache.remove(oldest));
+                    referenceEvictions.incrementAndGet();
+                }
+                referenceCache.put(bounds, result);
+                referenceBytes += bytes;
+            }
+        }
+        return result;
+    }
+
+    private static long referenceSize(float[][] planes) {
+        long bytes = 0;
+        for (float[] plane : planes) if (plane != null) bytes += (long) plane.length * Float.BYTES;
+        return bytes;
+    }
+
+    private HeightmapData handlePartial(PartialKey key, int referenceI, int referenceJ, long generation) {
+        CacheKey b = key.bounds;
+        int h = b.i2 - b.i1, w = b.j2 - b.j1, scale = b.scale;
+        int ni = Math.floorDiv(referenceI, scale), nj = Math.floorDiv(referenceJ, scale);
+        int neI = -Math.floorDiv(-(referenceI + key.referenceTileSize), scale);
+        int neJ = -Math.floorDiv(-(referenceJ + key.referenceTileSize), scale);
+        int halo = scale == 1 ? MacroBiomeContext.REGION_BLOCKS + 64 + MacroBiomeContext.COAST_BLOCKS + 2
+                : (int) Math.ceil(194f / scale) + 2;
+        int si = ni - halo, sj = nj - halo, sh = neI - ni + 2 * halo, sw = neJ - nj + 2 * halo;
+        float[][] nativeData = referenceData(new CacheKey(si, sj, si + sh, sj + sw, scale), key.biomes, generation);
+        float[] elevation, padded, climate = null;
+        if (scale == 1) {
+            elevation = cropFlat(nativeData[0], b.i1 - si, b.j1 - sj, h, w, sh, sw);
+            padded = cropFlat(nativeData[0], b.i1 - si - 1, b.j1 - sj - 1, h + 2, w + 2, sh, sw);
+            if (key.biomes) climate = cropClimate(nativeData[1], sh, sw, b.i1 - si, b.j1 - sj, h, w);
+        } else {
+            int refI = Math.floorDiv(referenceI, scale) - 2, refJ = Math.floorDiv(referenceJ, scale) - 2;
+            int refH = -Math.floorDiv(-(referenceI + key.referenceTileSize), scale) + 2 - refI;
+            int refW = -Math.floorDiv(-(referenceJ + key.referenceTileSize), scale) + 2 - refJ;
+            padded = ExactTerrainSampling.resizeCrop(nativeData[0], si, sj, sh, sw, refI, refJ, refH, refW,
+                    scale, b.i1 - 1, b.j1 - 1, h + 2, w + 2);
+            elevation = cropFlat(padded, 1, 1, h, w, h + 2, w + 2);
+            if (key.biomes) {
+                climate = new float[4 * h * w];
+                for (int channel = 0; channel < 4; channel++) {
+                    float[] values = java.util.Arrays.copyOfRange(nativeData[1], channel * sh * sw, (channel + 1) * sh * sw);
+                    float[] resized = ExactTerrainSampling.resizeCrop(values, si, sj, sh, sw, refI, refJ, refH, refW,
+                            scale, b.i1, b.j1, h, w);
+                    System.arraycopy(resized, 0, climate, channel * h * w, h * w);
+                }
+            }
+        }
+        float meters = NATIVE_RESOLUTION / scale;
+        float[] ground = scale == 1 ? elevation : addElevationNoise(elevation, padded, b.i1, b.j1, h, w, meters);
+        if (!key.biomes) return new HeightmapData(toHeights(ground, h, w), null, w, h);
+        BiomeClassifier.TerralithContext context = MacroBiomeContext.build(nativeData[0], nativeData[1], si, sj, sh, sw,
+                scale, meters, b.i1, b.j1, h, w);
+        short[] terralith = new short[h * w];
+        short[] biomes = BiomeClassifier.classify(elevation, climate, b.i1, b.j1, padded, h, w, meters, terralith, context);
+        return withEcology(buildHeightmapData(ground, biomes, terralith, h, w), elevation, padded, context.shore(),
+                b.i1, b.j1, scale, meters);
+    }
+
+    private static short[][] toHeights(float[] values, int h, int w) {
+        short[][] result = new short[h][w];
+        for (int r = 0; r < h; r++) for (int c = 0; c < w; c++)
+            result[r][c] = (short) Math.max(-32768, Math.min(32767, (int) Math.floor(values[r * w + c])));
+        return result;
+    }
+
+    private static HeightmapData cropData(HeightmapData source, int r, int c, int h, int w) {
+        short[][] ground = cropShort(source.heightmap, r, c, h, w), biomes = cropShort(source.biomeIds, r, c, h, w);
+        short[][] terralith = cropShort(source.terralithBiomeIds, r, c, h, w);
+        EcologyData ecology = source.ecology == null ? null : source.ecology.crop(c, r, w, h);
+        return new HeightmapData(ground, biomes, terralith, ecology, w, h);
+    }
+
+    private static short[][] cropShort(short[][] source, int r, int c, int h, int w) {
+        if (source == null) return null;
+        short[][] result = new short[h][w];
+        for (int row = 0; row < h; row++) System.arraycopy(source[row + r], c, result[row], 0, w);
+        return result;
     }
 
     // =========================================================================

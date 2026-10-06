@@ -1,0 +1,6 @@
+{
+  "type": "neoforge:add_features",
+  "biomes": "minecraft:beach",
+  "features": "terrain-diffusion-mc:eco_beach_surface",
+  "step": "local_modifications"
+}

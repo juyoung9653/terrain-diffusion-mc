@@ -40,9 +40,11 @@ public final class RiverContainmentAudit {
         Bounds bounds = Bounds.checked(level, minX, maxX, minY, maxY, minZ, maxZ);
         Map<Long, LevelChunk> chunks = requireLoadedChunks(level, bounds);
         Set<Long> water = new LinkedHashSet<>();
+        Set<Long> flowingWaterPositions = new LinkedHashSet<>();
         Set<Long> dryGrass = new LinkedHashSet<>();
         Set<Long> wetGrass = new LinkedHashSet<>();
         Set<Long> waterOverGrass = new LinkedHashSet<>();
+        Map<String, Integer> waterStates = new java.util.TreeMap<>();
         int sourceWater = 0;
         int flowingWater = 0;
 
@@ -59,7 +61,8 @@ public final class RiverContainmentAudit {
                     long key = pos.asLong();
                     if (fluid.is(FluidTags.WATER)) {
                         water.add(key);
-                        if (fluid.isSource()) sourceWater++; else flowingWater++;
+                        waterStates.merge(state.toString(), 1, Integer::sum);
+                        if (fluid.isSource()) sourceWater++; else { flowingWater++; flowingWaterPositions.add(key); }
                         if (y > level.getMinBuildHeight() && chunk.getBlockState(pos.below()).is(Blocks.GRASS_BLOCK)) {
                             waterOverGrass.add(key);
                         }
@@ -70,7 +73,29 @@ public final class RiverContainmentAudit {
                 }
             }
         }
-        return new Snapshot(bounds, water, dryGrass, wetGrass, waterOverGrass, sourceWater, flowingWater);
+        return new Snapshot(bounds, water, flowingWaterPositions, dryGrass, wetGrass, waterOverGrass, waterStates, sourceWater, flowingWater);
+    }
+
+    /**
+     * Opt-in isolated-fixture reset: clear only ordinary non-source minecraft:water blocks
+     * seen in this bounded snapshot. Waterlogged blocks, solids, and all source fluids remain.
+     */
+    public static ResetResult resetFlowingWater(ServerLevel level, Snapshot before) {
+        int removed = 0;
+        for (long key : before.flowingWaterPositions) {
+            BlockPos pos = BlockPos.of(key);
+            BlockState state = requireLoadedChunk(level, pos.getX() >> 4, pos.getZ() >> 4).getBlockState(pos);
+            FluidState fluid = state.getFluidState();
+            if (state.is(Blocks.WATER) && fluid.is(FluidTags.WATER) && !fluid.isSource()) {
+                if (level.setBlock(pos, Blocks.AIR.defaultBlockState(), 3)) removed++;
+            }
+        }
+        Snapshot immediateAfter = capture(level, before.bounds.minX, before.bounds.maxX, before.bounds.minY,
+                before.bounds.maxY, before.bounds.minZ, before.bounds.maxZ);
+        if (before.sourceWater != immediateAfter.sourceWater) {
+            throw new IllegalStateException("Flowing-water reset changed source count " + before.sourceWater + " -> " + immediateAfter.sourceWater);
+        }
+        return new ResetResult(removed, before.sourceWater, immediateAfter.sourceWater, before.flowingWater, immediateAfter.flowingWater, immediateAfter);
     }
 
     /** Schedules one ordinary fluid tick for every captured cell which still contains actual water. */
@@ -189,6 +214,38 @@ public final class RiverContainmentAudit {
         return outside;
     }
 
+    /**
+     * Writes each actual non-source water cell with its native plan. A one-cell raster corner can sit
+     * outside {@code inChannel}; only distance greater than width plus one block is an escape.
+     */
+    public static FlowingPlanCounts writeFlowingPlans(ServerLevel level, Path path, Snapshot snapshot) throws Exception {
+        Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen");
+        Object engine = worldgen.getMethod("engineIfPresent", ServerLevel.class).invoke(null, level);
+        if (engine == null) throw new IllegalStateException("Missing native engine");
+        var plan = engine.getClass().getMethod("plan", int.class, int.class);
+        int outsideChannel = 0;
+        int escaped = 0;
+        try (var writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8)) {
+            writer.write("x,y,z,state,inChannel,inCorridor,distance,width,escapedBeyondWidthPlusOne,waterSurfaceY,bedY,source,terminal\n");
+            for (long key : snapshot.flowingWaterPositions) {
+                BlockPos pos = BlockPos.of(key);
+                Object column = plan.invoke(engine, pos.getX(), pos.getZ());
+                boolean inChannel = (Boolean) column.getClass().getMethod("inChannel").invoke(column);
+                double distance = ((Number) column.getClass().getMethod("distance").invoke(column)).doubleValue();
+                double width = ((Number) column.getClass().getMethod("width").invoke(column)).doubleValue();
+                boolean escapedBeyondWidthPlusOne = distance > width + 1.0d;
+                if (!inChannel) outsideChannel++;
+                if (escapedBeyondWidthPlusOne) escaped++;
+                BlockState state = requireLoadedChunk(level, pos.getX() >> 4, pos.getZ() >> 4).getBlockState(pos);
+                writer.write(pos.getX()+","+pos.getY()+","+pos.getZ()+",\""+state.toString().replace("\"","\"\"")+"\","+inChannel+","+column.getClass().getMethod("inCorridor").invoke(column)+","+distance+","+width+","+escapedBeyondWidthPlusOne);
+                for (String field : List.of("waterSurfaceY","bedY","source","terminal"))
+                    writer.write(","+column.getClass().getMethod(field).invoke(column));
+                writer.newLine();
+            }
+        }
+        return new FlowingPlanCounts(outsideChannel, escaped);
+    }
+
     private static Map<Long, LevelChunk> requireLoadedChunks(ServerLevel level, Bounds bounds) {
         Map<Long, LevelChunk> chunks = new HashMap<>();
         for (long rawChunkX = bounds.minX >> 4; rawChunkX <= (bounds.maxX >> 4); rawChunkX++) {
@@ -225,22 +282,39 @@ public final class RiverContainmentAudit {
         return List.copyOf(sample);
     }
 
+    public record FlowingPlanCounts(int outsideChannel, int escapedBeyondWidthPlusOne) { }
+
+    public record ResetResult(int removedOrdinaryFlowingWater, int sourceWaterBefore, int sourceWaterImmediateAfter,
+                              int flowingWaterBefore, int flowingWaterImmediateAfter, Snapshot immediateAfter) {
+        public String toJson() {
+            return "{\"audit\":\"flowing_water_reset\",\"status\":\"passed\",\"removedOrdinaryFlowingWater\":"
+                    + removedOrdinaryFlowingWater + ",\"sourceWaterBefore\":" + sourceWaterBefore
+                    + ",\"sourceWaterImmediateAfter\":" + sourceWaterImmediateAfter
+                    + ",\"flowingWaterBefore\":" + flowingWaterBefore
+                    + ",\"flowingWaterImmediateAfter\":" + flowingWaterImmediateAfter + "}";
+        }
+    }
+
     public static final class Snapshot {
         private final Bounds bounds;
         private final Set<Long> water;
+        private final Set<Long> flowingWaterPositions;
         private final Set<Long> dryGrass;
         private final Set<Long> wetGrass;
         private final Set<Long> waterOverGrass;
+        private final Map<String, Integer> waterStates;
         private final int sourceWater;
         private final int flowingWater;
 
-        private Snapshot(Bounds bounds, Set<Long> water, Set<Long> dryGrass, Set<Long> wetGrass, Set<Long> waterOverGrass,
+        private Snapshot(Bounds bounds, Set<Long> water, Set<Long> flowingWaterPositions, Set<Long> dryGrass, Set<Long> wetGrass, Set<Long> waterOverGrass, Map<String, Integer> waterStates,
                          int sourceWater, int flowingWater) {
             this.bounds = bounds;
             this.water = immutableCopy(water);
+            this.flowingWaterPositions = immutableCopy(flowingWaterPositions);
             this.dryGrass = immutableCopy(dryGrass);
             this.wetGrass = immutableCopy(wetGrass);
             this.waterOverGrass = immutableCopy(waterOverGrass);
+            this.waterStates = Collections.unmodifiableMap(new java.util.TreeMap<>(waterStates));
             this.sourceWater = sourceWater;
             this.flowingWater = flowingWater;
         }
@@ -252,12 +326,14 @@ public final class RiverContainmentAudit {
         public int wetGrassCount() { return wetGrass.size(); }
         public int waterOverGrassCount() { return waterOverGrass.size(); }
         public Set<Long> waterPositions() { return water; }
+        public Set<Long> flowingWaterPositions() { return flowingWaterPositions; }
         public Set<Long> dryGrassPositions() { return dryGrass; }
         public Set<Long> wetGrassPositions() { return wetGrass; }
         public Set<Long> waterOverGrassPositions() { return waterOverGrass; }
         public String toCompactJson() {
             return "{\"bounds\":" + bounds.json() + ",\"water\":{\"total\":" + water.size()
                     + ",\"source\":" + sourceWater + ",\"flowing\":" + flowingWater + "}"
+                    + ",\"waterStatePalette\":" + jsonMap(waterStates)
                     + ",\"grass\":{\"dry\":" + dryGrass.size() + ",\"wet\":" + wetGrass.size()
                     + ",\"waterOverGrass\":" + waterOverGrass.size() + "}"
                     + ",\"samples\":{\"water\":" + jsonArray(sampledCoordinates(water))
@@ -312,5 +388,16 @@ public final class RiverContainmentAudit {
             json.append('"').append(values.get(i)).append('"');
         }
         return json.append(']').toString();
+    }
+
+    private static String jsonMap(Map<String, Integer> values) {
+        StringBuilder json = new StringBuilder("{");
+        boolean first = true;
+        for (var entry : values.entrySet()) {
+            if (!first) json.append(',');
+            first = false;
+            json.append('"').append(entry.getKey().replace("\\", "\\\\").replace("\"", "\\\"")).append("\":").append(entry.getValue());
+        }
+        return json.append('}').toString();
     }
 }

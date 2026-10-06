@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ExecutorService;
 
 /**
  * Embedded terrain explorer HTTP server. Java port of
@@ -47,6 +48,7 @@ public final class ExplorerServer {
 
     private static volatile HttpServer SERVER;
     private static volatile int SERVER_PORT = -1;
+    private static ExecutorService executor;
 
     private ExplorerServer() {}
 
@@ -72,10 +74,20 @@ public final class ExplorerServer {
         server.createContext("/api/detail.png", ExplorerServer::handleDetailPng);
         server.createContext("/api/detail_raw", ExplorerServer::handleDetailRaw);
         // Single-thread executor matches Python's threaded=False
-        server.setExecutor(Executors.newSingleThreadExecutor(r -> {
+        LocalTerrainProvider provider = LocalTerrainProvider.getInstance();
+        executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "terrain-explorer-http");
             t.setDaemon(true);
             return t;
+        });
+        ExecutorService requests = executor;
+        server.setExecutor(command -> requests.execute(() -> {
+            try { provider.withBinding(() -> { command.run(); return null; }); }
+            catch (java.util.concurrent.CancellationException closed) {
+                LOG.debug("Ignoring explorer request from a stopped world");
+            } catch (Exception failure) {
+                LOG.warn("Explorer request failed", failure);
+            }
         }));
         server.start();
         SERVER = server;
@@ -89,6 +101,8 @@ public final class ExplorerServer {
             SERVER.stop(0);
             SERVER = null;
             SERVER_PORT = -1;
+            executor.shutdown();
+            executor = null;
             LOG.info("Terrain explorer stopped.");
         }
     }
