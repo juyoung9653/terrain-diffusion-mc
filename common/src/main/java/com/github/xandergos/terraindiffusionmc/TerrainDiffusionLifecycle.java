@@ -122,6 +122,7 @@ public final class TerrainDiffusionLifecycle {
      */
     public static void onServerStopping(net.minecraft.server.MinecraftServer server) {
         com.github.xandergos.terraindiffusionmc.world.FastLocateCommand.stop(server);
+        com.github.xandergos.terraindiffusionmc.world.AsyncStructureLocate.stop(server);
         ExplorerServer.stop();
     }
 

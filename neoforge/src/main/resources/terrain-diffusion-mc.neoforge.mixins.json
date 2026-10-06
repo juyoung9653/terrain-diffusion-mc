@@ -8,6 +8,8 @@
     "IncendiumFunctionMixin",
     "IncendiumOriginLifecycleMixin",
     "GreeneriesSimpleBlockFeatureMixin",
+    "GreeneriesPlacedFeatureMixin",
+    "SnowUnderTreesFeatureMixin",
     "SeagrassFeatureMixin",
     "StreamsSeagrassFeatureMixin",
     "StreamsStructureShieldMixin",

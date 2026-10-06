@@ -48,7 +48,7 @@ class EcologyOfflineAtlasTest(unittest.TestCase):
                 right = hashlib.sha256((self.second / name).read_bytes()).digest()
                 self.assertEqual(left, right)
 
-    def test_actual_classifier_covers_all_11_profiles(self) -> None:
+    def test_actual_classifier_covers_all_profiles(self) -> None:
         rows = self.rows()
         self.assertEqual(len(offline.PROFILES) * len(offline.SEEDS) * len(offline.SCALES), len(rows))
         self.assertEqual(set(offline.PROFILES), {row["profile"] for row in rows})

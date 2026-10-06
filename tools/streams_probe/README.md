@@ -1144,3 +1144,42 @@ The native C2ME fixture reproduced an unloaded `ChunkResult` without that ticket
 Release the ticket and job ownership together on the server thread, or an old
 cleanup can remove a new job's same-chunk ticket. Retest the native command after
 changing this lifecycle; planner-only Java tests do not exercise it.
+
+For ordinary Async Locator searches, use `-PtdProbe.asyncLocateAudit=true`
+with `-PtdProbe.asyncLocateOnly=true` and
+`'-PtdProbe.asyncLocateStructure=#minecraft:village'`. Install the real Async
+Locator JAR in the isolated fixture. Require the `async_locate_audit` receipt:
+locked speculative probes must do no terrain work, unlocked probes must still
+run, and the returned structure must have a valid start. The audit closes locate
+admission at the end, so do not combine it with subsequent locate tests. Server
+callback latency demonstrates responsiveness in this fixture, not full-pack TPS.
+
+Async Locator synchronizes both `StructureCheck.checkStart` and structure-load
+updates. Native terrain inference inside the speculative check can therefore
+stall the server even though locate itself runs on a worker. Test this lock path
+as well as the chunk-future bridge after changing either adapter.
+
+`-PtdProbe.bankWidthAudit=true` exports loaded bank columns; its receipt confirms
+execution only. Compare fresh-region CSVs for relief of raised dry soil, retained
+channel water and unchanged narrow-bank geometry. Pair with `containmentAudit`
+at the target bounds to exercise actual fluid ticks. Cached FULL chunks do not
+test generation changes. Reuse model assets and Streams plans in a new fixture,
+but do not copy region, entity or POI files.
+
+`-PtdProbe.vegetationSnowAudit=true` counts actual Greeneries grass/fern blocks
+and runs the registered Snow Under Trees feature on restored test columns.
+Require `vegetation_snow_fixture` to pass dry-floor, planted-floor, warm-biome,
+water and restoration controls. A warm natural cohort is inconclusive for
+natural snow coverage; the controlled fixture separately verifies the canopy
+hook with the installed Snow! Real Magic! adapter.
+
+`-PtdProbe.greeneriesDensityAudit=true` requires Greeneries 1.0.3, Terrain Slabs
+3.1.2 with vegetation enabled, and Immersive Weathering 1.0.5 in the test fixture.
+Require `greeneries_density_fixture` to pass: 2,000 native-provider candidates per
+substrate, all 15 ecology biomes with each native feature present exactly once,
+base/non-TD calls unthinned, and real short/tall plant survival on full soils and
+bottom/top/double slabs. The proxy BlockGetter exercises Terrain Slabs' non-server
+render-offset branch; this verifies the offset math, not an in-game screenshot.
+Neighbor updates, removal of support, waterlogging and fixture restoration are
+checked. Also generate a fresh chunk to detect feature-order cycles hidden by
+saved FULL chunks. Counts measure accepted attempts, not final landscape coverage.

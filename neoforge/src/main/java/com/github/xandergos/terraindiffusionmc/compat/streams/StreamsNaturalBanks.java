@@ -11,7 +11,7 @@ import net.minecraft.world.level.levelgen.Heightmap.Types;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/** Conservative, post-carve v5 shaping for high soil banks beside narrow streams. */
+/** Conservative post-carve shaping: legacy v5 narrow banks and v7 wide dry slopes. */
 public final class StreamsNaturalBanks {
     private static final Logger LOG = LoggerFactory.getLogger("TerrainDiffusion/NaturalRivers");
     private static final AtomicLong SHAPED_COLUMNS = new AtomicLong();
@@ -22,6 +22,12 @@ public final class StreamsNaturalBanks {
     public static void refine(WorldGenLevel level, int minX, int minZ, Object engine, int sea,
                               int[] protection, Method shielded, Method blockedBiome)
             throws ReflectiveOperationException {
+        refine(level, minX, minZ, engine, sea, protection, shielded, blockedBiome, false);
+    }
+
+    public static void refine(WorldGenLevel level, int minX, int minZ, Object engine, int sea,
+                              int[] protection, Method shielded, Method blockedBiome, boolean wideBanks)
+            throws ReflectiveOperationException {
         Method plan = engine.getClass().getMethod("plan", int.class, int.class);
         Class<?> column = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
         Method channel = column.getMethod("inChannel"), corridor = column.getMethod("inCorridor"),
@@ -29,42 +35,54 @@ public final class StreamsNaturalBanks {
                 distance = column.getMethod("distance"), slope = column.getMethod("slope"),
                 source = column.getMethod("source"), terminal = column.getMethod("terminal"),
                 junction = column.getMethod("distToJunction");
-        Object[][] plans = new Object[22][22];
-        for (int x = 0; x < 22; x++) for (int z = 0; z < 22; z++)
-            plans[x][z] = plan.invoke(engine, minX + x - 3, minZ + z - 3);
+        int radius = wideBanks ? 8 : 3;
+        int size = 16 + radius * 2;
+        Object[][] plans = new Object[size][size];
+        boolean[][] channels = new boolean[size][size];
+        int[][] waters = new int[size][size];
+        for (int x = 0; x < size; x++) for (int z = 0; z < size; z++) {
+            Object p = plan.invoke(engine, minX + x - radius, minZ + z - radius);
+            plans[x][z] = p;
+            channels[x][z] = (Boolean) channel.invoke(p);
+            waters[x][z] = ((Number) surface.invoke(p)).intValue();
+        }
 
-        for (int x = 3; x < 19; x++) for (int z = 3; z < 19; z++) {
+        for (int x = radius; x < radius + 16; x++) for (int z = radius; z < radius + 16; z++) {
             Object p = plans[x][z];
-            boolean inChannel = (Boolean) channel.invoke(p);
+            boolean inChannel = channels[x][z];
             double halfWidth = ((Number) width.invoke(p)).doubleValue();
             double lateralDistance = ((Number) distance.invoke(p)).doubleValue();
             double edge = lateralDistance - halfWidth;
             double junctionDistance = ((Number) junction.invoke(p)).doubleValue();
-            int plannedWater = ((Number) surface.invoke(p)).intValue();
+            int plannedWater = waters[x][z];
+            double apron = wideBanks ? NaturalRiverBankShape.wideCorridor(halfWidth) : 5.0;
+            boolean eligibleWidth = wideBanks ? halfWidth >= 4.0 : halfWidth > 0.0 && halfWidth < 4.0;
             if (inChannel || !(Boolean) corridor.invoke(p) || (Boolean) source.invoke(p) || (Boolean) terminal.invoke(p)
-                    || !(halfWidth > 0.0 && halfWidth < 4.0) || !(edge > .5 && edge < 5.0)
+                    || !eligibleWidth || !(edge > .5 && edge < apron)
                     || plannedWater <= sea + 2 || (Double.isFinite(junctionDistance) && junctionDistance >= 0.0 && junctionDistance < 8.0)) continue;
 
             int safeWater = plannedWater;
             boolean nearbyChannel = false;
-            for (int dx = -3; dx <= 3; dx++) for (int dz = -3; dz <= 3; dz++) {
-                Object neighbor = plans[x + dx][z + dz];
-                if ((Boolean) channel.invoke(neighbor)) {
+            for (int dx = -radius; dx <= radius; dx++) for (int dz = -radius; dz <= radius; dz++) {
+                if (channels[x + dx][z + dz]) {
                     nearbyChannel = true;
-                    safeWater = Math.max(safeWater, ((Number) surface.invoke(neighbor)).intValue());
+                    safeWater = Math.max(safeWater, waters[x + dx][z + dz]);
                 }
             }
             if (!nearbyChannel) continue;
 
-            int blockX = minX + x - 3, blockZ = minZ + z - 3;
+            int blockX = minX + x - radius, blockZ = minZ + z - radius;
             // This feature runs at CARVERS.  ProtoChunk maintains FINAL_HEIGHTMAPS
             // here, but OCEAN_FLOOR_WG remains the pre-carve map and can point at
             // air after Streams' own cut.  NO_LEAVES also avoids a canopy top.
             int originalTop = level.getHeight(Types.MOTION_BLOCKING_NO_LEAVES, blockX, blockZ) - 1;
             BlockState originalSurface = level.getBlockState(new BlockPos(blockX, originalTop, blockZ));
-            int target = NaturalRiverBankShape.targetHeight(originalTop, safeWater, sea, lateralDistance, halfWidth,
-                    ((Number) slope.invoke(p)).doubleValue());
-            if (target >= originalTop || originalTop - target > 3) continue;
+            double plannedSlope = ((Number) slope.invoke(p)).doubleValue();
+            int target = wideBanks
+                    ? NaturalRiverBankShape.wideTargetHeight(originalTop, safeWater, sea, lateralDistance,
+                            halfWidth, plannedSlope, blockX, blockZ)
+                    : NaturalRiverBankShape.targetHeight(originalTop, safeWater, sea, lateralDistance, halfWidth, plannedSlope);
+            if (target >= originalTop || originalTop - target > (wideBanks ? 2 : 3)) continue;
             if (!clearableSoil(level, blockX, blockZ, originalTop, target)) continue;
             if (protectedSpan(level, blockX, blockZ, target, originalTop, protection, shielded, blockedBiome)) continue;
             if (!clearCover(level, blockX, blockZ, originalTop)) continue;
@@ -77,7 +95,9 @@ public final class StreamsNaturalBanks {
             BlockPos top = new BlockPos(blockX, target, blockZ);
             BlockState retained = level.getBlockState(top);
             BlockState defaultTop = retained.is(Blocks.MUD) ? retained : originalSurface;
-            BlockState finalMaterial = StreamsBankMaterialPolicy.refinedBankTop(level, blockX, blockZ, defaultTop, edge <= 2.0);
+            BlockState finalMaterial = wideBanks
+                    ? StreamsBankMaterialPolicy.climateBankTop(level, blockX, target, blockZ, defaultTop)
+                    : StreamsBankMaterialPolicy.refinedBankTop(level, blockX, blockZ, defaultTop, edge <= 2.0);
             level.setBlock(top, finalMaterial, 2);
             SHAPED_COLUMNS.incrementAndGet();
             REMOVED_BLOCKS.addAndGet(removed);

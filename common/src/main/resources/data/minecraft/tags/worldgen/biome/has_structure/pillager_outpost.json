@@ -8,6 +8,8 @@
     "terrain-diffusion-mc:ecology/cold_grassland",
     "terrain-diffusion-mc:ecology/dry_woodland",
     "terrain-diffusion-mc:ecology/dry_grassland",
-    "terrain-diffusion-mc:ecology/desert"
+    "terrain-diffusion-mc:ecology/desert",
+    "terrain-diffusion-mc:ecology/montane_forest",
+    "terrain-diffusion-mc:ecology/steppe"
   ]
 }

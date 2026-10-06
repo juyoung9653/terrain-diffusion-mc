@@ -1,0 +1,18 @@
+{
+  "replace": false,
+  "values": [
+    "minecraft:coarse_dirt",
+    {
+      "id": "immersive_weathering:sandy_dirt",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:permafrost",
+      "required": false
+    },
+    {
+      "id": "terrain_slabs:coarse_slab",
+      "required": false
+    }
+  ]
+}

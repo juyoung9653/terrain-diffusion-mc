@@ -3,6 +3,7 @@
   "values": [
     "terrain-diffusion-mc:taiga_sparse",
     "terrain-diffusion-mc:ecology/boreal_forest",
-    "terrain-diffusion-mc:ecology/boreal_woodland"
+    "terrain-diffusion-mc:ecology/boreal_woodland",
+    "terrain-diffusion-mc:ecology/montane_forest"
   ]
 }

@@ -36,6 +36,11 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.SnowUnderTreesFeatureMixin")) {
+            return FMLLoader.getLoadingModList().getMods().stream()
+                    .anyMatch(mod -> "snowundertrees".equals(mod.getModId())
+                            && "1.5.1".equals(mod.getVersion().toString()));
+        }
         if (LEGACY_BANK_MATERIAL_MIXIN.equals(mixinClassName)) {
             return hasStreamsVersion(StreamsStructureShieldMixinPlugin::isLegacyBankMaterialVersion);
         }

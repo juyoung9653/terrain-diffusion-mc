@@ -1,0 +1,47 @@
+{
+  "replace": false,
+  "values": [
+    "minecraft:dirt",
+    "minecraft:rooted_dirt",
+    "minecraft:podzol",
+    "minecraft:mycelium",
+    "minecraft:mud",
+    "minecraft:farmland",
+    {
+      "id": "immersive_weathering:loam",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:silt",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:earthen_clay",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:mulch_block",
+      "required": false
+    },
+    {
+      "id": "terrain_slabs:dirt_slab",
+      "required": false
+    },
+    {
+      "id": "terrain_slabs:rooted_dirt_slab",
+      "required": false
+    },
+    {
+      "id": "terrain_slabs:podzol_slab",
+      "required": false
+    },
+    {
+      "id": "terrain_slabs:mycelium_slab",
+      "required": false
+    },
+    {
+      "id": "terrain_slabs:mud_slab",
+      "required": false
+    }
+  ]
+}

@@ -44,7 +44,7 @@ class LushCompatibilityTest(unittest.TestCase):
         paths = list((ROOT / "common/src/main/resources/data/terrain-diffusion-mc/worldgen/biome/ecology").glob("*.json"))
         generated = {f"terrain-diffusion-mc:ecology/{path.stem}" for path in paths}
         self.assertEqual(generated, self.biomes)
-        self.assertEqual(11, len(generated))
+        self.assertEqual(15, len(generated))
         self.assertTrue(self.biomes.isdisjoint({"minecraft:desert", "minecraft:beach", "minecraft:forest"}))
         for path in paths:
             with self.subTest(biome=path.stem):

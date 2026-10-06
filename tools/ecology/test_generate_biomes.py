@@ -59,7 +59,7 @@ class GenerateEcologyBiomeTests(unittest.TestCase):
             self.assertIn({"id": "#example:nested", "required": False}, tag["values"])
             ecology = [value for value in tag["values"] if isinstance(value, str) and value.startswith("terrain-diffusion-mc:ecology/")]
             self.assertEqual(len(ecology), len(set(ecology)))
-            self.assertEqual(4, len(ecology))  # direct forest and taiga memberships
+            self.assertEqual(sum(tag in ("forest", "taiga") for _, tag, _ in GENERATOR.SPECS.values()), len(ecology))
             configured = json.loads((output / "data/terrain-diffusion-mc/worldgen/configured_feature/eco_groundcover.json").read_text())
             placed = json.loads((output / "data/terrain-diffusion-mc/worldgen/placed_feature/eco_groundcover.json").read_text())
             self.assertEqual({"type": "terrain-diffusion-mc:eco_groundcover", "config": {}}, configured)

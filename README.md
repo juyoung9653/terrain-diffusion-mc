@@ -346,9 +346,9 @@ enabled. These generation changes require fresh chunks; use a new same-seed
 world for comparison rather than mixing old and new generation.
 
 New compatibility-preset worlds enable `natural_biomes: true`. Their land uses
-11 ecological biomes controlled by a continuous TD climate field, with a filter
+15 ecological biomes controlled by a continuous TD climate field, with a filter
 radius of 512 model pixels (1024 game blocks at scale two, rounded up to coarse
-cells). All eleven ecological biomes
+cells). All fifteen ecological biomes
 share grass/foliage tints and the ordered ecological vegetation list. Tree density, compatible species
 weights and broad soil patches depend on continuous climate controls, not biome
 labels. Biome IDs are never randomly dithered at a boundary. Terrain heights and
@@ -374,7 +374,7 @@ through biome modifiers; those additions are not governed by this climate pass.
 The old biome-specific stage also included incidental vines, melons, pumpkins
 and sugar cane; this pass does not reproduce those placements.
 
-`EcotoneContinuityTest` traverses all eleven labels and checks expected plant
+`EcotoneContinuityTest` traverses all fifteen labels and checks expected plant
 rates across moisture/temperature boundaries, cold treeline taper and spatial
 continuity. These checks and the offline atlas do not replace a fresh-chunk
 in-game placement/appearance check. Existing chunks are not rewritten.
@@ -411,11 +411,61 @@ and freshwater/marine context; exposed beach receives no seagrass. Tall pairs
 are accepted or rejected together. This does not remove saved or player-placed
 plants and does not change coral, kelp, or ordinary Greeneries grass.
 
+Ecology IDs now include `snowy_boreal_forest`, `temperate_rainforest`,
+`montane_forest` and `steppe` under `terrain-diffusion-mc:ecology/`. These are real
+regional biome labels, available to `/locate biome`, not aliases. Elevation,
+temperature and moisture select the subdivisions; the existing continuous cover
+and surface fields still control transitions. Existing saved chunks retain their
+biomes, so the new identities appear in newly generated terrain.
+
+V7 wide river banks no longer add a dry block above the neighboring water for
+containment. Protected dry soil on the outer slope can be lowered by at most two
+blocks, keeping at least one block above the highest nearby planned water. The
+apron and material transition grow with river width and use coherent variation;
+source, junction, structure and non-soil guards remain. Saved bank blocks are not
+rewritten. Earlier river profiles retain their previous bank geometry.
+
+Ecology groundcover can select optional Greeneries grass/fern species within its
+existing placement density; absent species fall back to vanilla plants. Native
+Greeneries grass/fern patches are also attached through its own biome tags to all
+15 ecology biomes, retaining the mod's counts, spread and weighted providers.
+Only those additional native attempts are accepted at 100% on grassy substrates,
+50% on ordinary soil and 10% on barren soil. These are attempt probabilities, not
+percentages of the ground guaranteed to contain grass; vanilla survival and patch
+placement still apply. Sand, red sand, their slabs and waterlogged supports are
+excluded. Base TD groundcover is not thinned by these additional-patch ratios.
+
+Substrate categories are datapack-editable block tags under `terrain-diffusion-mc`:
+`greeneries_grass_soils`, `greeneries_ordinary_soils`, and `greeneries_barren_soils`.
+Grass/moss slabs and Immersive Weathering grassy soils use 100%; dirt/rooted
+dirt/podzol/mud slabs and loam/silt/earthen clay/mulch use 50%; coarse dirt/slabs
+and bare sandy dirt/permafrost use 10%. Grassy variants take priority over other
+soil categories. Optional mod entries do not require those mods to be installed.
+
+Terrain Slabs 3.1.2 already provides BushBlock survival and bottom-slab rendering
+offsets when `enableVegetationOnSlabs` is enabled. TD accepts its tagged soils
+before the normal survival check; slabs are not globally added to `minecraft:dirt`.
+Tags alone would not bypass TD's former full-block-only support check. The native
+slab mod remains responsible for partial-block attachment and neighbor updates.
+
+With Snow Under Trees
+1.5.1, the NeoForge adapter recognizes snow-capped leaves and scans at most 64
+blocks for the underlying floor. The mod's temperature, light and survival checks
+and Snow! Real Magic! conversion still apply. This is a world-generation fix,
+not a retrofit of snow in existing chunks.
+
 `/locate biome` retains Minecraft's candidate order, predicate and cave-height
 checks while reusing the current terrain tile within one search. Disable this
 reuse with `-Dtd.locate.biomeCache=false` for comparison. It reduces repeated
 lookups, not the number of distinct AI tiles required for a cold search.
-`/locate structure` retains its existing generation/presence checks.
+`/locate structure` retains its search order and exact structure-start checks.
+With Async Locator installed, TD defers speculative terrain work while its shared
+structure-check monitor is locked, then waits for `STRUCTURE_STARTS` off the server
+thread. A unique chunk ticket and one-at-a-time admission keep verification alive
+until completion; shutdown closes admission before the terrain provider drains.
+This removes two server-blocking paths, but cold AI terrain and disk scans can
+still take time. Tags such as `/locate structure #minecraft:village` are supported
+by the ordinary command.
 
 For ungenerated terrain, permission-level 2 users can use a separate bounded search:
 
@@ -440,9 +490,10 @@ chunk requests must drain safely and can exceed that time; cancellation suppress
 results immediately and prevents another search until the worker drains. Structure
 generation may internally need additional terrain. Background ranking reduces
 unnecessary detailed generation, but shares CPU/GPU resources with gameplay and
-cannot promise zero lag or a fixed speedup. Ordinary `/locate` remains unchanged.
+cannot promise zero lag or a fixed speedup. Ordinary `/locate` keeps its usual
+search semantics, with the Async Locator compatibility fix described above.
 
-On NeoForge, the eleven ecology biomes remove Immersive Weathering's raw-generation
+On NeoForge, the fifteen ecology biomes remove Immersive Weathering's raw-generation
 `earthen_clay`, `sandy_dirt`, `loam` and `permafrost` placements. Those ore-style
 soil patches replaced grass before TD's soil pass and escaped its vanilla soil
 filter, producing competing patterns. Removal runs in NeoForge's REMOVE phase,
@@ -462,7 +513,7 @@ feature definitions alone do not establish which mod allowed their survival.
 A fresh-world follow-up identified Lush 2.2's `lush:lush_vegetation` as a
 separate direct-write route: it boosts unknown ecology IDs with grass/ferns and
 spills across chunks. This duplicate vegetation feature is now removed only from
-the eleven ecology biomes; Lush's rocks, mushrooms and other biomes are retained.
+the fifteen ecology biomes; Lush's rocks, mushrooms and other biomes are retained.
 `_WG` heightmaps stop updating after CARVERS, so neighbor decoration can exist
 above the ground when the later ecology surface pass converts it to sand. That
 conversion explicitly clears only grass/ferns and a matching double-plant upper
@@ -487,7 +538,7 @@ lakes. `NATURE_X_PACK` can point to the installed ZIP when running
 `tools/ecology/test_cattail_compat.py` to verify those source resources.
 
 Use `python -B tools/ecology/audit_offline.py` to compile the production ecology
-math and render all eleven profiles without launching Minecraft (JDK 21+ and
+math and render all fifteen profiles without launching Minecraft (JDK 21+ and
 Python with Pillow required). Results go to
 `build/ecology-audit`, with material fractions, spatial transition measurements,
 tree-attempt probability maps and a climate classification map. The default
@@ -576,7 +627,7 @@ Prepare river terrain before installation; do not disable Streams to shorten ini
 loading. Verify actual client entry as well as headless generation, since player
 chunk delivery also initializes the Streams engine through `StreamFlowNet.onChunkSent`.
 `tools/ecology/prepare_showcases.py --template-world <dedicated-probe-world>
---output <new-directory>` stages all 11 named worlds without copying existing
+--output <new-directory>` stages all 15 named worlds without copying existing
 chunks or players. Generate their spawn chunks before installing the worlds;
 verify the selected land biome, actual tree/soil output and physical river water
 with the Streams probe's `surfaceAudit`, `ecologyAudit` and `streamsTopologyAudit`

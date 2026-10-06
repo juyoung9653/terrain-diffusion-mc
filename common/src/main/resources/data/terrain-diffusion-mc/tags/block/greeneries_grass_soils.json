@@ -1,0 +1,35 @@
+{
+  "replace": false,
+  "values": [
+    "minecraft:grass_block",
+    "minecraft:moss_block",
+    {
+      "id": "immersive_weathering:rooted_grass_block",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:grassy_sandy_dirt",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:grassy_silt",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:grassy_earthen_clay",
+      "required": false
+    },
+    {
+      "id": "immersive_weathering:grassy_permafrost",
+      "required": false
+    },
+    {
+      "id": "terrain_slabs:grass_slab",
+      "required": false
+    },
+    {
+      "id": "terrain_slabs:moss_slab",
+      "required": false
+    }
+  ]
+}

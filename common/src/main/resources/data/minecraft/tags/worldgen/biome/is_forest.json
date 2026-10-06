@@ -3,6 +3,7 @@
   "values": [
     "terrain-diffusion-mc:forest_sparse",
     "terrain-diffusion-mc:ecology/temperate_forest",
-    "terrain-diffusion-mc:ecology/temperate_woodland"
+    "terrain-diffusion-mc:ecology/temperate_woodland",
+    "terrain-diffusion-mc:ecology/temperate_rainforest"
   ]
 }

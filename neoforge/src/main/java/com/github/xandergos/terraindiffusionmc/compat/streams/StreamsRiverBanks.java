@@ -1,6 +1,8 @@
 package com.github.xandergos.terraindiffusionmc.compat.streams;
 
 import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankMargin;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankShape;
 import java.lang.reflect.Method;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -8,6 +10,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.levelgen.Heightmap.Types;
 
 /** Connect raster corners and contain lateral steps; v5 first softens dry narrow-stream banks. */
 public final class StreamsRiverBanks {
@@ -39,11 +42,27 @@ public final class StreamsRiverBanks {
                     surface = column.getMethod("waterSurfaceY"), width = column.getMethod("width"),
                     distance = column.getMethod("distance"), source = column.getMethod("source"), terminal = column.getMethod("terminal");
             BankPlan[][] plans = new BankPlan[18][18];
+            boolean wideBank = false;
             for (int x = 0; x < 18; x++) for (int z = 0; z < 18; z++) {
                 Object p = plan.invoke(engine, minX+x-1, minZ+z-1);
                 plans[x][z] = new BankPlan((Boolean)channel.invoke(p), (Boolean)corridor.invoke(p),
                         ((Number)surface.invoke(p)).intValue(), ((Number)width.invoke(p)).doubleValue(),
                         ((Number)distance.invoke(p)).doubleValue(), (Boolean)source.invoke(p), (Boolean)terminal.invoke(p));
+                BankPlan bank = plans[x][z];
+                // Skip the larger shaping halo entirely unless this chunk has
+                // a high dry wide-bank candidate. Its channels remain read-only.
+                if (version >= 7 && !wideBank && x >= 1 && x <= 16 && z >= 1 && z <= 16
+                        && !bank.channel && bank.corridor && !bank.source && !bank.terminal
+                        && bank.width >= 4 && bank.surface > sea + 2
+                        && bank.distance - bank.width > .5
+                        && bank.distance - bank.width < NaturalRiverBankShape.wideCorridor(bank.width)) {
+                    int top = level.getHeight(Types.MOTION_BLOCKING_NO_LEAVES, minX + x - 1, minZ + z - 1) - 1;
+                    wideBank = top > bank.surface + 1
+                            && soil(level.getBlockState(new BlockPos(minX + x - 1, top, minZ + z - 1)));
+                }
+            }
+            if (version >= 7 && wideBank) {
+                StreamsNaturalBanks.refine(level, minX, minZ, engine, sea, protection, shielded, blockedBiome, true);
             }
             for (int x = 1; x <= 16; x++) for (int z = 1; z <= 16; z++) {
                 BankPlan p = plans[x][z];
@@ -69,10 +88,14 @@ public final class StreamsRiverBanks {
                 if (version >= 6 && p.width < 4.0) continue;
                 int crest = Integer.MIN_VALUE;
                 for (BankPlan n : new BankPlan[]{plans[x-1][z],plans[x+1][z],plans[x][z-1],plans[x][z+1]})
-                    if (n.channel && n.surface <= p.surface+6) crest = Math.max(crest,n.surface+1);
-                // One block of freeboard also contains source-level settling at
-                // steps. A natural cliff beside a fall may need a deeper bank fill.
-                if (crest == Integer.MIN_VALUE || crest < p.surface || crest > p.surface+7) continue;
+                    if (n.channel && n.surface <= p.surface+6) crest = Math.max(crest,
+                            NaturalRiverBankMargin.containmentCrest(version, n.surface));
+                // V7 fills through the highest adjacent water block, retaining
+                // lateral containment at falls without adding a dry one-block parapet.
+                // Frozen older profiles keep their original freeboard.
+                int freeboard = version >= 7 ? 0 : 1;
+                if (crest == Integer.MIN_VALUE || crest < p.surface - 1 + freeboard
+                        || crest > p.surface + 6 + freeboard) continue;
                 BlockPos pos = new BlockPos(minX+x-1, crest, minZ+z-1);
                 BlockState at = level.getBlockState(pos);
                 if (!at.canBeReplaced() || !at.getFluidState().isEmpty()) continue;
@@ -80,7 +103,9 @@ public final class StreamsRiverBanks {
                 int depth = 1;
                 // Native decoration may leave tall grass in a two-block bank gap.
                 // Dry replaceable plants are clearance, just like air; water is not.
-                while (depth < 6 && ground.canBeReplaced() && ground.getFluidState().isEmpty()) {
+                // Match the former support floor: removing the cap must not make
+                // previously unsupported deep gaps eligible for new soil fills.
+                while (depth < 5 + freeboard && ground.canBeReplaced() && ground.getFluidState().isEmpty()) {
                     depth++; ground = level.getBlockState(pos.below(depth));
                 }
                 if (!soil(ground)) continue;

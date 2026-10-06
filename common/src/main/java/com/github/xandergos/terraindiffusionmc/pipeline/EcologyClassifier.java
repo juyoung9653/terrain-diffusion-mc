@@ -7,7 +7,8 @@ public final class EcologyClassifier {
     public static final List<String> BIOMES = List.of(
             "temperate_forest", "temperate_woodland", "temperate_grassland",
             "boreal_forest", "boreal_woodland", "cold_grassland",
-            "dry_woodland", "dry_grassland", "tropical_forest", "tropical_woodland", "desert");
+            "dry_woodland", "dry_grassland", "tropical_forest", "tropical_woodland", "desert",
+            "snowy_boreal_forest", "temperate_rainforest", "montane_forest", "steppe");
     private static final FastNoiseLite VARIATION = variation();
     public record Sample(int biomeId, float treeCover, float temperature, float moisture, float slope) { }
     public record Selection(Sample sample, short terrainBiomeId) { }
@@ -70,6 +71,12 @@ public final class EcologyClassifier {
         // it to moisture 0.635..0.65. Cover itself remains continuous across this label.
         else if (regionalMoisture < .65f && regionalTemperature > 17) id = regionalMoisture >= .52f ? 7 : 8;
         else id = regionalCover > .65f ? 1 : regionalCover > .22f ? 2 : 3;
+        // Append finer regional identities without changing existing numeric IDs
+        // or using labels to change continuous vegetation/material controls.
+        if (id == 4 && regionalTemperature <= -2) id = 12;
+        else if (id == 1 && regionalElevation >= 700) id = 14;
+        else if (id == 1 && regionalMoisture >= 1.45f) id = 13;
+        else if (id == 3 && regionalTemperature <= 17 && regionalMoisture < .52f) id = 15;
         return new Selection(new Sample(id, clamp(cover, 0, 1), temperature, moisture, slope), (short) 0);
     }
 

@@ -18,6 +18,7 @@ ECOLOGY_BIOMES = (
     "temperate_forest", "temperate_woodland", "temperate_grassland",
     "boreal_forest", "boreal_woodland", "cold_grassland",
     "dry_woodland", "dry_grassland", "tropical_forest", "tropical_woodland", "desert",
+    "snowy_boreal_forest", "temperate_rainforest", "montane_forest", "steppe",
 )
 OVERWORLD_BIOME_SOURCE = (
     "Data", "WorldGenSettings", "dimensions", "minecraft:overworld", "generator", "biome_source"

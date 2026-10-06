@@ -29,7 +29,7 @@ class PreviewBiomeColorsTest(unittest.TestCase):
         colors = json.loads(COLORS.read_text(encoding="utf-8-sig"))
         expected = expected_td_ids()
         self.assertEqual(expected, set(colors), "keep Preview color entries in lockstep with TD custom biome IDs")
-        self.assertEqual(14, len(expected))
+        self.assertEqual(18, len(expected))
 
     def test_resource_uses_world_preview_shared_c_namespace_path(self) -> None:
         self.assertEqual(Path("common/src/main/resources/data/c/worldgen/biome_colors.json"), COLORS.relative_to(ROOT))

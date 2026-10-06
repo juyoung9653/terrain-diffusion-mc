@@ -23,6 +23,7 @@ public final class EcologyClassifierTest {
                 prior = a;
             }
         }
+        reached.add(EcologyClassifier.select(0, 0, 900, .1f, false, 10, 1000, 900).sample().biomeId());
         require(reached.size() == EcologyClassifier.BIOMES.size(), "unreachable ecosystems: " + reached);
         require(transitions > 50, "exercise real label boundaries");
         var base = EcologyClassifier.select(0, 0, 300, .1f, false, 15, 800, 300).sample();
@@ -37,7 +38,22 @@ public final class EcologyClassifierTest {
         checkRegionalLandIdentity();
         checkDryWoodlandBand();
         checkSoilCoveredHills();
-        System.out.println("EcologyClassifierTest: PASS (11 ecosystems, " + transitions + " continuous label transitions)");
+        checkSubdivisions();
+        System.out.println("EcologyClassifierTest: PASS (" + EcologyClassifier.BIOMES.size() + " ecosystems, " + transitions + " continuous label transitions)");
+    }
+
+    private static void checkSubdivisions() {
+        require(EcologyClassifier.BIOMES.get(10).equals("desert"), "legacy biome indices stay stable");
+        require(EcologyShowcaseProfile.sample("temperate_grassland", 0, 0, .1f).moisture() == .50f,
+                "existing grassland showcases retain their climate");
+        for (String name : EcologyClassifier.BIOMES) {
+            var sample = EcologyShowcaseProfile.sample(name, 0, 0, .1f);
+            require(EcologyClassifier.BIOMES.get(sample.biomeId() - 1).equals(name), "showcase identity: " + name);
+        }
+        var low = EcologyClassifier.select(0, 0, 699, .1f, false, 10, 1000, 699).sample();
+        var high = EcologyClassifier.select(0, 0, 701, .1f, false, 10, 1000, 701).sample();
+        require(low.biomeId() == 1 && high.biomeId() == 14, "regional elevation subdivides forests");
+        require(low.treeCover() == high.treeCover(), "new labels do not create a tree-density seam");
     }
 
     private static void checkSoilCoveredHills() {

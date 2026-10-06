@@ -25,6 +25,7 @@ PROFILES = (
     "temperate_forest", "temperate_woodland", "temperate_grassland",
     "boreal_forest", "boreal_woodland", "cold_grassland",
     "dry_woodland", "dry_grassland", "tropical_forest", "tropical_woodland", "desert",
+    "snowy_boreal_forest", "temperate_rainforest", "montane_forest", "steppe",
 )
 SEEDS = (91357, 0, -71421)
 SCALES = (2, 5)
@@ -38,6 +39,7 @@ BIOME_COLORS = {
         (42, 90, 79), (69, 119, 102), (153, 177, 127),
         (155, 132, 70), (194, 166, 87), (25, 127, 64),
         (71, 151, 72), (225, 201, 118),
+        (178, 207, 205), (30, 100, 64), (78, 113, 91), (182, 181, 102),
     ))
 }
 JAVA_SOURCES = (
@@ -205,7 +207,7 @@ def audit(output: Path) -> dict:
         summaries = list(csv.DictReader(stream))
     checks: dict[str, bool] = {}
     keys = {(row["profile"], int(row["seed"]), int(row["scale"])) for row in summaries}
-    checks["all_11_profiles_all_seeds_and_scales"] = keys == {
+    checks["all_profiles_all_seeds_and_scales"] = keys == {
         (profile, seed, scale) for profile in PROFILES for seed in SEEDS for scale in SCALES
     }
     checks["tree_probabilities_bounded_0_to_0_5"] = all(

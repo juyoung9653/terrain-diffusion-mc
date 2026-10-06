@@ -11,6 +11,10 @@
     "terrain-diffusion-mc:ecology/dry_grassland",
     "terrain-diffusion-mc:ecology/tropical_forest",
     "terrain-diffusion-mc:ecology/tropical_woodland",
-    "terrain-diffusion-mc:ecology/desert"
+    "terrain-diffusion-mc:ecology/desert",
+    "terrain-diffusion-mc:ecology/snowy_boreal_forest",
+    "terrain-diffusion-mc:ecology/temperate_rainforest",
+    "terrain-diffusion-mc:ecology/montane_forest",
+    "terrain-diffusion-mc:ecology/steppe"
   ]
 }

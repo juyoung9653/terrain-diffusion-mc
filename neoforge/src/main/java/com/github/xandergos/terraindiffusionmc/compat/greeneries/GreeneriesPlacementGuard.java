@@ -1,11 +1,14 @@
 package com.github.xandergos.terraindiffusionmc.compat.greeneries;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
+import com.github.xandergos.terraindiffusionmc.world.ecology.GreeneriesSoilPolicy;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -16,6 +19,7 @@ public final class GreeneriesPlacementGuard {
     private static final TagKey<Block> GREENERIES_GRASS = optionalBlockTag("greeneries", "grass");
     private static final TagKey<Block> GREENERIES_FERN = optionalBlockTag("greeneries", "fern");
     private static final ResourceLocation TERRAIN_SLABS_SAND = id("terrain_slabs", "sand_slab");
+    private static final ResourceLocation TERRAIN_SLABS_RED_SAND = id("terrain_slabs", "red_sand_slab");
 
     private GreeneriesPlacementGuard() {
     }
@@ -27,6 +31,14 @@ public final class GreeneriesPlacementGuard {
         return !isEcologyBiome(level, pos);
     }
 
+    public static boolean acceptsNativeAttempt(WorldGenLevel level, BlockPos pos, BlockState plant,
+                                               RandomSource random) {
+        if (!GreeneriesNativePatchScope.active() || !isGrassOrFern(plant)
+                || !isEcologyBiome(level, pos)) return true;
+        float chance = GreeneriesSoilPolicy.acceptance(level.getBlockState(pos.below()));
+        return chance >= 1.0F || (chance > 0.0F && GreeneriesSoilPolicy.accepts(chance, random.nextFloat()));
+    }
+
     private static boolean isEcologyBiome(WorldGenLevel level, BlockPos pos) {
         return level.getBiome(pos).unwrapKey()
                 .map(key -> key.location())
@@ -36,8 +48,9 @@ public final class GreeneriesPlacementGuard {
     }
 
     private static boolean isSandSurface(BlockState support) {
-        return support.is(Blocks.SAND)
-                || BuiltInRegistries.BLOCK.getKey(support.getBlock()).equals(TERRAIN_SLABS_SAND);
+        return support.is(BlockTags.SAND) || support.is(Blocks.SAND) || support.is(Blocks.RED_SAND)
+                || BuiltInRegistries.BLOCK.getKey(support.getBlock()).equals(TERRAIN_SLABS_SAND)
+                || BuiltInRegistries.BLOCK.getKey(support.getBlock()).equals(TERRAIN_SLABS_RED_SAND);
     }
 
     private static boolean isGrassOrFern(BlockState plant) {

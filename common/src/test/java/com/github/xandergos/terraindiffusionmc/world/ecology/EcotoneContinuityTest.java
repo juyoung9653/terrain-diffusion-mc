@@ -28,7 +28,8 @@ public final class EcotoneContinuityTest {
                 previousLabel = sample.biomeId();
             }
         }
-        require(labels.size() == 11 && !labels.contains(0), "exercise every ecological biome");
+        labels.add(EcologyClassifier.select(41, -53, 900, .1f, false, 10, 1000, 900).sample().biomeId());
+        require(labels.size() == EcologyClassifier.BIOMES.size() && !labels.contains(0), "exercise every ecological biome");
         require(crossings >= 10 && maximumJump < .005f, "moisture label transitions must not switch plant populations");
         for (float moisture : new float[]{.2f, .55f, .8f, 1.5f}) {
             float[] previous = null;

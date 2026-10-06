@@ -18,6 +18,10 @@ SPECS = {
     "tropical_forest": ("jungle", "jungle", .95),
     "tropical_woodland": ("jungle", "jungle", .95),
     "desert": ("desert", "desert", 2.),
+    "snowy_boreal_forest": ("snowy_taiga", "snowy_taiga", -.5),
+    "temperate_rainforest": ("forest", "forest", .7),
+    "montane_forest": ("taiga", "taiga", .2),
+    "steppe": ("plains", "plains", .7),
 }
 
 VEGETAL_FEATURES = [

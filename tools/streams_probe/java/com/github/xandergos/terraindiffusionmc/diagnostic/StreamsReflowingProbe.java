@@ -112,6 +112,10 @@ public final class StreamsReflowingProbe {
                 return;
             }
             auditCustomBiomes(level, receipts);
+            if (Boolean.getBoolean("td.streamsProbe.asyncLocateAudit")) {
+                emit(receipts, AsyncLocateAudit.run(server));
+                if (Boolean.getBoolean("td.streamsProbe.asyncLocateOnly")) return;
+            }
             if (Boolean.getBoolean("td.streamsProbe.fastLocateAudit")) {
                 emit(receipts, FastLocateAudit.run(server));
                 if (Boolean.getBoolean("td.streamsProbe.fastLocateOnly")) return;
@@ -243,6 +247,27 @@ public final class StreamsReflowingProbe {
             }
             if (Boolean.getBoolean("td.streamsProbe.ecologyOverview")) {
                 emit(receipts, writeEcologyOverview(server));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.bankWidthAudit") && !completed.isEmpty()) {
+                tickAuditForcedChunks.addAll(server.submit(() -> forceTickAuditChunks(level, completed))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+                awaitTickableChunks(server, level, completed, 60_000L);
+                emit(receipts, server.submit(() -> {
+                    try { BankWidthAudit.run(level); return json("bank_width_audit", "status", "passed"); }
+                    catch (Exception failure) { throw new IllegalStateException(failure); }
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.greeneriesDensityAudit") && !completed.isEmpty()) {
+                ChunkReceipt first = completed.getFirst();
+                emit(receipts, server.submit(() -> GreeneriesDensityAudit.runFixture(level, first.chunkX, first.chunkZ))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.vegetationSnowAudit") && !completed.isEmpty()) {
+                ChunkReceipt first = completed.getFirst();
+                emit(receipts, server.submit(() -> VegetationSnowAudit.run(level, first.chunkX, first.chunkZ, 1))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+                emit(receipts, server.submit(() -> VegetationSnowAudit.runFixture(level, first.chunkX, first.chunkZ))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
             }
             if (Boolean.getBoolean("td.streamsProbe.aquaticPlacementFixture") && !completed.isEmpty()) {
                 ChunkReceipt first = completed.getFirst();

@@ -18,7 +18,11 @@ public final class EcologyShowcaseProfile {
             Map.entry("dry_grassland", new Climate(22.0F, .33F)),
             Map.entry("tropical_forest", new Climate(28.0F, 1.50F)),
             Map.entry("tropical_woodland", new Climate(28.0F, .85F)),
-            Map.entry("desert", new Climate(28.0F, .10F)));
+            Map.entry("desert", new Climate(28.0F, .10F)),
+            Map.entry("snowy_boreal_forest", new Climate(-3.0F, 1.25F)),
+            Map.entry("temperate_rainforest", new Climate(13.0F, 1.60F)),
+            Map.entry("montane_forest", new Climate(10.0F, 1.25F)),
+            Map.entry("steppe", new Climate(13.0F, .45F)));
 
     private EcologyShowcaseProfile() {
     }
@@ -33,7 +37,7 @@ public final class EcologyShowcaseProfile {
         return biomeId == 41 || biomeId == 44 || biomeId == 46 || biomeId == 48;
     }
 
-    /** Produces the normal classifier sample from a fixed representative climate. */
+    /** Keeps the named identity and its fixed climate, including older saved showcases. */
     public static EcologyClassifier.Sample sample(String name, int x, int z, float slope) {
         if (!EcologyClassifier.BIOMES.contains(name)) {
             throw new IllegalArgumentException("Unknown ecology showcase profile: " + name);
@@ -43,7 +47,10 @@ public final class EcologyShowcaseProfile {
             throw new IllegalStateException("Missing ecology showcase climate: " + name);
         }
         float rainfall = (500.0F + 20.0F * Math.max(0.0F, climate.temperature())) * climate.moisture();
-        return EcologyClassifier.select(x, z, 100.0F, slope, false,
-                climate.temperature(), rainfall, 100.0F).sample();
+        float elevation = name.equals("montane_forest") ? 900.0F : 100.0F;
+        var sample = EcologyClassifier.select(x, z, elevation, slope, false,
+                climate.temperature(), rainfall, elevation).sample();
+        return new EcologyClassifier.Sample(EcologyClassifier.BIOMES.indexOf(name) + 1,
+                sample.treeCover(), sample.temperature(), sample.moisture(), sample.slope());
     }
 }

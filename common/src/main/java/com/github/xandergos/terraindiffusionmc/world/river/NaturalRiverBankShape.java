@@ -47,6 +47,31 @@ public final class NaturalRiverBankShape {
         return Math.max(safeWater + 1, target);
     }
 
+    /** V7 wide-bank apron; capped to the caller's eight-block plan halo. */
+    public static double wideCorridor(double halfWidth) {
+        return !Double.isFinite(halfWidth) || halfWidth < 4 ? 0 : Math.min(8, 4 + Math.sqrt(halfWidth));
+    }
+
+    /**
+     * Soften only excessive dry soil on a wide river's outer slope. A full block
+     * above the highest neighbouring water remains, even at stepped channels.
+     * The final 1.5 blocks taper the cut into retained terrain; no cut exceeds two.
+     */
+    public static int wideTargetHeight(int originalTop, int safeWater, int seaLevel,
+                                       double distance, double halfWidth, double slope, int x, int z) {
+        double apron = wideCorridor(halfWidth);
+        double edge = distance - halfWidth;
+        if (apron == 0 || !Double.isFinite(distance) || !Double.isFinite(slope) || slope < 0
+                || edge <= .5 || edge >= apron || safeWater <= seaLevel + 2) return originalTop;
+        double ramp = lerp(.35, .8, smooth(Math.min(1, slope / STEEP_SLOPE)));
+        double drift = .6 * (exposure(x, z) - .5);
+        int desired = safeWater + 1 + (int) Math.floor(Math.max(0, edge - 1.5 + drift) * ramp);
+        int available = Math.min(2, Math.max(0, originalTop - desired));
+        double fade = smooth(Math.min(1, (apron - edge) / 1.5));
+        int cut = Math.min(available, (int) Math.round(available * fade));
+        return originalTop - cut;
+    }
+
     /**
      * Deterministic, spatially smooth coordinate field for shore-material
      * variation.  It is independent of world state and stays in {@code [0,1]}.

@@ -10,6 +10,8 @@ import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMath;
 import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
 import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankShape;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankMargin;
+import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.FluidTags;
@@ -74,11 +76,19 @@ public final class StreamsBankMaterialPolicy {
         return proposed;
     }
 
-    /** Only called for the audited exposed-top write, never zone selection or depth fills. */
+    /** Exposed-top writes only: the audited native helper and protected dry-soil refinement. */
     public static BlockState climateBankTop(WorldGenLevel level, int x, int y, int z, BlockState proposed) {
-        if (proposed == null || !proposed.is(Blocks.GRASS_BLOCK)) return proposed;
+        if (proposed == null) return null;
+        boolean mud = proposed.is(Blocks.MUD);
+        if (!mud && !proposed.is(Blocks.GRASS_BLOCK)) return proposed;
         BlockPos top = new BlockPos(x, y, z);
         if (!level.getFluidState(top).isEmpty() || !level.getFluidState(top.above()).isEmpty()) return proposed;
+        BankSample bank = bankSample(level, x, z);
+        float waterDistance = bank == null ? nearbyWaterDistance(level, top)
+                : NaturalRiverBankMargin.moistureDistance(bank.distance, bank.width, x, z);
+        // Keep the channel and inner wet apron. Only the outer exposed mud top
+        // fades through soil into the surrounding climate's grass or forest floor.
+        if (mud && (bank == null || bank.channel || waterDistance <= 2)) return proposed;
         var generator = level.getLevel().getChunkSource().getGenerator();
         var surface = NaturalEcology.surfaceSample(generator, x, z);
         if (surface == null) return proposed;
@@ -88,20 +98,19 @@ public final class StreamsBankMaterialPolicy {
             return supportedMineralTop(level, top, Blocks.GRAVEL.defaultBlockState());
         // Snow, ocean and other retained terrain are not ordinary river soil.
         if (sample.biomeId() == 0 && surface.terrainBiomeId() != ShoreClassifier.BEACH) return proposed;
-        // Humid/cold bank grasses need no dry-soil correction or additional block probes.
-        if (sample.temperature() <= 10 || sample.moisture() >= .60F) return proposed;
         boolean dryShore = surface.terrainBiomeId() == ShoreClassifier.BEACH
                 && FeatureEcologyMath.dryMineralShore(sample.temperature(), sample.moisture());
         var material = dryShore ? FeatureEcologyMath.SurfaceMaterial.SAND
                 : FeatureEcologyMath.bankSurfaceMaterial(sample.temperature(), sample.moisture(), sample.slope(),
-                        sample.treeCover(), surface.elevation(), nearbyWaterDistance(level, top),
+                        sample.treeCover(), surface.elevation(), waterDistance,
                         level.getSeed(), x, z, WorldScaleManager.getCurrentScale());
         return switch (material) {
             // A supported top is required so selecting sand cannot alter the bank geometry by falling.
             case SAND -> supportedMineralTop(level, top, Blocks.SAND.defaultBlockState());
             case COARSE_DIRT -> Blocks.COARSE_DIRT.defaultBlockState();
             case PODZOL -> Blocks.PODZOL.defaultBlockState();
-            case GRASS -> proposed;
+            case GRASS -> mud ? (waterDistance < 3.25F ? Blocks.COARSE_DIRT.defaultBlockState()
+                    : Blocks.GRASS_BLOCK.defaultBlockState()) : proposed;
         };
     }
 
@@ -144,7 +153,7 @@ public final class StreamsBankMaterialPolicy {
     }
 
     /**
-     * V7 limits mud skinning to surfaces with observed water nearby.  Returning
+     * V7 limits dry mud skinning to a width-aware apron with observed water nearby. Returning
      * {@code null} is intentional: Streams treats a null zone state as no skin,
      * which skips both its top write and its native depth-fill loop.
      */
@@ -153,20 +162,72 @@ public final class StreamsBankMaterialPolicy {
                                                               int zone, boolean pointBar,
                                                               BlockState proposed) {
         if (proposed == null) return null;
-        if (proposed.is(Blocks.MUD) && !waterNearSurface(level, surface)) return null;
+        if (proposed.is(Blocks.MUD)) {
+            BankSample bank = bankSample(level, surface.getX(), surface.getZ());
+            int radius = 2;
+            if (bank != null && !bank.channel && level.getFluidState(surface).isEmpty()
+                    && level.getFluidState(surface.above()).isEmpty()) {
+                double margin = NaturalRiverBankMargin.width(bank.width, surface.getX(), surface.getZ());
+                if (margin <= 0 || !Double.isFinite(bank.distance)
+                        || bank.distance - bank.width > margin) return null;
+                radius = Math.max(1, Math.min(6, (int) Math.ceil(margin)));
+            }
+            if (!waterNearSurface(level, surface, radius)) return null;
+        }
         return preserveNaturalShoreSubstrate(level, surface.getX(), surface.getZ(), zone, pointBar, proposed);
     }
 
-    private static boolean waterNearSurface(WorldGenLevel level, BlockPos surface) {
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dz = -2; dz <= 2; dz++) {
-                if (dx * dx + dz * dz > 4) continue;
-                for (int dy = -2; dy <= 2; dy++) {
-                    if (level.getBlockState(surface.offset(dx, dy, dz)).getFluidState().is(FluidTags.WATER)) return true;
+    private static boolean waterNearSurface(WorldGenLevel level, BlockPos surface, int radius) {
+        BlockPos.MutableBlockPos probe = new BlockPos.MutableBlockPos();
+        // Near-first rings keep the common waterline case at the old small probe cost.
+        for (int ring = 0; ring <= radius; ring++) {
+            for (int dx = -ring; dx <= ring; dx++) {
+                for (int dz = -ring; dz <= ring; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != ring) continue;
+                    if (dx * dx + dz * dz > radius * radius) continue;
+                    for (int dy = -2; dy <= 2; dy++) {
+                        probe.set(surface.getX() + dx, surface.getY() + dy, surface.getZ() + dz);
+                        if (level.hasChunkAt(probe) && level.getFluidState(probe).is(FluidTags.WATER)) return true;
+                    }
                 }
             }
         }
         return false;
+    }
+
+    private record BankSample(boolean channel, double width, double distance) { }
+
+    /** Cached API lookup; one existing engine plan per material candidate, no neighbour plans. */
+    private static BankSample bankSample(WorldGenLevel level, int x, int z) {
+        try {
+            Object engine = BankAccess.ENGINE.invoke(null, level);
+            Object plan = BankAccess.PLAN.invoke(engine, x, z);
+            if (!(Boolean) BankAccess.CORRIDOR.invoke(plan)) return null;
+            return new BankSample((Boolean) BankAccess.CHANNEL.invoke(plan),
+                    ((Number) BankAccess.WIDTH.invoke(plan)).doubleValue(),
+                    ((Number) BankAccess.DISTANCE.invoke(plan)).doubleValue());
+        } catch (ReflectiveOperationException failure) {
+            throw new IllegalStateException("Unsupported Streams bank material adapter", failure);
+        }
+    }
+
+    private static final class BankAccess {
+        static final Method ENGINE, PLAN, CORRIDOR, CHANNEL, WIDTH, DISTANCE;
+        static {
+            try {
+                ENGINE = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen")
+                        .getMethod("engine", WorldGenLevel.class);
+                PLAN = Class.forName("dev.streamsreflowing.core.RiverEngine")
+                        .getMethod("plan", int.class, int.class);
+                Class<?> column = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
+                CORRIDOR = column.getMethod("inCorridor");
+                CHANNEL = column.getMethod("inChannel");
+                WIDTH = column.getMethod("width");
+                DISTANCE = column.getMethod("distance");
+            } catch (ReflectiveOperationException failure) {
+                throw new ExceptionInInitializerError(failure);
+            }
+        }
     }
 
     /**

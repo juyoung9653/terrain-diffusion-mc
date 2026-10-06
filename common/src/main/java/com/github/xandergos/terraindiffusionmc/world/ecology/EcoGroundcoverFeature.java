@@ -5,6 +5,8 @@ import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.BlockTags;
 import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.WorldGenLevel;
@@ -58,7 +60,7 @@ public final class EcoGroundcoverFeature extends Feature<NoneFeatureConfiguratio
                 FeatureEcologyMath.GroundcoverKind kind = FeatureEcologyMath.groundcoverWeights(
                         sample.temperature(), sample.moisture(), sample.treeCover(), sample.slope())
                         .choose(random.nextFloat());
-                changed |= placeGroundcover(level, pos, kind, random);
+                changed |= placeGroundcover(level, pos, kind, sample, random);
             }
         }
         return changed;
@@ -72,13 +74,15 @@ public final class EcoGroundcoverFeature extends Feature<NoneFeatureConfiguratio
     }
 
     private static boolean placeGroundcover(WorldGenLevel level, BlockPos pos,
-                                            FeatureEcologyMath.GroundcoverKind kind, RandomSource random) {
+                                            FeatureEcologyMath.GroundcoverKind kind,
+                                            EcologyClassifier.Sample sample, RandomSource random) {
         if (kind == FeatureEcologyMath.GroundcoverKind.NONE) return false;
         BlockPos below = pos.below();
         BlockState soil = level.getBlockState(below);
         if (!level.getFluidState(below).isEmpty()) return false;
         boolean sand = soil.is(Blocks.SAND) || soil.is(Blocks.RED_SAND) || soil.is(BlockTags.SAND);
-        boolean dirt = soil.is(BlockTags.DIRT) || soil.is(Blocks.MOSS_BLOCK);
+        boolean dirt = soil.is(BlockTags.DIRT) || soil.is(Blocks.MOSS_BLOCK)
+                || GreeneriesSoilPolicy.isGroundcoverSupport(soil);
         // Explicit guards are intentional: survival rules can be relaxed by other mods.
         if (kind == FeatureEcologyMath.GroundcoverKind.CACTUS) {
             if (!sand || !cactusSpace(level, pos)) return false;
@@ -103,6 +107,22 @@ public final class EcoGroundcoverFeature extends Feature<NoneFeatureConfiguratio
             case MUSHROOM -> (random.nextBoolean() ? Blocks.BROWN_MUSHROOM : Blocks.RED_MUSHROOM).defaultBlockState();
             case NONE -> throw new IllegalStateException("NONE was already excluded");
         };
+        if (kind == FeatureEcologyMath.GroundcoverKind.GRASS
+                || kind == FeatureEcologyMath.GroundcoverKind.FERN) {
+            String optionalPath = kind == FeatureEcologyMath.GroundcoverKind.GRASS
+                    ? OptionalGroundcoverPolicy.grass(sample.temperature(), sample.moisture(), sample.treeCover(),
+                            random.nextFloat(), random.nextFloat())
+                    : OptionalGroundcoverPolicy.fern(sample.temperature(), sample.moisture(), sample.treeCover(),
+                            random.nextFloat(), random.nextFloat());
+            if (optionalPath != null) {
+                var optional = BuiltInRegistries.BLOCK.getOptional(
+                        ResourceLocation.fromNamespaceAndPath("greeneries", optionalPath));
+                if (optional.isPresent()) {
+                    BlockState candidate = optional.get().defaultBlockState();
+                    if (candidate.canSurvive(level, pos)) state = candidate;
+                }
+            }
+        }
         if (!state.canSurvive(level, pos)) return false;
         if (state.getBlock() instanceof DoublePlantBlock) return placeDoublePlant(level, pos, state);
         if (kind == FeatureEcologyMath.GroundcoverKind.BAMBOO) return placeBamboo(level, pos, state, random);

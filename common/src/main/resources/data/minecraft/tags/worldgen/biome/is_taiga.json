@@ -4,6 +4,8 @@
     "terrain-diffusion-mc:taiga_sparse",
     "terrain-diffusion-mc:snowy_taiga_sparse",
     "terrain-diffusion-mc:ecology/boreal_forest",
-    "terrain-diffusion-mc:ecology/boreal_woodland"
+    "terrain-diffusion-mc:ecology/boreal_woodland",
+    "terrain-diffusion-mc:ecology/snowy_boreal_forest",
+    "terrain-diffusion-mc:ecology/montane_forest"
   ]
 }

@@ -49,6 +49,8 @@ def main():
     sources.append(ROOT / "common/src/test/java" / world_package / "ExactBiomeSearchTest.java")
     ecology_package = world_package / "ecology"
     sources.append(ROOT / "common/src/main/java" / ecology_package / "FeatureEcologyMath.java")
+    sources.append(ROOT / "common/src/main/java" / ecology_package / "OptionalGroundcoverPolicy.java")
+    sources.append(ROOT / "common/src/test/java" / ecology_package / "OptionalGroundcoverPolicyTest.java")
     sources.append(ROOT / "common/src/test/java" / ecology_package / "FeatureEcologyMathTest.java")
     sources.append(ROOT / "common/src/test/java" / ecology_package / "EcotoneContinuityTest.java")
     sources.append(ROOT / "common/src/main/java" / ecology_package / "ShorePlantPolicy.java")
@@ -68,6 +70,7 @@ def main():
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.LowlandCarvingGuardTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ExactBiomeSearchTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMathTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.OptionalGroundcoverPolicyTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.EcotoneContinuityTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.ShorePlantPolicyTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.ReliefSurfaceTest")

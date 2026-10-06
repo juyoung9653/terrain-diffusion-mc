@@ -1,0 +1,11 @@
+{
+  "replace": false,
+  "values": [
+    "terrain-diffusion-mc:ecology/boreal_forest",
+    "terrain-diffusion-mc:ecology/boreal_woodland",
+    "terrain-diffusion-mc:ecology/cold_grassland",
+    "terrain-diffusion-mc:ecology/snowy_boreal_forest",
+    "terrain-diffusion-mc:ecology/montane_forest",
+    "terrain-diffusion-mc:ecology/steppe"
+  ]
+}

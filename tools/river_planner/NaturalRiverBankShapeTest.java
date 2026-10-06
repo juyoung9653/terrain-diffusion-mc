@@ -11,6 +11,8 @@ public final class NaturalRiverBankShapeTest {
         softensOneBlockExcessBank();
         handlesNegativeCoordinatesDeterministically();
         holdsInvariantsAcrossInputs();
+        softensMeasuredWideSlope();
+        preservesWideBankExclusionsAndContainment();
         System.out.println("NaturalRiverBankShapeTest: passed");
     }
 
@@ -93,6 +95,54 @@ public final class NaturalRiverBankShapeTest {
 
     private static int target(int original, int water, int sea, double distance, double width, double slope) {
         return NaturalRiverBankShape.targetHeight(original, water, sea, distance, width, slope);
+    }
+
+    private static void softensMeasuredWideSlope() {
+        // Same-seed native bank audit: Y66 water, outer grass Y68/69 at these edge distances.
+        check(wide(68, 66, 63, 4.65 + 3.9, 4.65, 0, -841, -1028) == 67,
+                "observed inner wide slope did not soften");
+        check(wide(69, 66, 63, 4.65 + 4.8, 4.65, 0, -841, -1029) == 68,
+                "observed outer wide slope did not soften");
+        check(wide(69, 66, 63, 4.65 + 5.8, 4.65, 0, -841, -1030) == 69,
+                "cut did not taper into original outer terrain");
+        check(wide(67, 66, 63, 4.65 + 2, 4.65, 0, -841, -1026) == 67,
+                "existing water freeboard was cut");
+        check(wide(69, 69, 63, 8.5, 4.65, 0, -841, -1028) == 69,
+                "higher adjacent channel was not respected");
+        check(wide(68, 66, 63, 8.5, 4.65, .4, -841, -1028) == 68,
+                "steep channel margin was flattened");
+    }
+
+    private static void preservesWideBankExclusionsAndContainment() {
+        check(wide(90, 66, 63, 4, 3.99, 0, 0, 0) == 90, "narrow tributary changed");
+        check(wide(90, 65, 63, 6, 4, 0, 0, 0) == 90, "shore changed");
+        check(wide(90, 66, 63, 4, 4, 0, 0, 0) == 90, "channel changed");
+        check(wide(90, 66, 63, 5, 4, Double.NaN, 0, 0) == 90, "invalid slope changed");
+        check(wide(90, 66, 63, Double.NaN, 4, 0, 0, 0) == 90, "invalid distance changed");
+        check(wide(90, 66, 63, 5, Double.POSITIVE_INFINITY, 0, 0, 0) == 90, "invalid width changed");
+        Random random = new Random(0xB4A97);
+        int changed = 0;
+        for (int i = 0; i < 20_000; i++) {
+            double width = random.nextDouble() * 20;
+            double edge = random.nextDouble() * 12 - 1;
+            int water = random.nextInt(200) - 20;
+            int original = water + random.nextInt(16) - 4;
+            double slope = random.nextDouble() * .5;
+            int result = wide(original, water, 63, width + edge, width, slope,
+                    random.nextInt(10000) - 5000, random.nextInt(10000) - 5000);
+            check(result <= original && original - result <= 2, "wide cut escaped its bound");
+            if (result != original) {
+                changed++;
+                check(result >= water + 1, "wide cut compromised water containment");
+                check(width >= 4 && water > 65 && edge > .5 && edge < NaturalRiverBankShape.wideCorridor(width),
+                        "wide cut changed an excluded bank");
+            }
+        }
+        check(changed > 100, "wide profile failed to exercise cuts");
+    }
+
+    private static int wide(int original, int water, int sea, double distance, double width, double slope, int x, int z) {
+        return NaturalRiverBankShape.wideTargetHeight(original, water, sea, distance, width, slope, x, z);
     }
 
     private static void check(boolean condition, String message) {
