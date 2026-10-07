@@ -69,10 +69,13 @@ def main():
                  "ShoreClassifier","ShoreContext"):
         sources.append(ROOT/"common/src/main/java"/PACKAGE/"pipeline"/(name+".java"))
     sources.append(ROOT/"tools/terrain_sampling/LocalTerrainProviderCacheTest.java")
+    sources.append(ROOT/"tools/terrain_sampling/StreamsSamplingTest.java")
+    for name in ("StreamsInferenceBinding", "StreamsSamplerPriority"):
+        sources.append(ROOT/"neoforge/src/main/java"/PACKAGE/"compat/streams"/(name+".java"))
     for name in ("MacroBiomeContextTest","ExactTerrainSamplingTest","InferenceExecutorTest"):
         sources.append(ROOT/"common/src/test/java"/PACKAGE/"pipeline"/(name+".java"))
     subprocess.run([str(args.java_home/"bin/javac.exe"),"--release","21","-encoding","UTF-8","-d",str(target),*map(str,sources)],check=True)
-    for name in ("InferenceExecutorTest","ExactTerrainSamplingTest","MacroBiomeContextTest","LocalTerrainProviderCacheTest"):
+    for name in ("InferenceExecutorTest","ExactTerrainSamplingTest","MacroBiomeContextTest","LocalTerrainProviderCacheTest","StreamsSamplingTest"):
         subprocess.run([str(args.java_home/"bin/java.exe"),"-cp",os.pathsep.join((str(target),str(ROOT/"common/src/main/resources"))),"com.github.xandergos.terraindiffusionmc.pipeline."+name],check=True)
     if args.benchmark:
         for enabled in ("false", "true"):

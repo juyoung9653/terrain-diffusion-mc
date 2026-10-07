@@ -22,6 +22,11 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
         int z = pos.blockZ();
         int y = pos.blockY();
 
+        int sampledHeight = LocalTerrainProvider.scopedGroundHeight(x, z);
+        if (sampledHeight != Integer.MIN_VALUE) {
+            return HeightConverter.convertToMinecraftHeight((short) sampledHeight) - y;
+        }
+
         int tileSize = LocalTerrainProvider.sampleTileSize();
         int tileShift = Integer.numberOfTrailingZeros(tileSize);
 

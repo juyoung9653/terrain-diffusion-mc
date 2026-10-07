@@ -21,8 +21,8 @@ public final class StreamsInferenceBinding {
                                 default -> throw new IllegalStateException("Unknown Object method: " + method);
                             };
                         }
-                        return provider.withBinding(() -> provider.withPriority(
-                                com.github.xandergos.terraindiffusionmc.pipeline.InferenceExecutor.Priority.BACKGROUND, () -> {
+                        return provider.withSamplingBinding(() -> provider.withPriority(
+                                StreamsSamplerPriority.current(), () -> {
                         try { return method.invoke(sampler, args); }
                         catch (InvocationTargetException failed) {
                             Throwable cause = failed.getCause();

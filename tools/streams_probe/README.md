@@ -680,6 +680,22 @@ startup-abort event and interactive client quit still require runtime coverage.
 
 ### Chunk performance checks
 
+Streams 2.13.8 demanded builds can execute on `streamsreflowing-prefetch`:
+the thread name alone does not identify speculative work. Preserve the captured
+`LowResGrid$PrioritizedTask` priority (0 urgent, 1 background) across its worker
+boundary and scope `BuildGate.asDemanded` likewise. Run
+`python tools/streams_probe/test_sampler_priority.py` to audit these version-gated
+hooks against the installed binary.
+
+Bound Streams density scans reuse exact ground heights through a scoped weak
+tile cursor. The cursor retains full query bounds and bypasses repeated provider
+lookups for each Y value; provider hit counters therefore no longer count those
+cursor reads. Do not interpret their reduction as an equal wall-time speedup.
+`python tools/test_terrain_sampling.py` checks parity, invalidation and priority
+scope cleanup. Validate mixin application, login, chunk progress and shutdown
+separately in a copied full client; a successful build does not establish that an
+intermittent exit hang is fixed.
+
 `tdProbe.performanceAudit=true` runs cold and repeated density/biome queries in
 isolated preview scopes. `tdProbe.performanceParity=true` additionally compares
 every cell of sampled 16x16 regions against the original configured full-tile

@@ -182,6 +182,7 @@ public final class LocalTerrainProvider {
     private PreviewSession previewOwner;
     private static final ThreadLocal<PreviewSession> PREVIEW = new ThreadLocal<>();
     private static final ThreadLocal<LocalTerrainProvider> BOUND_PROVIDER = new ThreadLocal<>();
+    private static final ThreadLocal<GroundCursor> GROUND_CURSOR = new ThreadLocal<>();
 
     private LocalTerrainProvider(long seed, PipelineModels models, InferenceExecutor.Scope scope) {
         this.seed = seed;
@@ -273,6 +274,67 @@ public final class LocalTerrainProvider {
         finally {
             if (previous == null) BOUND_PROVIDER.remove();
             else BOUND_PROVIDER.set(previous);
+        }
+    }
+
+    /** A native sampler may scan hundreds of Y values in one exact ground column. */
+    public <T> T withSamplingBinding(Callable<T> action) throws Exception {
+        return withBinding(() -> {
+            GroundCursor previous = GROUND_CURSOR.get();
+            GROUND_CURSOR.set(new GroundCursor(this));
+            try { return action.call(); }
+            finally {
+                if (previous == null) GROUND_CURSOR.remove();
+                else GROUND_CURSOR.set(previous);
+            }
+        });
+    }
+
+    /** Exact pipeline meters, or MIN_VALUE when no complete-tile sampler scope applies. */
+    public static int scopedGroundHeight(int x, int z) {
+        GroundCursor cursor = GROUND_CURSOR.get();
+        if (cursor == null || PREVIEW.get() != null || BOUND_PROVIDER.get() != cursor.provider
+                || !legacySampling()) return Integer.MIN_VALUE;
+        return cursor.height(x, z);
+    }
+
+    private static final class GroundCursor {
+        final LocalTerrainProvider provider;
+        WeakReference<CacheEntry> entry = new WeakReference<>(null);
+        long generation;
+        int startX, startZ, tileSize, scale;
+
+        GroundCursor(LocalTerrainProvider provider) { this.provider = provider; }
+
+        int height(int x, int z) {
+            provider.scope.requireOpen();
+            int currentScale = WorldScaleManager.getCurrentScale();
+            int currentTileSize = TerrainDiffusionConfig.tileSize();
+            long currentGeneration = provider.cacheGeneration;
+            CacheEntry ready = entry.get();
+            if (ready != null && ready.valid && generation == currentGeneration
+                    && scale == currentScale && tileSize == currentTileSize
+                    && x >= startX && x < startX + tileSize && z >= startZ && z < startZ + tileSize) {
+                return ready.data.heightmap[z - startZ][x - startX];
+            }
+            int sx = Math.floorDiv(x, currentTileSize) * currentTileSize;
+            int sz = Math.floorDiv(z, currentTileSize) * currentTileSize;
+            HeightmapData data = provider.fetchGroundHeightmap(sz, sx, sz + currentTileSize, sx + currentTileSize);
+            CacheEntry fetched = provider.CACHE.get(new CacheKey(sz, sx, sz + currentTileSize,
+                    sx + currentTileSize, currentScale));
+            // Never attach a pre-clear result to a post-clear generation, nor retain evicted tiles.
+            if (fetched != null && fetched.valid && fetched.data == data
+                    && provider.cacheGeneration == currentGeneration) {
+                entry = new WeakReference<>(fetched);
+                generation = currentGeneration;
+                scale = currentScale;
+                tileSize = currentTileSize;
+                startX = sx;
+                startZ = sz;
+            } else {
+                entry.clear();
+            }
+            return data.heightmap[z - sz][x - sx];
         }
     }
 

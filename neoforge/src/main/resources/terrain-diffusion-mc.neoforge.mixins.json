@@ -18,6 +18,8 @@
     "StreamsStartupLifecycleMixin",
     "StreamsWorldgenScaleMixin",
     "StreamsNaturalRiverMixin",
+    "StreamsDemandPriorityMixin",
+    "StreamsSamplerPriorityMixin",
     "StreamsNaturalNetworkMixin",
     "StreamsRiverBanksMixin",
     "StreamsShallowBanksMixin",

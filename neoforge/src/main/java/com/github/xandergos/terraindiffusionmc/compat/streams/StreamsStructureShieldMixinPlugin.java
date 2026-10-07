@@ -45,6 +45,8 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
             return hasStreamsVersion(StreamsStructureShieldMixinPlugin::isLegacyBankMaterialVersion);
         }
         if (BANK_MATERIAL_2138_MIXIN.equals(mixinClassName)
+                || mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.StreamsDemandPriorityMixin")
+                || mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.StreamsSamplerPriorityMixin")
                 || mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.StreamsSeagrassFeatureMixin")) {
             return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2138);
         }
