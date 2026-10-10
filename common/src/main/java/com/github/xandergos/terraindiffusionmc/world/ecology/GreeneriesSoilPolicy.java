@@ -10,7 +10,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 
-/** Acceptance of additional native Greeneries attempts, independent of base groundcover density. */
+/** Acceptance of native Greeneries grass/fern worldgen attempts on ecological soil. */
 public final class GreeneriesSoilPolicy {
     public static final TagKey<Block> GRASS = tag("greeneries_grass_soils");
     public static final TagKey<Block> SOIL = tag("greeneries_ordinary_soils");
@@ -19,6 +19,10 @@ public final class GreeneriesSoilPolicy {
     private GreeneriesSoilPolicy() { }
 
     public static float acceptance(BlockState support) {
+        return acceptance(support, 0.5F);
+    }
+
+    public static float acceptance(BlockState support, float ordinarySoilChance) {
         // Sand and water always win, even if a datapack also puts them in a soil tag.
         if (!support.getFluidState().isEmpty() || support.is(BlockTags.SAND)
                 || support.is(Blocks.SAND) || support.is(Blocks.RED_SAND)) return 0.0F;
@@ -28,7 +32,7 @@ public final class GreeneriesSoilPolicy {
         // Grassy IW variants must take precedence over ordinary/barren parent categories.
         if (support.is(GRASS)) return 1.0F;
         if (support.is(BARREN)) return 0.1F;
-        if (support.is(SOIL)) return 0.5F;
+        if (support.is(SOIL)) return ordinarySoilChance;
         return 0.0F;
     }
 

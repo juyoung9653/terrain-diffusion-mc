@@ -53,8 +53,8 @@ public final class NaturalRiverBankShape {
     }
 
     /**
-     * Soften only excessive dry soil on a wide river's outer slope. A full block
-     * above the highest neighbouring water remains, even at stepped channels.
+     * Soften only excessive dry soil on a wide river's outer slope. The solid
+     * block at the highest neighbouring water Y remains, even at stepped channels.
      * The final 1.5 blocks taper the cut into retained terrain; no cut exceeds two.
      */
     public static int wideTargetHeight(int originalTop, int safeWater, int seaLevel,
@@ -63,9 +63,12 @@ public final class NaturalRiverBankShape {
         double edge = distance - halfWidth;
         if (apron == 0 || !Double.isFinite(distance) || !Double.isFinite(slope) || slope < 0
                 || edge <= .5 || edge >= apron || safeWater <= seaLevel + 2) return originalTop;
-        double ramp = lerp(.35, .8, smooth(Math.min(1, slope / STEEP_SLOPE)));
+        double slopeBlend = smooth(Math.min(1, slope / STEEP_SLOPE));
+        double ramp = lerp(.35, .8, slopeBlend);
         double drift = .6 * (exposure(x, z) - .5);
-        int desired = safeWater + 1 + (int) Math.floor(Math.max(0, edge - 1.5 + drift) * ramp);
+        // Flat channels do not need a second dry block above their containing block.
+        // Blend that extra relief back on steep reaches instead of leaving a uniform green lip.
+        int desired = safeWater + (int) Math.floor(Math.max(0, edge - 1.5 + drift) * ramp + slopeBlend);
         int available = Math.min(2, Math.max(0, originalTop - desired));
         double fade = smooth(Math.min(1, (apron - edge) / 1.5));
         int cut = Math.min(available, (int) Math.round(available * fade));

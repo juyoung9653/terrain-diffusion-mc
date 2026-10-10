@@ -10,13 +10,29 @@ import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.Climate;
 import net.minecraft.world.level.chunk.ChunkGeneratorStructureState;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Final;
+import org.spongepowered.asm.mixin.Mutable;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import net.minecraft.world.level.levelgen.structure.StructureSet;
+import com.github.xandergos.terraindiffusionmc.world.structure.UnifiedVillageSets;
+import java.util.List;
 
 import java.util.function.Predicate;
 
 @Mixin(ChunkGeneratorStructureState.class)
 public class ChunkGeneratorStructureStateMixin {
+    @Shadow @Final private BiomeSource biomeSource;
+    @Shadow @Final @Mutable private List<Holder<StructureSet>> possibleStructureSets;
+
+    @Inject(method="<init>",at=@At("RETURN"))
+    private void terrainDiffusion$unifiedVillages(CallbackInfo ci) {
+        possibleStructureSets=UnifiedVillageSets.rewrite(biomeSource,possibleStructureSets);
+    }
+
     // The invocation lives in an async synthetic lambda. Match its unique callsite
     // rather than a lambda name that changes between Mojang and Fabric mappings.
     @Redirect(method = "*", at = @At(value = "INVOKE", target =

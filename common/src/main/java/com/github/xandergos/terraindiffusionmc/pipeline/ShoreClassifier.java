@@ -34,8 +34,11 @@ public final class ShoreClassifier {
         float maxElevation = 24 + 24 * exposure;
         if (distance > width || elevation > maxElevation) return 0;
         if (temperature < 0) return SNOWY_BEACH;
-        // Regional substrate is coherent along the coast, never independent per-column noise.
-        if (relief > .12f || (temperature < 12 && sediment > .5f)) return GRAVEL;
+        // Coarse material needs a regional supply as well as wave exposure. Relief lowers
+        // the substrate threshold, but cannot turn every rolling coast into gravel.
+        float gravelThreshold = .76f - .18f * EcologyClassifier.smooth(.12f, .30f, rock)
+                - .05f * exposure;
+        if (exposure >= .5f && rock >= .14f && sediment > gravelThreshold) return GRAVEL;
         return BEACH;
     }
 }

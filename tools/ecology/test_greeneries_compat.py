@@ -1,6 +1,7 @@
-"""Focused contract checks for the NeoForge Greeneries sand-placement guard."""
+"""Focused contracts for native Greeneries generation in TD ecology biomes."""
 
 import json
+import importlib.util
 import os
 import unittest
 import zipfile
@@ -8,6 +9,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+CANOPY_SAFE_HEIGHTMAP = "MOTION_BLOCKING_NO_LEAVES"
+RESTORED_GROUNDCOVER = {
+    "patch_grass_badlands", "patch_grass_forest", "patch_grass_jungle",
+    "patch_grass_plain", "patch_grass_savanna", "patch_grass_taiga_2",
+    "patch_large_fern", "patch_tall_grass", "patch_tall_grass_2",
+}
 
 
 def installed_greeneries_jar():
@@ -23,34 +30,99 @@ def installed_greeneries_jar():
 
 
 class GreeneriesCompatibilityTest(unittest.TestCase):
-    def test_native_additive_tags_cover_all_ecology_biomes_without_extra_modifiers(self):
+    def test_optional_native_overlays_are_conditioned_without_installed_jar(self):
+        paths = list((ROOT / "neoforge/src/main/resources/data/greeneries/worldgen/placed_feature").glob("*.json"))
+        self.assertEqual(7, len(paths))
+        for path in paths:
+            data = json.loads(path.read_text())
+            self.assertEqual([{"type": "neoforge:mod_loaded", "modid": "greeneries"}],
+                             data.get("neoforge:conditions"), path.name)
+
+    def test_native_species_selection_uses_standard_biome_tags(self):
         resources = ROOT / "neoforge/src/main/resources/data"
-        tag_dir = resources / "greeneries/tags/worldgen/biome"
+        self.assertFalse(list((resources / "greeneries/tags/worldgen/biome").glob("*.json")))
         actual_biomes = {
             "terrain-diffusion-mc:ecology/" + path.stem
             for path in (ROOT / "common/src/main/resources/data/terrain-diffusion-mc/worldgen/biome/ecology").glob("*.json")
         }
-        additions = set()
-        for path in tag_dir.glob("*.json"):
+        climate = []
+        for name in ("hot", "cold", "temperate"):
+            data = json.loads((resources / f"c/tags/worldgen/biome/is_{name}/overworld.json").read_text())
+            self.assertFalse(data["replace"])
+            climate.extend(data["values"])
+        self.assertEqual(set(climate), actual_biomes)
+        self.assertEqual(len(climate), 19)
+        # Native selectors own common/rare membership; do not inject native patches again.
+        for path in (resources / "terrain-diffusion-mc/neoforge/biome_modifier").rglob("*.json"):
             data = json.loads(path.read_text())
-            self.assertFalse(data["replace"], path.name)
-            self.assertEqual(len(data["values"]), len(set(data["values"])), path.name)
-            additions.update(data["values"])
-        self.assertEqual(len(actual_biomes), 15)
-        self.assertEqual(additions, actual_biomes)
-        # Use the mod's own modifier once; adding our own add_features would duplicate it.
-        for path in (resources / "terrain-diffusion-mc/neoforge/biome_modifier").glob("*.json"):
-            data = json.loads(path.read_text())
-            if data["type"] == "neoforge:add_features":
-                self.assertNotIn("greeneries:", json.dumps(data))
+            if data["type"] in ("neoforge:add_features", "terrain-diffusion-mc:greeneries_native_vegetation"):
+                features = data["features"]
+                if isinstance(features, str):
+                    features = [features]
+                self.assertFalse(any(f.startswith("greeneries:") for f in features), path)
+
+    def test_native_route_preserves_installed_vanilla_placement_definitions(self):
+        vanilla = os.environ.get("VANILLA_JAR")
+        vanilla = Path(vanilla) if vanilla else Path.home() / ".gradle/caches/neoformruntime/artifacts/minecraft_1.21.1_client.jar"
+        if not vanilla.is_file():
+            self.skipTest("set VANILLA_JAR to validate original placement definitions")
+        spec = importlib.util.spec_from_file_location("generate_biomes", Path(__file__).with_name("generate_biomes.py"))
+        generator = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(generator)
+        resources = ROOT / "neoforge/src/main/resources/data/terrain-diffusion-mc"
+        with zipfile.ZipFile(vanilla) as jar:
+            for name, (source, _, _) in generator.SPECS.items():
+                original = json.loads(jar.read(f"data/minecraft/worldgen/biome/{source}.json"))["features"][9]
+                expected = [f for f in original if f != "minecraft:glow_lichen" and not f.startswith("minecraft:trees_")]
+                modifier = json.loads((resources / f"neoforge/biome_modifier/greeneries_native/{name}.json").read_text())
+                actual = modifier["features"]
+                self.assertEqual([f.replace("minecraft:", "terrain-diffusion-mc:greeneries_native/") for f in expected], actual)
+                self.assertTrue(any("flower" in f for f in actual), name)
+                for feature in expected:
+                    path = feature.split(":", 1)[1]
+                    clone = json.loads((resources / f"worldgen/placed_feature/greeneries_native/{path}.json").read_text())
+                    original_placed = json.loads(jar.read(f"data/minecraft/worldgen/placed_feature/{path}.json"))
+                    original_heightmaps = [
+                        placement["heightmap"] for placement in original_placed["placement"]
+                        if placement["type"] == "minecraft:heightmap"
+                    ]
+                    expected_heightmaps = list(original_heightmaps)
+                    actual_heightmaps = []
+                    for placement in clone["placement"]:
+                        if placement["type"] == "minecraft:heightmap":
+                            actual_heightmaps.append(placement["heightmap"])
+                            placement["heightmap"] = original_heightmaps.pop(0)
+                    self.assertFalse(original_heightmaps, path)
+                    if path in RESTORED_GROUNDCOVER:
+                        self.assertEqual([CANOPY_SAFE_HEIGHTMAP], actual_heightmaps, path)
+                    else:
+                        self.assertEqual(expected_heightmaps, actual_heightmaps, path)
+                    self.assertEqual(original_placed, clone)
+
+    def test_greeneries_native_groundcover_uses_canopy_safe_heightmap_only(self):
         jar_path = installed_greeneries_jar()
-        if jar_path is not None:
-            with zipfile.ZipFile(jar_path) as jar:
-                modifiers = [json.loads(jar.read(name)) for name in jar.namelist()
-                             if name.startswith("data/greeneries/neoforge/biome_modifier/") and name.endswith(".json")]
-                for path in tag_dir.glob("*.json"):
-                    matching = [m for m in modifiers if m["biomes"] == "#greeneries:" + path.stem]
-                    self.assertEqual(len(matching), 1, path.stem)
+        if jar_path is None:
+            self.skipTest("set GREENERIES_JAR to validate an installed Greeneries jar")
+        overlays = ROOT / "neoforge/src/main/resources/data/greeneries/worldgen/placed_feature"
+        with zipfile.ZipFile(jar_path) as jar:
+            expected = {
+                Path(name).name for name in jar.namelist()
+                if name.startswith("data/greeneries/worldgen/placed_feature/patch_")
+                and name.endswith(".json") and not name.endswith("patch_reeds.json")
+            }
+            self.assertEqual(expected, {path.name for path in overlays.glob("*.json")})
+            for name in expected:
+                native = json.loads(jar.read("data/greeneries/worldgen/placed_feature/" + name))
+                overlay = json.loads((overlays / name).read_text())
+                self.assertEqual([{"type": "neoforge:mod_loaded", "modid": "greeneries"}],
+                                 overlay.pop("neoforge:conditions", None), name)
+                heightmaps = []
+                for placement in overlay["placement"]:
+                    if placement["type"] == "minecraft:heightmap":
+                        heightmaps.append(placement["heightmap"])
+                        placement["heightmap"] = "WORLD_SURFACE_WG"
+                self.assertEqual([CANOPY_SAFE_HEIGHTMAP], heightmaps, name)
+                self.assertEqual(native, overlay, name)
 
     def test_soil_categories_and_optional_ids_match_installed_mods(self):
         directory = ROOT / "common/src/main/resources/data/terrain-diffusion-mc/tags/block"
@@ -91,25 +163,6 @@ class GreeneriesCompatibilityTest(unittest.TestCase):
                     for soil in all_soils:
                         if soil.startswith(namespace + ":"):
                             self.assertIn(f"assets/{namespace}/blockstates/{soil.split(':')[1]}.json", jar.namelist())
-
-    def test_optional_groundcover_species_exist_in_installed_jar(self):
-        jar_path = installed_greeneries_jar()
-        if jar_path is None:
-            self.skipTest("set GREENERIES_JAR to validate an installed Greeneries jar")
-
-        with zipfile.ZipFile(jar_path) as jar:
-            blockstates = {
-                name.removeprefix("assets/greeneries/blockstates/").removesuffix(".json")
-                for name in jar.namelist()
-                if name.startswith("assets/greeneries/blockstates/") and name.endswith(".json")
-            }
-            self.assertTrue({
-                "very_short_blue_grass", "short_blue_grass", "bushy_blue_grass",
-                "very_short_red_fescue", "short_red_fescue", "bushy_red_fescue",
-                "very_short_common_bent", "short_common_bent", "bushy_common_bent",
-                "very_short_grass", "bushy_grass", "medium_grass",
-                "short_royal_fern", "medium_royal_fern",
-            } <= blockstates)
 
     def test_installed_greeneries_has_affected_grass_and_separate_wet_reeds(self):
         jar_path = installed_greeneries_jar()

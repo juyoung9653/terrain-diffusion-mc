@@ -1,6 +1,9 @@
 package com.github.xandergos.terraindiffusionmc;
 
+import com.github.xandergos.terraindiffusionmc.compat.greeneries.GreeneriesNativeVegetationModifier;
+import com.github.xandergos.terraindiffusionmc.compat.lush.LushEcologyVegetationModifier;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
@@ -12,6 +15,7 @@ import net.neoforged.neoforge.event.server.ServerAboutToStartEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.event.server.ServerStoppedEvent;
 import net.neoforged.neoforge.registries.RegisterEvent;
+import net.neoforged.neoforge.registries.NeoForgeRegistries;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -29,6 +33,7 @@ public class TerrainDiffusionMc {
                                 && com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin
                                 .isAuditedVersion(mod.getVersion().toString())));
         modEventBus.addListener(this::onRegister);
+        modEventBus.addListener(this::onAddPacks);
         TerrainDiffusionLifecycle.bootstrap(FMLPaths.CONFIGDIR.get(), FMLPaths.GAMEDIR.get());
 
         NeoForge.EVENT_BUS.addListener(this::onServerStarting);
@@ -39,6 +44,18 @@ public class TerrainDiffusionMc {
     }
 
 
+    private void onAddPacks(net.neoforged.neoforge.event.AddPackFindersEvent event) {
+        // T&T replaces these vanilla tags after TD's ordinary mod resources load.
+        // Append through a separately ordered pack, so all tag consumers agree.
+        // Keep the pack discoverable after T&T is removed from an existing world.
+        event.addPackFinders(ResourceLocation.fromNamespaceAndPath(FML_MOD_ID, "compat/td_village_biomes"),
+                net.minecraft.server.packs.PackType.SERVER_DATA,
+                net.minecraft.network.chat.Component.literal("Terrain Diffusion village biome compatibility"),
+                net.minecraft.server.packs.repository.PackSource.BUILT_IN,
+                net.neoforged.fml.ModList.get().isLoaded("t_and_t"),
+                net.minecraft.server.packs.repository.Pack.Position.TOP);
+    }
+
     private void onRegister(RegisterEvent event) {
         event.register(Registries.BIOME_SOURCE, helper ->
                 TerrainDiffusionLifecycle.registerBiomeSourceCodecs(helper::register));
@@ -46,6 +63,13 @@ public class TerrainDiffusionMc {
                 TerrainDiffusionLifecycle.registerDensityFunctionCodecs(helper::register));
         event.register(Registries.FEATURE, helper ->
                 TerrainDiffusionLifecycle.registerEcologyFeatures(helper::register));
+        event.register(NeoForgeRegistries.Keys.BIOME_MODIFIER_SERIALIZERS, helper ->
+        {
+            helper.register(ResourceLocation.fromNamespaceAndPath(MOD_ID, "greeneries_native_vegetation"),
+                    GreeneriesNativeVegetationModifier.CODEC);
+            helper.register(ResourceLocation.fromNamespaceAndPath(MOD_ID, "lush_ecology_vegetation"),
+                    LushEcologyVegetationModifier.CODEC);
+        });
     }
 
     private void onServerStarting(ServerAboutToStartEvent event) {

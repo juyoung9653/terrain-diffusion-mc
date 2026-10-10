@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    "#minecraft:has_structure/village_plains",
+    "terrain-diffusion-mc:ecology/temperate_forest",
+    "terrain-diffusion-mc:ecology/temperate_woodland"
+  ]
+}

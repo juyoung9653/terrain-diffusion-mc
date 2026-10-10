@@ -1,0 +1,27 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "greeneries"
+    }
+  ],
+  "feature": "greeneries:patch_red_fescue",
+  "placement": [
+    {
+      "type": "minecraft:noise_threshold_count",
+      "above_noise": 3,
+      "below_noise": 1,
+      "noise_level": 0.2
+    },
+    {
+      "type": "minecraft:in_square"
+    },
+    {
+      "type": "minecraft:heightmap",
+      "heightmap": "MOTION_BLOCKING_NO_LEAVES"
+    },
+    {
+      "type": "minecraft:biome"
+    }
+  ]
+}

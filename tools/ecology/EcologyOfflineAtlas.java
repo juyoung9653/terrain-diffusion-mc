@@ -17,7 +17,7 @@ import java.util.Map;
  * run ONNX inference, or observe successful feature placements.
  */
 public final class EcologyOfflineAtlas {
-    private static final String[] MATERIALS = {"GRASS", "COARSE_DIRT", "SAND", "PODZOL"};
+    private static final String[] MATERIALS = {"GRASS", "COARSE_DIRT", "SAND", "PODZOL", "GRAVEL", "STONE"};
 
     private EcologyOfflineAtlas() {
     }
@@ -46,7 +46,7 @@ public final class EcologyOfflineAtlas {
         try (BufferedWriter cells = Files.newBufferedWriter(output.resolve("cells.csv"), StandardCharsets.UTF_8);
              BufferedWriter summary = Files.newBufferedWriter(output.resolve("summary.csv"), StandardCharsets.UTF_8)) {
             cells.write("profile,seed,scale,col,row,model_x,model_z,block_x,block_z,slope,biome_id,tree_cover,temperature,moisture,current_surface,legacy_td_surface,tree_probability\n");
-            summary.write("profile,seed,scale,biome_id,current_grass_fraction,current_coarse_dirt_fraction,current_sand_fraction,current_podzol_fraction,legacy_grass_fraction,legacy_coarse_dirt_fraction,legacy_sand_fraction,mean_tree_probability,min_tree_probability,max_tree_probability,current_neighbor_transition_rate,legacy_neighbor_transition_rate,current_patch_count,current_largest_patch_fraction,tree_above_mean_patch_count,tree_above_mean_largest_fraction\n");
+            summary.write("profile,seed,scale,biome_id,current_grass_fraction,current_coarse_dirt_fraction,current_sand_fraction,current_podzol_fraction,current_gravel_fraction,current_stone_fraction,legacy_grass_fraction,legacy_coarse_dirt_fraction,legacy_sand_fraction,mean_tree_probability,min_tree_probability,max_tree_probability,current_neighbor_transition_rate,legacy_neighbor_transition_rate,current_patch_count,current_largest_patch_fraction,tree_above_mean_patch_count,tree_above_mean_largest_fraction\n");
             for (String profile : EcologyClassifier.BIOMES) {
                 for (long seed : seeds) {
                     for (int scale : scales) sample(profile, seed, scale, size, modelStep, cells, summary);
@@ -101,12 +101,14 @@ public final class EcologyOfflineAtlas {
         PatchStats currentPatches = materialPatches(current);
         PatchStats treePatches = booleanPatches(tree, (float) mean);
         summary.write(String.format(Locale.ROOT,
-                "%s,%d,%d,%d,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%d,%.9f,%d,%.9f%n",
+                "%s,%d,%d,%d,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%.9f,%d,%.9f,%d,%.9f%n",
                 profile, seed, scale, biomeId,
                 fraction(currentCounts, FeatureEcologyMath.SurfaceMaterial.GRASS, total),
                 fraction(currentCounts, FeatureEcologyMath.SurfaceMaterial.COARSE_DIRT, total),
                 fraction(currentCounts, FeatureEcologyMath.SurfaceMaterial.SAND, total),
                 fraction(currentCounts, FeatureEcologyMath.SurfaceMaterial.PODZOL, total),
+                fraction(currentCounts, FeatureEcologyMath.SurfaceMaterial.GRAVEL, total),
+                fraction(currentCounts, FeatureEcologyMath.SurfaceMaterial.STONE, total),
                 fraction(legacyCounts, FeatureEcologyMath.SurfaceMaterial.GRASS, total),
                 fraction(legacyCounts, FeatureEcologyMath.SurfaceMaterial.COARSE_DIRT, total),
                 fraction(legacyCounts, FeatureEcologyMath.SurfaceMaterial.SAND, total),

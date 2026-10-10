@@ -246,6 +246,12 @@ public final class LocalTerrainProvider {
         }
     }
 
+    public static LocalTerrainProvider peekInstance() {
+        if (PREVIEW.get() != null) return null;
+        LocalTerrainProvider bound = BOUND_PROVIDER.get();
+        return bound != null ? bound : INSTANCE;
+    }
+
     public static LocalTerrainProvider getInstance() {
         PreviewSession preview = PREVIEW.get();
         if (preview != null) return preview.provider();
@@ -558,6 +564,14 @@ public final class LocalTerrainProvider {
      * Blocks the calling thread until the tile is ready (one tile can take 10–30+ seconds).
      * If the caller is the server or a chunk worker, the game will stall until this returns.
      */
+    /** Read-only weather/decoration lookup. Never starts inference or updates cache retention. */
+    public HeightmapData peekHeightmap(int i1, int j1, int i2, int j2) {
+        synchronized (cacheLock) {
+            CacheEntry cached = CACHE.get(new CacheKey(i1, j1, i2, j2, WorldScaleManager.getCurrentScale()));
+            return cached != null && cached.valid ? cached.data : null;
+        }
+    }
+
     public HeightmapData fetchHeightmap(int i1, int j1, int i2, int j2) {
         scope.requireOpen();
         int scale = WorldScaleManager.getCurrentScale();
@@ -944,6 +958,7 @@ public final class LocalTerrainProvider {
         int h = data.height, w = data.width, n = h * w;
         BroadEcologyClimate climate = pipeline.getBroadEcologyClimate(i0, j0, i0 + h, j0 + w, scale);
         float[] gradients = sobelGradient(paddedElevation, h + 2, w + 2, h, w);
+        float[] snowRetention = EcologyClassifier.snowRetention(paddedElevation, h, w, metersPerBlock);
         short[] biomes = new short[n], terrain = new short[n];
         float[] cover = new float[n], temperature = new float[n], moisture = new float[n], slopes = new float[n];
         for (int r = 0; r < h; r++) for (int c = 0; c < w; c++) {
@@ -958,7 +973,7 @@ public final class LocalTerrainProvider {
             moisture[index] = sample.moisture(); slopes[index] = sample.slope();
         }
         return new HeightmapData(data.heightmap, data.biomeIds, data.terralithBiomeIds,
-                new EcologyData(w, h, biomes, terrain, cover, temperature, moisture, slopes), w, h);
+                new EcologyData(w, h, biomes, terrain, cover, temperature, moisture, slopes, snowRetention), w, h);
     }
 
     private float[] addElevationNoise(float[] elevSmooth, float[] elevPadded,

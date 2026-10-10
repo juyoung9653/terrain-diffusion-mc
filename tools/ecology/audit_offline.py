@@ -26,12 +26,14 @@ PROFILES = (
     "boreal_forest", "boreal_woodland", "cold_grassland",
     "dry_woodland", "dry_grassland", "tropical_forest", "tropical_woodland", "desert",
     "snowy_boreal_forest", "temperate_rainforest", "montane_forest", "steppe",
+    "snowy_boreal_woodland", "snowy_tundra", "alpine_tundra", "glacial_highlands",
 )
 SEEDS = (91357, 0, -71421)
 SCALES = (2, 5)
 SURFACE_COLORS = {
     "GRASS": (105, 155, 72), "COARSE_DIRT": (121, 85, 58),
     "SAND": (221, 207, 135), "PODZOL": (91, 65, 43),
+    "GRAVEL": (130, 125, 123), "STONE": (114, 117, 121),
 }
 BIOME_COLORS = {
     name: color for name, color in zip(PROFILES, (
@@ -40,6 +42,7 @@ BIOME_COLORS = {
         (155, 132, 70), (194, 166, 87), (25, 127, 64),
         (71, 151, 72), (225, 201, 118),
         (178, 207, 205), (30, 100, 64), (78, 113, 91), (182, 181, 102),
+        (190, 214, 207), (212, 218, 205), (173, 185, 193), (223, 235, 243),
     ))
 }
 JAVA_SOURCES = (
@@ -176,7 +179,7 @@ def render_climate(output: Path) -> None:
     temperatures = sorted({float(row["temperature"]) for row in records})
     moistures = sorted({float(row["moisture"]) for row in records}, reverse=True)
     lookup = {(float(row["temperature"]), float(row["moisture"])): row["biome_label"] for row in records}
-    cell, left, top, legend_height = 20, 44, 42, 84
+    cell, left, top, legend_height = 20, 44, 42, 24 + 18 * ((len(PROFILES) + 3) // 4)
     image = Image.new("RGB", (max(600, left + len(temperatures) * cell), top + len(moistures) * cell + legend_height),
                       (240, 240, 240))
     draw = ImageDraw.Draw(image)
@@ -216,7 +219,7 @@ def audit(output: Path) -> dict:
     )
     checks["current_material_fractions_sum_to_one"] = all(
         abs(sum(float(row[f"current_{material}_fraction"]) for material in
-                ("grass", "coarse_dirt", "sand", "podzol")) - 1) < 1e-8 for row in summaries
+                ("grass", "coarse_dirt", "sand", "podzol", "gravel", "stone")) - 1) < 1e-8 for row in summaries
     )
     checks["legacy_material_fractions_sum_to_one"] = all(
         abs(sum(float(row[f"legacy_{material}_fraction"]) for material in

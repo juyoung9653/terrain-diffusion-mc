@@ -21,6 +21,7 @@ public final class LocalTerrainProviderCacheTest {
         System.setProperty("td.inference.legacySampling", "false");
         var provider = LocalTerrainProvider.getInstance();
         try {
+            cacheOnlyWeatherRead(provider);
             rechecksCompletedAfterOptimisticMiss(provider);
             concurrentMissesJoin(provider);
             invalidationDoesNotPublishOrRemoveReplacement(provider);
@@ -55,6 +56,30 @@ public final class LocalTerrainProviderCacheTest {
         }
         check(WorldPipeline.calls.get() - before == 12, "interleaved revisits must not rebuild reference planes");
         System.setProperty("td.inference.legacySampling", "false");
+    }
+
+    private static void cacheOnlyWeatherRead(LocalTerrainProvider provider) throws Exception {
+        LocalTerrainProvider.clearCache();
+        WorldScaleManager.scale = 1;
+        var before = provider.performanceSnapshot();
+        int calls = WorldPipeline.calls.get();
+        check(LocalTerrainProvider.peekInstance() == provider, "peek must reuse live provider");
+        check(provider.peekHeightmap(0, 0, 16, 16) == null, "cold cache read is absent");
+        check(WorldPipeline.calls.get() == calls && provider.performanceSnapshot().misses() == before.misses(),
+                "weather misses cannot start inference");
+        var data = provider.fetchHeightmap(0, 0, 16, 16);
+        before = provider.performanceSnapshot();
+        calls = WorldPipeline.calls.get();
+        check(provider.peekHeightmap(0, 0, 16, 16) == data, "peek returns exact cached data");
+        WorldScaleManager.scale = 2;
+        check(provider.peekHeightmap(0, 0, 16, 16) == null, "weather cache isolates scale");
+        WorldScaleManager.scale = 1;
+        check(provider.withBinding(LocalTerrainProvider::peekInstance) == provider, "peek honors binding");
+        LocalTerrainProvider.clearCache();
+        check(provider.peekHeightmap(0, 0, 16, 16) == null, "peek observes invalidation");
+        check(WorldPipeline.calls.get() == calls && provider.performanceSnapshot().misses() == before.misses(),
+                "weather reads and invalidation do not compute terrain");
+        System.out.println("PASS cache-only weather: miss/hit/scale/binding/clear without inference");
     }
 
     private static void rechecksCompletedAfterOptimisticMiss(LocalTerrainProvider provider) throws Exception {

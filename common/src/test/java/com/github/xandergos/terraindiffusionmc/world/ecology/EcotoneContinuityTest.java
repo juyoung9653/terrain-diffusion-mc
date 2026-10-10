@@ -29,6 +29,8 @@ public final class EcotoneContinuityTest {
             }
         }
         labels.add(EcologyClassifier.select(41, -53, 900, .1f, false, 10, 1000, 900).sample().biomeId());
+        labels.add(EcologyClassifier.select(41, -53, 2000, 1.1f, false, -5, 500, 2000).sample().biomeId());
+        labels.add(EcologyClassifier.select(41, -53, 2000, 1.1f, false, -10, 500, 2000).sample().biomeId());
         require(labels.size() == EcologyClassifier.BIOMES.size() && !labels.contains(0), "exercise every ecological biome");
         require(crossings >= 10 && maximumJump < .005f, "moisture label transitions must not switch plant populations");
         for (float moisture : new float[]{.2f, .55f, .8f, 1.5f}) {
@@ -50,12 +52,13 @@ public final class EcotoneContinuityTest {
         var cold = FeatureEcologyMath.groundcoverWeights(2, 1.2f, .8f, .1f);
         require(cold.bamboo() == 0 && cold.cactus() == 0 && cold.fern() > 0, "cold understory exclusions");
         float previousCover = 1;
-        for (int elevation = 900; elevation <= 1600; elevation++) {
-            var sample = EcologyClassifier.select(41, -53, elevation, .1f, false, -1, 700, elevation).sample();
+        for (int step = 0; step <= 2000; step++) {
+            float slope = step / 1000f;
+            var sample = EcologyClassifier.select(41, -53, 2000, slope, false, -5, 700, 2000).sample();
             require(sample.treeCover() <= previousCover && previousCover - sample.treeCover() < .5f,
                     "cold canopy must taper before alpine boundary");
             previousCover = sample.treeCover();
-            if (elevation == 1599) require(previousCover < .0001f, "no forest wall below alpine boundary");
+            if (sample.biomeId() == 18) require(previousCover == 0, "alpine label starts after canopy thins");
         }
         require(previousCover == 0, "alpine has no ecological canopy");
         require(EcologyClassifier.select(41, -53, 1700, .1f, false, 15, 1000, 1700).sample().treeCover() > .5f,

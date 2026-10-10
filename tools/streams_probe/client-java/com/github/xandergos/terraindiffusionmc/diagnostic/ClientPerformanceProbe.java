@@ -110,7 +110,7 @@ public final class ClientPerformanceProbe {
             if (serverChunkReady && level.hasChunk(targetX >> 4, targetZ >> 4)
                     && Math.abs(player.getX() - (targetX + 0.5)) < 2.0
                     && Math.abs(player.getZ() - (targetZ + 0.5)) < 2.0) {
-                receipt("step_ready", "\"step\":" + step + ",\"direction\":\"east\""
+                receipt("step_ready", "\"step\":" + step + ",\"direction\":\"" + (Boolean.getBoolean("td.clientPerformanceProbe.disconnectReplay") ? "north" : "east") + "\""
                         + ",\"x\":" + targetX + ",\"y\":220,\"z\":" + targetZ
                         + ",\"preloaded\":" + preloaded
                         + ",\"elapsed_ms\":" + elapsedMs(now, stepStartNanos)
@@ -128,8 +128,9 @@ public final class ClientPerformanceProbe {
 
     private static void beginStep(Minecraft mc, MinecraftServer server, LocalPlayer player, long now) {
         step++;
-        targetX = (int) Math.floor(originX) + step * STEP_BLOCKS;
-        targetZ = (int) Math.floor(originZ);
+        boolean disconnectReplay = Boolean.getBoolean("td.clientPerformanceProbe.disconnectReplay");
+        targetX = (int) Math.floor(originX) + (disconnectReplay ? 0 : step * STEP_BLOCKS);
+        targetZ = (int) Math.floor(originZ) - (disconnectReplay ? step * STEP_BLOCKS : 0);
         stepStartNanos = now;
         startTick = clientTicks;
         serverChunkReady = false;
@@ -151,7 +152,7 @@ public final class ClientPerformanceProbe {
             mc.execute(() -> {
                 if (stage != Stage.TELEPORTING) return;
                 preloaded = wasLoaded;
-                receipt("step_start", "\"step\":" + step + ",\"direction\":\"east\""
+                receipt("step_start", "\"step\":" + step + ",\"direction\":\"" + (Boolean.getBoolean("td.clientPerformanceProbe.disconnectReplay") ? "north" : "east") + "\""
                         + ",\"x\":" + x + ",\"y\":220,\"z\":" + z
                         + ",\"preloaded\":" + wasLoaded + ",\"server_tick\":" + tick);
                 stage = Stage.WAITING_CHUNK;
@@ -187,10 +188,16 @@ public final class ClientPerformanceProbe {
             if (configured.isBlank()) return false;
             File actual = mc.gameDirectory.getCanonicalFile();
             File expected = new File(configured).getCanonicalFile();
+            boolean disconnectReplay = Boolean.getBoolean("td.clientPerformanceProbe.disconnectReplay");
+            boolean fixture = disconnectReplay
+                    ? "full-client".equals(actual.getParentFile().getName())
+                        && "disconnect-repair".equals(actual.getParentFile().getParentFile().getName())
+                        && Files.isRegularFile(actual.toPath().resolve("saves/Disconnect Test/level.dat"))
+                    : "full-client-test".equals(actual.getParentFile().getName())
+                        && Files.isRegularFile(actual.toPath().resolve("saves/Benchmark World/level.dat"));
             return actual.equals(expected)
                     && "game".equals(actual.getName())
-                    && "full-client-test".equals(actual.getParentFile().getName())
-                    && Files.isRegularFile(actual.toPath().resolve("saves/Benchmark World/level.dat"))
+                    && fixture
                     && Files.isRegularFile(actual.toPath().resolveSibling("fixture.json"));
         } catch (Exception exception) {
             LOG.warn("[TD-CLIENT-PERF] fixture validation failed", exception);

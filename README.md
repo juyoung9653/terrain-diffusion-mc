@@ -256,7 +256,7 @@ river generation and flowing-water behavior. This repository supplies biome
 compatibility, a structure shield, and a versioned NeoForge integration that defers
 speculative watershed prefetch on TD terrain. Streams retains its native river
 routing, confluences, outlets, vegetation and water flow. New NeoForge TD worlds
-with audited Streams 2.13.1/2.13.5/2.13.8 use a persisted **natural river profile v7**:
+with audited Streams 2.13.1/2.13.5/2.13.8 use a persisted **natural river profile v10**:
 fine tributaries feed larger drainage-scaled rivers across a larger routing area,
 while short independent coastal systems and unprotected short source twigs are
 reduced. V4 additionally admits long tributaries with source spacing, preserves
@@ -269,6 +269,10 @@ V7 keeps background widening slow and concentrates gradual width growth after
 tributary joins, weighted by their native width contribution. Water-adjacent mud
 remains; distant native mud painting leaves the existing soil instead. This is
 a visual width heuristic, not a discharge simulation. Native currents remain enabled.
+V8 raises native source accumulation from a minimum of 6 to 24 before routing;
+other V7 configuration remains unchanged. This reduces weak channels without
+removing protected cross-plate connections. Existing V1–V7 worlds retain their
+saved profiles, including their original source density and cache namespaces.
 For narrow TD rivers, set `spillOverWater = false` in Streams' common config;
 keep `vanillaWaterFlow` and `flowVanillaRivers` enabled. This restores vanilla
 water spreading while retaining downstream currents. Already flooded saved
@@ -279,6 +283,35 @@ gentle grades before Streams caches the graph. Existing worlds retain their
 previous profile; installing the JAR does not rewrite saved rivers. See the
 [Streams integration setup and validation](tools/streams_probe/README.md).
 The Streams mod is installed separately.
+
+V9 keeps V8 routing, narrows dry sediment aprons according to planned channel
+width, and checks nearby lakes per column instead of vetoing an entire chunk.
+Bank eligibility uses planned water rather than whichever neighboring chunks have
+finished carving. With Streams 2.13.8 and Terrain Slabs 3.1.2, a guarded feature
+hook prevents automatic slabs from replacing river water or its containing banks.
+Generated waterlogged bottom slabs can look like dry, gridded riverbeds; inspect
+block states before diagnosing missing water. Older saved profiles and existing
+blocks are preserved; installing this JAR does not repair already generated strips.
+Low lake rims receive a bounded, world-coordinate taper outside native wetting:
+at most two soil blocks are cut, without lowering the containing bank below local
+planned water. Run this lake-only finishing even when the native carver returns
+false: a dry chunk can own the shore beside a lake in its neighbor. Skipping that
+case reproduced a straight cut at a 16-block boundary. Only generated dry bottom
+slabs may be cleared as cover; structure protection and higher cliffs are retained.
+
+V10 retains V9 river routing and water levels. Streams 2.13.8's direct grass
+recap and TD containment caps use the original land climate, not a river biome
+overlay. Dry river-biome fringe cells and arid gravel shores also receive the
+appropriate mineral surface. A cave can remove support beneath the original soil:
+skipping falling-sand placement then leaves a green desert roof. V10 stabilizes
+only the lowest existing soil layer with rock, leaving the cavity untouched.
+Check generation-stage write traces for these failures; the final biome name
+alone cannot identify which mod last wrote a surface. Existing V9 worlds stay V9.
+On audited Terrain Slabs 3.1.2, native generated dry grass/dirt slabs on arid
+mineral surfaces inherit sand or gravel. Unsupported caps use non-falling rock
+slabs, preserving their half and fluid properties; manual, wet and cave slabs are
+excluded. Validate final block states as well as bank code: native slab decoration
+can change a surface height after its material changes.
 
 New TD Overworlds on Streams 2.13.8 select its native exact host-height sampler
 without running its two generic terrain calibration passes. Those passes can
@@ -346,13 +379,16 @@ enabled. These generation changes require fresh chunks; use a new same-seed
 world for comparison rather than mixing old and new generation.
 
 New compatibility-preset worlds enable `natural_biomes: true`. Their land uses
-15 ecological biomes controlled by a continuous TD climate field, with a filter
+19 ecological biomes controlled by a continuous TD climate field, with a filter
 radius of 512 model pixels (1024 game blocks at scale two, rounded up to coarse
-cells). All fifteen ecological biomes
+cells). All nineteen ecological biomes
 share grass/foliage tints and the ordered ecological vegetation list. Tree density, compatible species
 weights and broad soil patches depend on continuous climate controls, not biome
-labels. Biome IDs are never randomly dithered at a boundary. Terrain heights and
-native Streams generation stay in their existing generation paths.
+labels. Saved biome IDs, F3 biome names, feature ownership and biome locate results
+remain exact. The final TD soil pass feathers surface materials by up to two blocks
+across boundaries between natural TD land ecology biomes; it never borrows aquatic,
+cave or non-TD climate, and keeps the target column's elevation and slope. Terrain
+heights and native Streams generation stay in their existing generation paths.
 
 Ordinary soil-covered hills retain forest potential: the slope multiplier now
 tapers from rise/run 0.35 to 1.80 (about 19 to 61 degrees), retaining more than
@@ -365,8 +401,10 @@ azalea, moss, mushrooms, dry shrubs, cactus and bamboo have overlapping climate
 weights and spatial density patches. Placement respects dry air, substrate and
 plant survival; grass and ferns cannot use sand even if another mod relaxes
 survival. Coast, river and alpine terrain biomes remain outside this pass.
-Cold upland tree cover tapers between 900 and 1600 model-elevation metres before
-the alpine selector takes over; these are not Minecraft block Y coordinates.
+Cold tree cover, ground materials and snow follow the same regional cold state.
+Altitude only supplies a bounded local temperature correction; it no longer
+adds an independent snowline. Moisture separates snowy forest, woodland and
+tundra, while terrain relief distinguishes exposed alpine ground.
 Temperate woodland gains sparse coarse-dirt floor patches, and conifer podzol
 uses the finer soil field. Grass/leaf tint remains a shared palette rather than
 a client-synchronized climate gradient. Other mods can still inject decorations
@@ -420,20 +458,37 @@ biomes, so the new identities appear in newly generated terrain.
 
 V7 wide river banks no longer add a dry block above the neighboring water for
 containment. Protected dry soil on the outer slope can be lowered by at most two
-blocks, keeping at least one block above the highest nearby planned water. The
+blocks, retaining solid soil at the highest nearby planned water Y. Soil over
+natural overworld stone is valid support; air, water and non-soil excavation are
+still rejected. Steeper reaches retain additional bank relief. The
 apron and material transition grow with river width and use coherent variation;
 source, junction, structure and non-soil guards remain. Saved bank blocks are not
 rewritten. Earlier river profiles retain their previous bank geometry.
 
-Ecology groundcover can select optional Greeneries grass/fern species within its
-existing placement density; absent species fall back to vanilla plants. Native
-Greeneries grass/fern patches are also attached through its own biome tags to all
-15 ecology biomes, retaining the mod's counts, spread and weighted providers.
-Only those additional native attempts are accepted at 100% on grassy substrates,
-50% on ordinary soil and 10% on barren soil. These are attempt probabilities, not
+With Greeneries on NeoForge, the 15 ecology biomes use their original source
+biomes' non-tree vegetation, including flowers, and Greeneries' native providers.
+The former TD grass/fern substitution pool and simultaneous climate groundcover
+pass are removed. Base vegetation runs in BEFORE_EVERYTHING, before the mod's
+additional ADD-phase patches; standard climate tags let Greeneries select its
+own common/rare species. Trees remain TD-controlled. Without Greeneries, TD's
+climate groundcover remains active.
+
+The seven Greeneries grass/fern placements and nine restored vanilla groundcover
+placements use `MOTION_BLOCKING_NO_LEAVES` to reach soil below a canopy. Native
+providers, patch tries, counts, rarity and biome filters are unchanged. The seven
+Greeneries resource overrides apply in every biome using those features; the
+restored vanilla copies and soil thinning remain TD-specific.
+
+Native grass/fern attempts, including five overridden vanilla worldgen providers,
+are accepted at 100% on grassy substrates, 50% on ordinary soil and 10% on barren
+soil. Bonemeal and original vanilla flower providers are not thinned. These are attempt probabilities, not
 percentages of the ground guaranteed to contain grass; vanilla survival and patch
 placement still apply. Sand, red sand, their slabs and waterlogged supports are
-excluded. Base TD groundcover is not thinned by these additional-patch ratios.
+excluded. Native configured providers remain registry references. To avoid feature
+order cycles, placed-feature definitions are copied from vanilla 1.21.1 under
+`terrain-diffusion-mc:greeneries_native/`; packs replacing those placement definitions
+must update the copies too. Regenerate with `generate_biomes.py --vanilla <resources.jar>
+--neoforge-output neoforge/src/main/resources`.
 
 Substrate categories are datapack-editable block tags under `terrain-diffusion-mc`:
 `greeneries_grass_soils`, `greeneries_ordinary_soils`, and `greeneries_barren_soils`.
@@ -448,11 +503,34 @@ before the normal survival check; slabs are not globally added to `minecraft:dir
 Tags alone would not bypass TD's former full-block-only support check. The native
 slab mod remains responsible for partial-block attachment and neighbor updates.
 
-With Snow Under Trees
-1.5.1, the NeoForge adapter recognizes snow-capped leaves and scans at most 64
-blocks for the underlying floor. The mod's temperature, light and survival checks
-and Snow! Real Magic! conversion still apply. This is a world-generation fix,
-not a retrofit of snow in existing chunks.
+Natural TD worlds share one regional cold state across biome identity, canopy,
+soil, understory, and snow. The existing regional temperature receives a smooth
+local lapse correction bounded to two degrees; absolute altitude cannot independently
+create a snowy island. Five cold identities cover snowy boreal forest, snowy boreal
+woodland, snowy tundra, alpine tundra, and glacial highlands. Moisture separates
+forest, woodland and tundra; cold plus terrain relief produces treeless alpine
+ground, with glacial identity reserved for severe cold. Existing numeric IDs 1–15
+remain stable and the four additional identities use 16–19.
+
+Cold vegetation and substrate taper before the core snowfield. Snow coverage
+changes through the central cold transition with two-block detail, sharing each
+column decision between crown and floor. Aspect, slope and concavity from the
+existing smooth-height halo only perturb this transition; they do not create
+another broad noise mask. Cold terrain uses exposed gravel/stone and sparse low
+vegetation; Greeneries and Lush retain their native warm-climate behavior.
+Cold surface boundaries retain their own column climate instead of borrowing
+a warm soil donor. Floor scans pass through branch tiers (at most 96 blocks).
+
+Vanilla snow/freezing, Snow Under Trees 1.5.1, Simple Snowy Fix 2.2.1 and Snow!
+Real Magic! 12.2.3 weather use the shared eligibility while retaining their light,
+fluid and support guards. Weather uses a cache-only lookup: a miss preserves
+existing snow/ice eligibility and never starts terrain inference or paints an
+entire biome from its registry temperature. Generation still places one snow
+layer and preserves SRM plant conversion. Existing chunks are not regenerated;
+compare newly generated terrain for biome, canopy and soil changes.
+Generation primes the current chunk's reference climate before the freezing pass,
+including experimental partial sampling; runtime weather stays cache-only.
+Client rain/snow particles still use Minecraft's standard biome precipitation type.
 
 `/locate biome` retains Minecraft's candidate order, predicate and cave-height
 checks while reusing the current terrain tile within one search. Disable this
@@ -472,19 +550,34 @@ For ungenerated terrain, permission-level 2 users can use a separate bounded sea
 ```text
 /td-locate biome terrain-diffusion-mc:ecology/temperate_forest 8192
 /td-locate structure minecraft:ruined_portal 8192
+/td-locate biome #minecraft:is_forest 32768 300
+/td-locate structure #minecraft:village 65536 600
 /td-locate status
 /td-locate cancel
 ```
 
-The optional radius defaults to 8192 blocks (16–32768), measured on each horizontal
-axis. Coarse climate ranks candidates first; only exact biome-source quart samples
+The optional radius defaults to 32768 blocks (16–131072), measured on each horizontal
+axis. The following optional time is seconds (1–1800, default 300). IDs and `#tags`
+have registry completion; a tag accepts any member and reports the concrete matched
+ID. Missing/empty tags are rejected. Nearby patches and progressively larger rings
+retain local coverage as radius grows. Each batch of at most nine climate patches
+is followed by detailed verification, so distant coarse work does not delay all
+nearby verification. Only exact biome-source quart samples
 or valid generated `STRUCTURE_STARTS` are reported. The result is not necessarily
 the nearest. Biome samples can differ from later saved-chunk/F3 boundaries after
-river processing. Individual registry IDs have completion; tags are not supported.
-Concentric-ring and custom structure placements require vanilla `/locate`.
+river processing. Concentric-ring and custom structure placements require vanilla
+`/locate`; mixed tags explicitly report that these placements are skipped.
 
-One search runs per server, with a 60-second admission/verification budget, up to
-25 climate patches, 64 detailed biome tiles or 32 structure-start requests.
+One search runs per server, with the chosen admission/verification time budget,
+up to 81 climate patches, 256 detailed biome tiles or 128 structure-start requests.
+Detailed work is shared across remaining batches so nearby misses do not consume
+the entire work budget before outer rings are reached. Time can still expire first.
+Structure searches enumerate native placement regions and share that calculation
+between variants such as the five vanilla villages. Planning is limited to 32
+regions per server task and 8192 per search, distributed across remaining patches
+and placement groups. Additional angular samples fill gaps in the outer rings
+within the existing 81-patch limit; this is still a sampled search, not an exhaustive
+scan of every chunk in the radius. Range and time limits are unchanged.
 An exhausted search does not prove absence. Already running native inference or
 chunk requests must drain safely and can exceed that time; cancellation suppresses
 results immediately and prevents another search until the worker drains. Structure
@@ -510,10 +603,232 @@ guard, not a cleanup of plants already stored in chunks. A saved-world audit
 found both vanilla and Greeneries plants on sand; Greeneries' replacement
 feature definitions alone do not establish which mod allowed their survival.
 
+Towns and Towers 1.13.11 replaces all five vanilla village biome tags, which can
+remove TD entries loaded earlier. NeoForge includes an additive village compatibility
+pack at higher priority to restore the existing TD mappings, including legacy
+`taiga_sparse`. It is required while T&T is installed and remains discoverable if
+T&T is later removed. A deliberately higher-priority datapack can still replace
+these tags. This does not change village spacing, weights, terrain checks, or
+already generated structure starts. Check effective `Structure.biomes()` as well
+as tag members when validating compatibility; a populated NeoForge modified-settings
+object alone did not affect that getter in the tested mod stack.
+
+In the earlier Structurify audit, version 2.0.42 with an empty per-structure `structures` list did not apply its
+flatness/overlap filters to villages. Its global placement multiplier still applies:
+1.4 turns a 34-chunk spacing into 47 chunks. This makes villages sparser but does
+not explain missing TD entries in the allowed-biome tags.
+
+### TD structure placement
+
+TD owns structure reservations in TD-generated worlds. Independent structure starts
+use horizontal bounding envelopes separated by at least 100 blocks, including
+structures from the same namespace or structure set. A village's component houses
+remain one assembly; they do not each require a 100-block gap. Pairwise rules use
+the larger requested gap. Seed-based reservation priority is deterministic for fixed
+candidate descriptors. Audited generators first assemble and validate a candidate without
+loading neighboring chunks. Candidates that fail biome, density, footprint or terrain
+checks do not reserve empty space. Arbitration uses the surviving assembly's actual
+bounds, with a separate check that terrain influence areas do not overlap. Unaudited
+custom generators retain conservative reservations.
+An atomic final check also reserves each accepted start for its generator state,
+including its terrain influence, until the server closes. This protects the gap even
+if a mod's native assembly changes after a preflight cache eviction or concurrent
+generation. Native layouts can differ between fresh runs; identical village interiors
+or winner sets are not guaranteed when native descriptors differ. A failure after final
+acceptance can leave a conservative in-memory reservation until restart.
+Confirmed viable surface-step or explicitly ground-projected structures take priority
+over underground candidates, so frequent dungeon grids do not consume scarce village
+sites. Within each group, seed-based priority remains deterministic. This priority
+does not opt a structure into terrain shaping or relax any distance rule.
+
+`config/terrain-diffusion-structures.json` supplies defaults, also editable through
+NeoForge's Mods > Terrain Diffusion > Config screen. Resolution is per field:
+global, then namespace, then exact structure ID. Empty UI fields inherit. Example:
+
+```json
+{
+  "version": 1,
+  "enabled": true,
+  "global": { "minGapBlocks": 100 },
+  "namespaces": { "minecraft": { "minGapBlocks": 140 } },
+  "structures": { "minecraft:village_plains": { "minGapBlocks": 180 } }
+}
+```
+
+Namespaces are registry IDs, not display names: Epic Villages replaces Minecraft
+templates, so its vanilla villages are configured under `minecraft:village_*`.
+
+The **Village distribution** sub-screen edits `villageDistribution` in the same
+file: `enabled`, `targetMeanNearestNeighborBlocks` (default 500),
+`basicSharePercent` (default 70), and improved/legacy placement (`algorithmVersion`
+2/1; new configurations default to 2). This opt-in
+mode combines living vanilla-jigsaw villages into one seed-based candidate grid;
+native locate uses that same grid. Original vanilla templates are isolated under
+`terrain-diffusion-mc:basic_village_*` so Epic's replacement templates remain in
+the distinctive group. Originals plus MMV form the basic group; Epic, T&T and
+other living villages form the distinctive group. Alias biome tags additionally
+admit matching TD woodlands without changing Epic's native biome tags.
+The distance setting targets nearest-neighbor bounding-box centers, not a hard
+500-block minimum. Terrain, biome and gap rejection still apply; actual accepted
+spacing and group proportions must be measured, not inferred from grid spacing
+or selection weights. Village settings refresh on world reload; aliases never
+add a second native population when this mode is disabled.
+
+Version 2 searches nine seeded candidate origins per common cell instead of four.
+It retains one selected village per cell and all terrain, footprint and gap checks;
+the extra origins look for viable ground rather than lowering placement standards.
+Explicit version-1 configurations retain their original grid. Streams Reflowing's
+`StructurePlatesPending` signal must escape speculative preflight: its chunk scheduler
+waits for river data and retries. Treating that signal as an absent structure caches
+a false rejection and can empty whole areas on a cold world. The optional
+`run_preflight_tests.py <Streams.jar>` regression checks the real signal and cache retry.
+
+Terrain rules are pinned at first TD world load in
+`world/data/td-structure-placement.json`. Gap and density (`minGapBlocks`,
+`spacingMultiplier`) changes from the GUI/default file apply on the next world load
+to future generation, including existing worlds. Other rules, including enabled,
+reservation radius and earthwork limits, remain pinned so partially generated starts
+keep reproducible terrain. Multiplayer uses the server's defaults. Do not edit the
+terrain pin in a populated world. Increasing a gap does not move previously placed
+structures farther apart. A mean measured from accepted village centers does not
+measure exploration coverage: clustered villages can satisfy it while leaving
+large empty areas. Density audits must also report generated land area, viable
+candidate cells and distances from land samples to villages; partial structure
+starts must not be counted as fully generated villages.
+At startup TD reads saved structure bounds from region files into a spatial index,
+including starts from removed mods, without loading or changing those chunks. New
+reservations also avoid these saved structures. Existing overlaps and floating
+buildings are not moved or repaired. A corrupt/unreadable region stops indexing
+rather than silently dropping its distance protection; large worlds can take longer
+to open because saved chunk NBT must be scanned.
+
+Defaults allow a maximum 112-block radius around the start chunk center, try up to nine
+local jigsaw origins within that chunk (maximum offset seven blocks), and permit
+at most two blocks of cutting and three blocks of filling. Foundations blend over
+12 blocks; affected terrain and village paths are checked for at most one block of
+rise over two horizontal blocks, with integer stair steps. Unsuitable candidates
+are rejected before placement. `reservationRadiusBlocks` can be increased for large
+native structures (up to 512); surface shaping must remain inside the existing
+eight-chunk generation dependency. For audited candidates the radius limits accepted
+extent and bounds the neighbor search; small buildings no longer occupy that entire
+radius. Conservative custom candidates still reserve the full envelope.
+New accepted starts store terrain policy 3: grade intervals use the same integer
+1:2 rounding as the final slope check, avoiding false rejection of adjacent
+foundations one block apart in height. Saved policies 1/2 retain their original
+plans. Cut/fill, support, and one-/two-column slope checks remain mandatory.
+As in policy 2, audited template contact columns
+replace rectangular roof/air footprints, and terrace contours have rounded corners
+with gentle world-coordinate variation. Every edited contour remains inside the
+blend radius with a two-column grade-validation halo. Saved policy-one starts
+retain their original rectangular terrain plan when remaining chunks generate.
+Native moss rules are audited by their complete codec semantics: replacing only
+cobblestone with mossy cobblestone preserves a template's contact mask. Merely
+trusting a processor-list resource ID would allow datapack overrides to bypass
+geometry checks. The original 4x3x4 well-bottom piece, when directly below and fully
+covered by a rigid village parent, is an underground shaft rather than another
+surface foundation. It retains voxel collision and external reservation checks.
+Both refinements apply only to new policy-two terrain plans; processed policy-one
+foundations keep their conservative boxes. `run_moss_tests.py` checks original
+vanilla rules and rejects AIR/input/NBT mutations.
+Exact native jigsaw candidates can try deterministic alternate layouts within the
+same nine-attempt budget. The first attempt keeps the native layout seed; later
+attempts derive only the assembly RNG, leaving terrain and the shared population
+grid on the original world seed. Custom structure implementations retain native
+seed semantics.
+`spacingMultiplier` thins candidates approximately by its square; it does not
+reproduce Structurify's placement-grid spacing changes. The default `1.0` adds no
+thinning; `1.4` retains about 51% of candidates before other checks. Do not migrate a
+Structurify spacing multiplier blindly when normal exploration density is desired.
+
+Distance arbitration covers registered structures using standard random-spread or
+concentric-ring placement, plus the inspected Cataclysm random-spread and YUNG
+desert temple, jungle temple and stronghold subclasses. Raw reservations use their
+seed-based grid origins; native biome, ring and exclusion checks still gate actual
+generation. Preflight is limited to audited vanilla structure implementations and
+vanilla placement predicates whose exclusion targets are also audited. The inspected
+YUNG API 5.1.9 jigsaw assembler and Better Mineshafts 5.1.1 assembler are admitted only
+when their audited class resources match the expected hashes; updates fall back to
+conservative handling. Strongholds and other custom generators retain conservative
+handling; a vanilla jigsaw structure can still use another mod's templates.
+Do not invoke YUNG's biome-search predicates while
+enumerating competing reservations: that would cause distant terrain generation
+during arbitration.
+Unknown placement implementations are rejected. AUTO
+terrain shaping requires explicit ground projection, zero height offset, and
+standard jigsaw pieces; underground, aquatic, airborne and ambiguous custom
+structures retain their native terrain behavior. `surfaceMode` can be `AUTO`,
+`PRESERVE`, or explicitly `SURFACE` for a known suitable structure. Custom features
+that write buildings directly bypass the structure pipeline and need their own
+adapter. Exact rigid legacy templates without custom processors use occupied-block
+collision checks across all palettes, so overlapping empty template space does not
+cancel a whole village. Unknown pieces and processors retain conservative bounding
+checks. Different-height overlapping foundations still fail the terrain check;
+native underground room/corridor intersections are preserved. Verified entity-only
+legacy templates are not treated as buildings or foundations. This is not a universal
+repair for every mod's custom generator.
+
+Run `python tools/structure_placement/run_tests.py` and
+`python tools/structure_placement/test_config.py` for geometry and config checks.
+The opt-in `tools/structure_placement/probe.init.gradle` fixture additionally checks
+actual STARTS, saved policy markers, pairwise distances, support after CARVERS,
+and physical support after FEATURES and restart.
+Keep diagnostic source out of production builds. A probe passes only when its JSON
+reports success with actual adapted structures; Gradle success alone is insufficient.
+Ensure fixture `generate_features` is enabled and supply cached model assets before
+launch. Visual acceptance and custom-mod behavior still require an in-game check.
+Terrain plans deliberately use an unmodifiable defensive `HashMap` copy: packed
+X/Z `Long` keys collide heavily (`x ^ z`). JDK 21 `Map.copyOf` uses linear probing
+and was observed spending most worldgen time in `MapN.probe` during neighborhood
+grade checks. Preserve treeified hash bins; descriptor fingerprints sort keys
+independently. A packed 128×128-grid lookup check reproduced the slowdown.
+
+The separate `tools/structure_placement/density.init.gradle` census enumerates every
+native candidate owner in a fixed area, not just TD winners, and records actual starts
+and pairwise gap checks in `world/density-audit.json`. Use fresh worlds with identical
+seed, mods, area and configuration for a before/after comparison. Ensure the saved
+world has structure generation enabled; changing server.properties alone does not
+change an existing world's generation options. Optional `verify-support.txt` checks
+an actual adapted assembly through CARVERS and FEATURES; `reverse-order.txt` reverses
+the census order for deterministic-generation comparisons.
+The server's bare TD preset defaults to legacy biomes; it does not reproduce a
+client world created with the natural-biome compatibility preset. Match the saved
+`biome_source` (`natural_biomes`, `terralith`), dimension type and saved scale before
+testing density or shoreline materials. The census records these resolved flags in
+`fixture`; `require-ecology-scale1.txt` fails early on the wrong natural-biome setup.
+A legacy-biome census previously produced grove outposts where the play world used
+ecology steppe, so its village ratio must not be used to calibrate that play world.
+`repeat-native.txt` containing `structure_id,chunkX,chunkZ` compares native assembly
+NBT and nearby terrain heights twice before and twice after the census in one server
+lifetime. Cross-process layout differences alone do not identify a threading bug.
+
+Lithostitched redirects vanilla jigsaw assembly, so alternate origins are captured
+in `JigsawStructure.findGenerationPoint` before that redirect; the vanilla fallback
+must not apply the offset twice. Shape terrain before surface painting, not after:
+post-paint material filters can skip terracotta and leave accepted foundations
+unsupported. Cave carving runs after SURFACE and can remove even unchanged building
+ground, so CARVERS composes a bounded protection mask for verified support and
+sampled slope endpoints, retaining other masks. SURFACE/CARVERS may inspect their
+existing radius-eight STARTS dependency, but must never request neighboring
+REFERENCES or recursively generate neighboring starts. Check actual blocks after
+CARVERS, not only SURFACE heights; after FEATURES, buildings themselves change
+heightmaps, so verify foundation blocks instead of comparing roofs to ground heights.
+
 A fresh-world follow-up identified Lush 2.2's `lush:lush_vegetation` as a
-separate direct-write route: it boosts unknown ecology IDs with grass/ferns and
-spills across chunks. This duplicate vegetation feature is now removed only from
-the fifteen ecology biomes; Lush's rocks, mushrooms and other biomes are retained.
+separate direct-write route. Lush treats unknown ecology IDs as boosted
+grass/fern groundcover and does not use `SimpleBlockFeature`, so the ordinary
+Greeneries placement hook cannot govern it. On installations with the audited
+Lush `2.2` and Greeneries, TD restores that feature only in its nineteen natural
+ecology biomes through a TD-owned placed-feature holder. The clone retains
+Lush's configured feature and original count-40 placement chain; the distinct
+holder prevents cross-biome feature-order cycles. Each attempted plant then uses
+the actual target biome and shared soil categories, with a Lush-specific ordinary-soil rate:
+100% on grassy soil, 30% on ordinary soil, 10% on barren soil, and 0% on sand or
+fluid-bearing support. The shared soil tags include the supported Immersive
+Weathering and Terrain Slabs variants, and one decision covers both halves of a
+tall plant. Other Lush versions fail closed. Installations without Greeneries
+retain the previous TD suppression, while Lush's rocks, mushrooms, non-TD
+biomes, providers and placement counts remain unchanged. This scoped adapter
+does not assert vegetation-density parity between different biome types.
 `_WG` heightmaps stop updating after CARVERS, so neighbor decoration can exist
 above the ground when the later ecology surface pass converts it to sand. That
 conversion explicitly clears only grass/ferns and a matching double-plant upper
@@ -527,14 +842,19 @@ use fixed block distances so large terrain scales do not inflate individual clum
 
 For Nature X Depth's elevated-river cattail rendering, enable the resource-pack
 overlay `compat/nature-x-depth/terrain-diffusion-nature-x-depth` above Nature X
-Depth, with Continuity enabled. All five general cattail rules are paired with
-the base mask at Y=62..319 and restricted to explicit freshwater biome IDs. The
-surface-algae rule receives the same freshwater restriction. Ocean seagrass keeps
-the source pack's ordinary seagrass appearance. The source pack supplies the transparent tile;
-the overlay is not standalone. This changes rendering, not block identity:
-the block remains `minecraft:seagrass`. It retains the source pack's absolute
-height heuristic, which does not distinguish shallow water from deep highland
-lakes. `NATURE_X_PACK` can point to the installed ZIP when running
+Depth, with NeoContinuity `3.0.0+0.0.1+1.21.1.neoforge` enabled. All five cattail
+rules and their base masks share a local water-depth condition and explicit
+freshwater biome restrictions. The root must be 0.5 or 1 block below the nominal
+source-water surface, with no fluid cell above. Stock Nature X seagrass represents
+the 1-block case; 0.5 requires a plant model on a waterlogged bottom slab in the
+same cell. A slab below a seagrass cell is not treated as half depth. Source water
+uses its nominal cell top, not the renderer's 8/9-block depression. Deep, flowing,
+marine and unsupported plants retain ordinary seagrass. The optional client bridge
+fails closed on other Continuity versions, leaving original seagrass visible.
+There are no column scans or extra chunk loads. The separate surface-algae rule
+retains its existing freshwater restriction. The source pack supplies the transparent
+tile; the overlay is not standalone. This changes rendering, not block identity:
+the block remains `minecraft:seagrass`. `NATURE_X_PACK` can point to the installed ZIP when running
 `tools/ecology/test_cattail_compat.py` to verify those source resources.
 
 Use `python -B tools/ecology/audit_offline.py` to compile the production ecology
@@ -552,7 +872,7 @@ reads 256 chunks, skips vegetation, and writes `build/ecology-audit/saved`; it
 checks source-region hashes after reading and refuses output inside the save.
 Its maps show existing blocks, not the outcome of regenerating that world.
 
-Ocean, gravel coast, steep rock and cold alpine terrain retain selected Terralith
+Ocean, gravel coast and steep rock retain selected Terralith
 biomes; underground biomes retain the depth-based Terralith selector. The legacy
 mode still represents all 95 Terralith IDs. The natural land palette intentionally
 omits fantasy biomes. Terralith density functions are not applied.
@@ -590,7 +910,13 @@ exposed low shores select sand or gravel, and steep shores select stone. The
 heuristic, not proof of ocean connectivity; sufficiently large lakes can have
 beaches too. `ShoreClassifier` changes biome/material selection only, leaving TD
 heights and native Streams channels intact. Shore widths vary with exposure,
-moisture and a coherent 768-block substrate field. Existing generated chunks
+moisture and a coherent 768-block substrate field. Gravel now requires coarse regional substrate together
+with sufficient exposure and relief, rather than appearing on every rolling coast
+or half of cool flat coasts. This is a terrain-based approximation, not a calibrated
+global gravel percentage: the widely cited global sandy-shore survey combines sand
+and gravel in one class. `tools/ecology/ShoreFrequencyAudit.java` measures controlled
+input scenarios; the optional density probe `-PtdShoreAudit=true` records paired
+old/new decisions on actual terrain inputs. Existing generated chunks
 retain their old materials; compare fresh chunks or a new test world after an
 update. The compatibility pack must be updated along with the mod JAR.
 On the audited Streams 2.13.1 renderer, natural-world point bars use a coherent
@@ -671,3 +997,191 @@ use in-game biome information and `/locate biome terralith:<name>` to inspect th
 actual biome. Searches can be expensive because they request diffusion terrain.
 Visual acceptance should cover coasts, dry/wet transitions, snowy mountains and
 underground vegetation, at the intended world scale.
+
+## Repeatable local validation
+
+Run only the relevant independent checks, with one launcher owning their output
+directories. For example:
+
+```text
+python tools/structure_placement/run_fast_tests.py --list
+python tools/structure_placement/run_fast_tests.py --jobs 4 --only placement village component config
+python tools/structure_placement/run_fast_tests.py --only preflight --streams-jar "path/to/Streams.jar"
+```
+
+The audited task list also includes `basic-villages` and `moss`. Each check runs in
+its existing isolated output directory; logs and a new ordered `report.json` are
+written under `build/structure-placement/fast-tests`. Default concurrency is four
+(or fewer available processors), bounded at eight. Missing optional dependencies
+are explicitly skipped in the default selection; an explicitly requested missing
+check fails. Any executed check failure makes the launcher fail. `--jobs 1` provides
+the same checks for a sequential baseline. The launcher lock does not cover manual
+invocations of the underlying scripts.
+
+Use these starting subsets with `--only`; inspect changed callers before omitting
+other checks. A shared geometry/config change needs the union of affected rows.
+
+| Changed area | Starting checks |
+| --- | --- |
+| Village distribution and group selection | `village config` |
+| Structure spacing, foundations or component geometry | `placement component config` |
+| Basic-village template/pool generation | `basic-villages component village` |
+| Moss processor geometry | `moss` |
+| Streams structure preflight | `preflight` with `--streams-jar` |
+
+These are focused pure checks, not complete coverage of game integration. Changes
+to generator/mixin ordering or native placement still need the relevant server
+probe. River/ecology changes use their existing focused harnesses; they are not
+covered by this structure-only task list.
+
+Basic-village asset generation streams the pinned source JAR checksum, copies
+fixed-width numeric NBT lists in bulk, and writes generated files only when their
+bytes change. `--check` remains read-only and all assertions run on every test
+invocation. Preserve exact template bytes (apart from intended pool references)
+when optimizing this path; malformed numeric lists must still fail validation.
+Profile repeated parsing and avoidable writes before adding a persistent cache
+whose invalidation would need to cover sources, tools and dependencies.
+
+Prepared density fixtures must be real directories directly under
+`build/structure-density/<name>`, containing `server.properties`, `eula.txt`, the
+required mods/config/models, and matching world metadata. No player-save paths,
+symlinks or junctions are accepted. Use the fixture requirements in the structure
+placement section; the runner does not create worlds or infer missing settings.
+
+Prepare a fresh-chunk copy from an existing **workspace diagnostic fixture**:
+
+```text
+python tools/structure_placement/prepare_fixture.py --source build/<source-fixture> --target build/structure-density/trial --center 108,20 --radius 40
+```
+
+This copies mods, config, models, known probe controls, world metadata and any
+existing river cache. It requires `world/level.dat` and canonical
+`level-name=world`; it never copies generated chunks or the saved structure index.
+Center/radius inherit the source controls, falling back to the probe defaults
+of `0,0` and `96`. Optional order/support controls retain their source settings.
+`input-manifest.json` records SHA-256 for every effective input file and whether
+the river cache was copied. Both source and destination bytes are hashed: an
+unchanged destination keeps its timestamp, and changed files use verified atomic
+copies. No hardlinks are created. Repeating preparation is supported only before
+the target is run; generated files, removed source inputs leaving stale target
+files, links and overlapping paths cause refusal rather than deletion. Use a new
+target name for another fresh-world experiment. A forced termination can leave a
+temporary file that must be inspected before retrying; normal copy failures clean
+up their temporary file. Hashing still reads input bytes, so reuse reduces writes,
+not all preparation cost.
+
+```text
+python tools/structure_placement/run_suite.py --gradle-user-home .gradle --prefetch 8 build/structure-density/before build/structure-density/after
+python tools/structure_placement/run_suite.py --gradle-user-home .gradle --shore-audit --verify-support build/structure-density/trial
+python tools/streams_probe/run_suite.py --gradle-user-home .gradle prepared-before prepared-after
+```
+
+These runners serialize Gradle/CUDA launches under one repository lock. They pass
+the inspected NeoForge 21.1.249/CUDA/offline arguments directly, stream logs to each
+run's `launcher-output.txt`, and atomically publish `suite-status.json` in its build
+family. A successful run needs process exit zero **and** a fresh successful density
+JSON or Streams completion receipt. Stale/malformed/missing receipts fail the suite.
+Status is refreshed every 30 seconds; queued runs continue without interactive
+polling. Windows children are launched without console windows. The lock coordinates
+these runners, not direct Gradle commands or a child left by a forcibly killed
+parent. Keep other builds and GPU probes out of an active suite.
+
+Density additionally supports `--shore-audit` and `--prefetch 1..32`; default prefetch
+remains eight. Prefetch controls pending chunk requests, not a thread count. Receipts
+record `availableProcessors`, `processCpuTimeDeltaSeconds`,
+`averageUtilizedLogicalCores`, `percentAvailableLogicalCapacity` and `phaseSeconds`.
+CPU time covers the whole server JVM, including native work, over the census window;
+it excludes launcher/Gradle startup and is not a GPU utilization metric. Unsupported
+CPU counters are JSON null. Average utilized cores are CPU seconds divided by wall
+seconds, normalized against logical processors for the percentage.
+
+`chunkCensusObserverSeconds` separates submission round trips, future waits,
+ticket cleanup, direct chunk fetches and result scanning. These are elapsed times
+observed by the diagnostic thread, including scheduling and blocking; they do not
+isolate terrain CPU work or disk I/O. `chunkCensusInference` reports existing
+executor counter deltas for tasks, cumulative queue time and execution time during
+the census. Overlapping task waits must not be added to observer times or read as
+GPU utilization. Serialization also has a separate phase timer.
+Density batch tickets are admitted on the server thread, while future requests
+use the public off-thread API from the audit worker. Calling that API on the
+server thread would block each request before submitting the next one. Results
+are still consumed in the configured owner order and tickets are cleaned up in
+`finally`.
+
+Census, native locate, saved-index and serialization checks already share one
+server lifecycle. Add `--verify-support` to verify physical foundations, or
+`--verify-well-support` to require a basic-village buried well as well. Explicit
+checks fail when no eligible structure is verified. `--shore-audit` records shore
+classifier samples on an eight-block lattice within the selected census bounds,
+through the end of the combined checks. It requires fresh nonempty evidence;
+an inland region without qualifying samples fails this requested check. These
+samples compare classifier outputs and are not a full river-block or visual audit.
+Combine these options when the same fixture/area serves the checks, rather than
+launching one server per check. Separate seeds, settings and cold-cache comparisons
+still need independent fixtures.
+
+For comparisons, use identical source, mods, seed, resolved biome/scale settings,
+area, owner order and initial cache contents, with independent fresh chunk data.
+Copy mutable assets and caches rather than hardlinking them. Compare start IDs,
+owners, bounds and piece counts along with time; thread-count changes must not
+change results. Cold graph construction and warmed graph reuse are separate
+benchmarks. `--daemon` is opt-in for repeated Gradle launches; it cannot remove
+Minecraft startup costs. Reuse a populated Gradle user home and avoid routine
+clean builds. Inspect the final release JAR for diagnostic classes/resources after
+using an init script.
+
+For repeated **structure-only** iterations, record the terrain inputs once and
+replay them in a separate fresh fixture:
+
+```text
+python tools/structure_placement/run_suite.py --gradle-user-home .gradle --verify-support --record-terrain build/terrain-replay/structure-base build/structure-density/record
+python tools/structure_placement/run_suite.py --gradle-user-home .gradle --verify-support --replay-terrain build/terrain-replay/structure-base build/structure-density/replay
+```
+
+Prepare both fixtures from the same source with identical area and controls using
+`prepare_fixture.py`. Each invocation accepts one fresh fixture. Recording must
+finish successfully before a snapshot is sealed; existing snapshots are never
+overwritten. Replay reruns native chunk/structure generation, locate, serialization
+and requested support assertions, using recorded complete height/biome/ecology
+tiles. It is **not** fresh terrain inference or classifier validation. Default
+invocations still run the full pipeline; `--shore-audit` refuses replay. Use full
+validation for terrain, biome, river or inference changes and final integration.
+
+The manifest hashes actual fixture inputs, models, mods, production sources,
+resources, build definitions and diagnostic hooks. Changes invalidate reuse,
+including added/removed files. Only `world/structure/`,
+`config/StructurePlacementConfig.java` and fixture
+`config/terrain-diffusion-structures.json` are excluded to allow structure policy
+iteration. Inspect those changes for new terrain dependencies. Missing, altered
+or incompatible tiles fail the run; there is no live-inference fallback for a
+missing recorded tile. Changes that request terrain outside the recorded region
+require another recording. Runtime metrics disclose replay hits, misses, I/O time,
+bypassed computations and residual ONNX work. Partial/raw terrain paths are not
+intercepted, and nonlegacy sampling is unsupported. Snapshots are workspace test
+artifacts, not saved chunks or reusable test verdicts.
+
+A matched local scale-1 test (129 candidate owners, four accepted starts,
+foundation checks enabled) measured 121.9 s for the recording audit and
+62.7 / 63.0 s for two independent fresh replays. Gradle/server launch through
+shutdown took 148.7 s versus 88.7 / 88.7 s, excluding fixture preparation and
+manifest hashing. All starts, locate/serialization checks and support results
+matched. The 56 tiles occupied about 105 MiB; this fixture's replay made zero
+ONNX calls versus 440 during recording. This is a structure regression speedup,
+not a general world-generation speedup; other fixtures and unhooked paths may
+still perform inference. The one-time recording cost must be amortized over
+subsequent iterations.
+
+The Python manifest and binary codec checks are also independent of Minecraft:
+
+```text
+python -m unittest tools.structure_placement.test_terrain_snapshot
+python tools/structure_placement/run_terrain_replay_tests.py
+```
+
+The runner contracts and telemetry can be checked without starting Minecraft:
+
+```text
+python -m unittest tools.test_probe_suite tools.structure_placement.test_run_fast_tests
+python -m unittest tools.structure_placement.test_prepare_fixture
+python tools/structure_placement/run_density_telemetry_tests.py
+```

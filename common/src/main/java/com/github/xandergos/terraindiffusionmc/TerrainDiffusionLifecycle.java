@@ -128,6 +128,10 @@ public final class TerrainDiffusionLifecycle {
 
     /** Server saving/chunk shutdown is complete; no new gameplay inference may start. */
     public static void onServerStopped(net.minecraft.server.MinecraftServer server) {
+        com.github.xandergos.terraindiffusionmc.world.structure.StructurePlacementRuntime.clear();
+        com.github.xandergos.terraindiffusionmc.world.structure.SavedStructureIndex.clear();
+        com.github.xandergos.terraindiffusionmc.config.StructurePlacementConfig.unbindWorld(
+                server.registryAccess().registryOrThrow(net.minecraft.core.registries.Registries.STRUCTURE));
         LocalTerrainProvider.shutdownGameplay();
         // A dedicated server can abort startup while native sessions are still being built.
         // Integrated servers leave that shared client loader available for menus/previews.

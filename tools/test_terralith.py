@@ -34,13 +34,15 @@ def main():
     package = Path("com/github/xandergos/terraindiffusionmc/pipeline")
     sources = [ROOT / "common/src/main/java" / package / (name + ".java")
                for name in ("FastNoiseLite", "TerralithBiomeClassifier", "BiomeClassifier", "MacroBiomeContext",
-                            "BroadEcologyClimate", "EcologyClassifier", "EcologyShowcaseProfile", "ShoreClassifier", "ShoreContext")]
+                            "BroadEcologyClimate", "EcologyClassifier", "EcologyData", "EcologyShowcaseProfile", "ShoreClassifier", "ShoreContext")]
     for name in ("ShoreClassifierTest", "ShoreContextTest"):
         sources.append(ROOT / "common/src/test/java" / package / (name + ".java"))
     sources.append(ROOT / "common/src/test/java" / package / "TerralithBiomeClassifierTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "MacroBiomeContextTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "BroadEcologyClimateTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "EcologyClassifierTest.java")
+    sources.append(ROOT / "common/src/test/java" / package / "SnowPatchGeometryTest.java")
+    sources.append(ROOT / "common/src/test/java" / package / "SnowTerrainRetentionTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "EcologyShowcaseProfileTest.java")
     world_package = Path("com/github/xandergos/terraindiffusionmc/world")
     sources.append(ROOT / "common/src/main/java" / world_package / "LowlandCarvingGuard.java")
@@ -49,9 +51,9 @@ def main():
     sources.append(ROOT / "common/src/test/java" / world_package / "ExactBiomeSearchTest.java")
     ecology_package = world_package / "ecology"
     sources.append(ROOT / "common/src/main/java" / ecology_package / "FeatureEcologyMath.java")
-    sources.append(ROOT / "common/src/main/java" / ecology_package / "OptionalGroundcoverPolicy.java")
-    sources.append(ROOT / "common/src/test/java" / ecology_package / "OptionalGroundcoverPolicyTest.java")
+    sources.append(ROOT / "common/src/main/java" / ecology_package / "SurfaceBoundaryDither.java")
     sources.append(ROOT / "common/src/test/java" / ecology_package / "FeatureEcologyMathTest.java")
+    sources.append(ROOT / "common/src/test/java" / ecology_package / "SurfaceBoundaryDitherTest.java")
     sources.append(ROOT / "common/src/test/java" / ecology_package / "EcotoneContinuityTest.java")
     sources.append(ROOT / "common/src/main/java" / ecology_package / "ShorePlantPolicy.java")
     sources.append(ROOT / "common/src/test/java" / ecology_package / "ShorePlantPolicyTest.java")
@@ -64,13 +66,15 @@ def main():
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimateTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifierTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.SnowPatchGeometryTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.SnowTerrainRetentionTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfileTest")
     for name in ("ShoreClassifierTest", "ShoreContextTest"):
         run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline." + name)
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.LowlandCarvingGuardTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ExactBiomeSearchTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMathTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.OptionalGroundcoverPolicyTest")
+    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.SurfaceBoundaryDitherTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.EcotoneContinuityTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.ShorePlantPolicyTest")
     run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.ReliefSurfaceTest")

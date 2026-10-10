@@ -91,7 +91,7 @@ public final class NaturalAdapterHarness {
         require(number(customV2, "minRiverAccumulation") == 500.0, "v2 retains a larger native threshold");
         require(number(customV2, "growDensity") == 3.0, "v2 retains a larger native growth density");
         boolean rejectedUnknownVersion = false;
-        try { StreamsNaturalConfig.apply(original, scale, 8); }
+        try { StreamsNaturalConfig.apply(original, scale, NaturalRiverProfile.VERSION + 1); }
         catch (IllegalArgumentException expected) { rejectedUnknownVersion = true; }
         require(rejectedUnknownVersion, "profile dispatch must reject an unknown version");
         Object v3 = StreamsNaturalConfig.apply(original, scale, 3);
@@ -109,6 +109,19 @@ public final class NaturalAdapterHarness {
         require(configValues(v6).equals(configValues(v5)), "v6 regrades the selected graph without changing native routing settings");
         Object v7 = StreamsNaturalConfig.apply(original, scale, 7);
         require(configValues(v7).equals(configValues(v6)), "v7 refines retained widths and dry mud without changing native routing settings");
+        Object v8 = StreamsNaturalConfig.apply(original, scale, 8);
+        require(number(v8, "minRiverAccumulation") == Math.max(24.0, originalAccumulation),
+                "v8 admits native sources at the v1 threshold, not v2's 128");
+        for (String accessor : CONFIG_ACCESSORS) {
+            if (accessor.equals("minRiverAccumulation")) continue;
+            require(Objects.equals(StreamsRecordAccess.read(v8, accessor), StreamsRecordAccess.read(v7, accessor)),
+                    "v8 must preserve v7 " + accessor);
+        }
+        require(number(v7, "minRiverAccumulation") == Math.max(6.0, originalAccumulation),
+                "v7 remains frozen when v8 is selected");
+        Object customV8 = StreamsNaturalConfig.apply(custom, scale, 8);
+        require(number(customV8, "minRiverAccumulation") == 500.0,
+                "v8 must preserve a stronger native source threshold");
         double previous = 0;
         for (int i = 0; i <= 3200; i++) {
             double width = i / 100.0, narrowed = NaturalRiverProfile.narrowHalfWidthV4(width);

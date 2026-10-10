@@ -15,6 +15,10 @@
     "terrain-diffusion-mc:ecology/snowy_boreal_forest",
     "terrain-diffusion-mc:ecology/temperate_rainforest",
     "terrain-diffusion-mc:ecology/montane_forest",
-    "terrain-diffusion-mc:ecology/steppe"
+    "terrain-diffusion-mc:ecology/steppe",
+    "terrain-diffusion-mc:ecology/snowy_boreal_woodland",
+    "terrain-diffusion-mc:ecology/snowy_tundra",
+    "terrain-diffusion-mc:ecology/alpine_tundra",
+    "terrain-diffusion-mc:ecology/glacial_highlands"
   ]
 }

@@ -1,10 +1,12 @@
 package com.github.xandergos.terraindiffusionmc.world.ecology;
 
+import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
+
 /** Coordinate-continuous fields shared by ecological decoration features. */
 public final class FeatureEcologyMath {
     private static final int SOIL_PATCH_MODEL_PIXELS = 64;
     private static final float SOIL_MOISTURE_VARIATION = 0.12F;
-    public enum SurfaceMaterial { GRASS, COARSE_DIRT, SAND, PODZOL }
+    public enum SurfaceMaterial { GRASS, COARSE_DIRT, SAND, PODZOL, GRAVEL, STONE }
     public enum GroundcoverKind {
         NONE, GRASS, TALL_GRASS, FERN, TALL_FERN, BERRY_BUSH, AZALEA,
         FLOWER, DEAD_BUSH, CACTUS, BAMBOO, MOSS, MUSHROOM
@@ -112,7 +114,24 @@ public final class FeatureEcologyMath {
     public static SurfaceMaterial surfaceMaterial(float temperature, float moisture, float slope,
                                                    float treeCover, float elevation, long seed,
                                                    int blockX, int blockZ, int scale) {
+        // Fine dither only moves the existing material field by up to three blocks.
+        // Keep the actual column's elevation/climate: no neighbouring terrain tile is fetched.
+        int dx = (int) Math.floorMod(decorationSeed(seed, blockX, blockZ, 0x4544474558L), 7L) - 3;
+        int dz = (int) Math.floorMod(decorationSeed(seed, blockX, blockZ, 0x454447455AL), 7L) - 3;
+        return surfaceMaterialAt(temperature, moisture, slope, treeCover, elevation, seed,
+                blockX + dx, blockZ + dz, scale);
+    }
+
+    static SurfaceMaterial surfaceMaterialAt(float temperature, float moisture, float slope,
+                                              float treeCover, float elevation, long seed,
+                                              int blockX, int blockZ, int scale) {
         float soil = soilMosaic(seed, blockX, blockZ, elevation, slope, scale);
+        float cold = EcologyClassifier.coldState(temperature);
+        float exposed = cold * (1 - smoothRange(.08F, .5F, treeCover));
+        float rock = EcologyClassifier.alpineExposure(temperature, slope, slope);
+        if (soil < .85F * rock) return SurfaceMaterial.STONE;
+        if (soil < .30F * exposed) return SurfaceMaterial.GRAVEL;
+        if (soil < .65F * exposed) return SurfaceMaterial.COARSE_DIRT;
         float aridity = (1.0F - smoothRange(0.30F, 0.60F, moisture))
                 * smoothRange(8.0F, 18.0F, temperature);
         if (aridity > 0.0F) {
@@ -167,10 +186,16 @@ public final class FeatureEcologyMath {
     }
 
     /** Overlapping plant communities. No biome ID, chunk coordinate or hard climate selector is used. */
+    public static float coldGroundcoverAcceptance(float temperature) {
+        return smoothRange(-12, -4, temperature) * (1 - .85F * EcologyClassifier.coldState(temperature));
+    }
+
     public static GroundcoverWeights groundcoverWeights(float temperature, float moisture,
                                                         float treeCover, float slope) {
         float cover = clamp01(treeCover);
-        float growth = smoothRange(-9, 4, temperature) * (1 - smoothRange(.45F, .90F, slope));
+        float cold = EcologyClassifier.coldState(temperature);
+        float growth = smoothRange(-12, 4, temperature) * (1 - .75F * cold)
+                * (1 - smoothRange(.45F, .90F, slope));
         float hydrated = smoothRange(.14F, .72F, moisture);
         float wet = smoothRange(.55F, 1.20F, moisture);
         float dry = 1 - smoothRange(.15F, .55F, moisture);
@@ -180,7 +205,7 @@ public final class FeatureEcologyMath {
         return new GroundcoverWeights(
                 grass,
                 .35F * grass * smoothRange(0, 18, temperature) * (1 - .7F * cover),
-                .65F * fern,
+                .65F * fern * (1 - cold),
                 .30F * fern * smoothRange(4, 18, temperature),
                 .18F * growth * wet * (1 - smoothRange(12, 20, temperature)) * (.3F + .7F * cover),
                 .12F * growth * wet * smoothRange(5, 14, temperature)
@@ -198,7 +223,8 @@ public final class FeatureEcologyMath {
     /** Chance per column; foliage survival and occupied cells can only reduce the resulting density. */
     public static float groundcoverChance(float temperature, float moisture, float treeCover, float slope,
                                          long seed, int blockX, int blockZ, int scale) {
-        float growth = smoothRange(-9, 4, temperature);
+        float growth = smoothRange(-12, 4, temperature)
+                * (1 - .75F * EcologyClassifier.coldState(temperature));
         float hydrated = smoothRange(.14F, .72F, moisture);
         float openness = 1 - clamp01(treeCover);
         float live = .45F * growth * hydrated * (.35F + .65F * openness);

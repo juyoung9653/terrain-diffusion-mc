@@ -14,6 +14,10 @@
   "terrain-diffusion-mc:ecology/temperate_rainforest": { "name": "Temperate Rainforest", "r": 30, "g": 100, "b": 64 },
   "terrain-diffusion-mc:ecology/montane_forest": { "name": "Montane Forest", "r": 78, "g": 113, "b": 91 },
   "terrain-diffusion-mc:ecology/steppe": { "name": "Steppe", "r": 182, "g": 181, "b": 102 },
+  "terrain-diffusion-mc:ecology/snowy_boreal_woodland": { "name": "Snowy Boreal Woodland", "r": 190, "g": 214, "b": 207 },
+  "terrain-diffusion-mc:ecology/snowy_tundra": { "name": "Snowy Tundra", "r": 212, "g": 218, "b": 205 },
+  "terrain-diffusion-mc:ecology/alpine_tundra": { "name": "Alpine Tundra", "r": 173, "g": 185, "b": 193 },
+  "terrain-diffusion-mc:ecology/glacial_highlands": { "name": "Glacial Highlands", "r": 223, "g": 235, "b": 243 },
   "terrain-diffusion-mc:forest_sparse": { "name": "Sparse Forest", "r": 95, "g": 151, "b": 88 },
   "terrain-diffusion-mc:taiga_sparse": { "name": "Sparse Taiga", "r": 75, "g": 132, "b": 119 },
   "terrain-diffusion-mc:snowy_taiga_sparse": { "name": "Sparse Snowy Taiga", "r": 128, "g": 164, "b": 151 }

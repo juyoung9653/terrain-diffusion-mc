@@ -2,6 +2,8 @@ package com.github.xandergos.terraindiffusionmc.compat.greeneries;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
 import com.github.xandergos.terraindiffusionmc.world.ecology.GreeneriesSoilPolicy;
+import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
+import com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMath;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
@@ -36,6 +38,8 @@ public final class GreeneriesPlacementGuard {
         if (!GreeneriesNativePatchScope.active() || !isGrassOrFern(plant)
                 || !isEcologyBiome(level, pos)) return true;
         float chance = GreeneriesSoilPolicy.acceptance(level.getBlockState(pos.below()));
+        var climate = NaturalEcology.cachedSurfaceSample(level.getLevel().getChunkSource().getGenerator(), pos.getX(), pos.getZ());
+        if (climate != null) chance *= FeatureEcologyMath.coldGroundcoverAcceptance(climate.climate().temperature());
         return chance >= 1.0F || (chance > 0.0F && GreeneriesSoilPolicy.accepts(chance, random.nextFloat()));
     }
 

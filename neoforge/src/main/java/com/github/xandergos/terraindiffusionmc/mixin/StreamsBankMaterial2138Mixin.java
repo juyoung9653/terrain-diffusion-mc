@@ -7,7 +7,10 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import com.llamalad7.mixinextras.sugar.Local;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.WorldGenLevel;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
@@ -20,6 +23,38 @@ import org.spongepowered.asm.mixin.injection.Coerce;
 @Pseudo
 @Mixin(targets = "dev.streamsreflowing.worldgen.RiverCarverFeature", remap = false)
 public abstract class StreamsBankMaterial2138Mixin {
+    /** 2.13.8 place offset 11890: exposed soil recap, outside the BANKTOP helper. */
+    @WrapOperation(method = "place(Lnet/minecraft/world/level/levelgen/feature/FeaturePlaceContext;)Z",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/WorldGenLevel;setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z", ordinal = 11),
+            require = 1, remap = false)
+    private boolean terrainDiffusion$climateRecap(WorldGenLevel level, BlockPos pos, BlockState proposed,
+                                                 int flags, Operation<Boolean> original) {
+        BlockState material = WorldNaturalRiverState.version(level.getLevel()) >= 10
+                ? StreamsBankMaterialPolicy.climateBankTop(level, pos.getX(), pos.getY(), pos.getZ(), proposed)
+                : proposed;
+        return original.call(level, pos, material, flags);
+    }
+
+    /** Immediate recap decoration, offsets 11972/11988/12012; consume native RNG unchanged. */
+    @WrapOperation(method = "place(Lnet/minecraft/world/level/levelgen/feature/FeaturePlaceContext;)Z",
+            at = {
+                    @At(value = "INVOKE", target = "Lnet/minecraft/world/level/WorldGenLevel;setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z", ordinal = 12),
+                    @At(value = "INVOKE", target = "Lnet/minecraft/world/level/WorldGenLevel;setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z", ordinal = 13),
+                    @At(value = "INVOKE", target = "Lnet/minecraft/world/level/WorldGenLevel;setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z", ordinal = 14)
+            }, require = 3, remap = false)
+    private boolean terrainDiffusion$recapVegetation(WorldGenLevel level, BlockPos pos, BlockState proposed,
+                                                     int flags, Operation<Boolean> original) {
+        if (WorldNaturalRiverState.version(level.getLevel()) >= 10) {
+            boolean upper = proposed.is(Blocks.TALL_GRASS)
+                    && proposed.getValue(BlockStateProperties.DOUBLE_BLOCK_HALF) == DoubleBlockHalf.UPPER;
+            // A rejected lower half must never leave an orphan upper half. Mineral
+            // or exposed soil caps also must not acquire the native generic grass.
+            BlockState support = level.getBlockState(pos.below());
+            if (upper ? !support.is(Blocks.TALL_GRASS) : !support.is(Blocks.GRASS_BLOCK)) return false;
+        }
+        return original.call(level, pos, proposed, flags);
+    }
+
     @WrapOperation(
             method = "a(Lnet/minecraft/world/level/WorldGenLevel;Ldev/streamsreflowing/core/RiverEngine;IILnet/minecraft/core/BlockPos$MutableBlockPos;IIIIZLnet/minecraft/world/level/block/state/BlockState;Lnet/minecraft/world/level/block/state/BlockState;IZLjava/util/List;Ljava/util/List;Ljava/util/Map;Ljava/util/Map;IILjava/lang/String;ZZ)V",
             at = @At(value = "INVOKE", target = "Ldev/streamsreflowing/worldgen/bank/BankStyle;zoneBlock(IDZ)Lnet/minecraft/world/level/block/state/BlockState;"),

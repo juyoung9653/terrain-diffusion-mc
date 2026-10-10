@@ -2,7 +2,7 @@ package com.github.xandergos.terraindiffusionmc.world.river;
 
 /** Versioned TD river policy. Distances are world blocks, widths are half-widths. */
 public final class NaturalRiverProfile {
-    public static final int VERSION = 7;
+    public static final int VERSION = 10;
     private NaturalRiverProfile() { }
 
     /** A coastal source must drain a substantial inland reach; tributary joins are exempt. */

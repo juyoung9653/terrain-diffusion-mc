@@ -4,16 +4,18 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 public final class EcologyData {
     public final int width, height;
     private final short[] biomeIds, terrainBiomeIds;
-    private final float[] cover, temperature, moisture, slope;
+    private final float[] cover, temperature, moisture, slope, snowRetention;
 
     public EcologyData(int width, int height, short[] biomeIds, short[] terrainBiomeIds,
-                       float[] cover, float[] temperature, float[] moisture, float[] slope) {
+                       float[] cover, float[] temperature, float[] moisture, float[] slope, float[] snowRetention) {
         this.width = width; this.height = height;
         this.biomeIds = biomeIds; this.terrainBiomeIds = terrainBiomeIds;
         this.cover = cover; this.temperature = temperature; this.moisture = moisture; this.slope = slope;
+        this.snowRetention = snowRetention;
     }
     public int biomeId(int x, int z) { return biomeIds[z * width + x]; }
     public short terrainBiomeId(int x, int z) { return terrainBiomeIds[z * width + x]; }
+    public float snowRetention(int x, int z) { return snowRetention[z * width + x]; }
     public EcologyClassifier.Sample sample(int x, int z) {
         int i = z * width + x;
         return new EcologyClassifier.Sample(biomeIds[i], cover[i], temperature[i], moisture[i], slope[i]);
@@ -21,6 +23,7 @@ public final class EcologyData {
     EcologyData crop(int x, int z, int w, int h) {
         short[] ids = new short[w * h], terrain = new short[w * h];
         float[] trees = new float[w * h], temp = new float[w * h], moist = new float[w * h], slopes = new float[w * h];
+        float[] retention = new float[w * h];
         for (int r = 0; r < h; r++) {
             int from = (z + r) * width + x, to = r * w;
             System.arraycopy(biomeIds, from, ids, to, w);
@@ -29,7 +32,8 @@ public final class EcologyData {
             System.arraycopy(temperature, from, temp, to, w);
             System.arraycopy(moisture, from, moist, to, w);
             System.arraycopy(slope, from, slopes, to, w);
+            System.arraycopy(snowRetention, from, retention, to, w);
         }
-        return new EcologyData(w, h, ids, terrain, trees, temp, moist, slopes);
+        return new EcologyData(w, h, ids, terrain, trees, temp, moist, slopes, retention);
     }
 }

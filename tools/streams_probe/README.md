@@ -13,6 +13,11 @@ Use the tested Terralith surface pack with `terralith=true` and
 `natural_biomes=true`, and keep `generateStreams`, `generateLakes`,
 `vanillaWaterFlow` and `flowVanillaRivers` enabled. Matching the mod JARs alone
 does not match the saved world's biome source, scale or selected datapacks.
+The default dedicated-server preset can leave `natural_biomes=false` even when
+the client-created world uses ecology biomes. Before terrain or village-density
+comparisons, record and assert the seed, runtime scale, `naturalBiomes`,
+`terralith`, `showcase` and pinned river profile. Copy the source generator
+settings into a chunk-empty fixture when reproducing a saved world.
 
 For a new scale-5 world, enable the pack first, then choose Terrain Diffusion,
 Customize, World Scale 5, Done, and Create. Customize sets both the dimension
@@ -29,12 +34,21 @@ keep the requested river features enabled during the comparison.
 ### TD natural river profile (new worlds)
 
 New real NeoForge TD Overworlds with audited Streams 2.13.1/2.13.5/2.13.8 pin natural
-profile v7 in `data/terrain_diffusion_natural_rivers.dat`. Legacy worlds, Fabric,
+profile v10 in `data/terrain_diffusion_natural_rivers.dat`. Legacy worlds, Fabric,
 worlds without an audited adapter and finite-preview worlds remain disabled.
 `-Dtd.rivers.natural=false` opts out **only before the first world creation**;
 the saved choice wins on restart. Missing/corrupt profile data beside an existing
 natural cache, or loading an enabled world without its audited adapter, stops
-generation. Keep the complete world together when copying it.
+generation. Keep the complete world together when copying it. Existing v9 worlds
+stay v9; rolling a v10 world back to a v9-only mod requires restoring its matching
+pre-v10 world backup, not just swapping the JAR.
+For screenshot regressions, assert the resolved biome-source flags and saved scale
+before comparing blocks: the bare dedicated-server TD preset uses legacy biomes.
+Matching only seed and native Streams graphs reproduced `minecraft:grove` where
+the user's compatibility-preset world used ecology steppe. Copy the biome-source
+compound and dimension key into a separate, chunk-empty diagnostic world; never
+change those fields in the player's save. Compare identical cached native graphs
+when isolating bank finishing from graph generation.
 Do not recursively exclude `td-*` while copying a playtest world: that also
 removes `streamsreflowing/minecraft_overworld/td-natural-vN`, forcing native
 graph regeneration and delaying client flow-grid delivery. Preserve profile
@@ -680,22 +694,6 @@ startup-abort event and interactive client quit still require runtime coverage.
 
 ### Chunk performance checks
 
-Streams 2.13.8 demanded builds can execute on `streamsreflowing-prefetch`:
-the thread name alone does not identify speculative work. Preserve the captured
-`LowResGrid$PrioritizedTask` priority (0 urgent, 1 background) across its worker
-boundary and scope `BuildGate.asDemanded` likewise. Run
-`python tools/streams_probe/test_sampler_priority.py` to audit these version-gated
-hooks against the installed binary.
-
-Bound Streams density scans reuse exact ground heights through a scoped weak
-tile cursor. The cursor retains full query bounds and bypasses repeated provider
-lookups for each Y value; provider hit counters therefore no longer count those
-cursor reads. Do not interpret their reduction as an equal wall-time speedup.
-`python tools/test_terrain_sampling.py` checks parity, invalidation and priority
-scope cleanup. Validate mixin application, login, chunk progress and shutdown
-separately in a copied full client; a successful build does not establish that an
-intermittent exit hang is fixed.
-
 `tdProbe.performanceAudit=true` runs cold and repeated density/biome queries in
 isolated preview scopes. `tdProbe.performanceParity=true` additionally compares
 every cell of sampled 16x16 regions against the original configured full-tile
@@ -1079,6 +1077,22 @@ can hit dry bars even when a continuous adjacent water lane exists.
 
 ## Chunk performance checks
 
+Streams 2.13.8 demanded builds can execute on `streamsreflowing-prefetch`:
+the thread name alone does not identify speculative work. Preserve the captured
+`LowResGrid$PrioritizedTask` priority (0 urgent, 1 background) across its worker
+boundary and scope `BuildGate.asDemanded` likewise. Run
+`python tools/streams_probe/test_sampler_priority.py` to audit these version-gated
+hooks against the installed binary.
+
+Bound Streams density scans reuse exact ground heights through a scoped weak
+tile cursor. The cursor retains full query bounds and bypasses repeated provider
+lookups for each Y value; provider hit counters therefore no longer count those
+cursor reads. Do not interpret their reduction as an equal wall-time speedup.
+`python tools/test_terrain_sampling.py` checks parity, invalidation and priority
+scope cleanup. Validate mixin application, login, chunk progress and shutdown
+separately in a copied full client; a successful build does not establish that an
+intermittent exit hang is fixed.
+
 The opt-in init script forwards `-PtdInference.*` and `-PtdIncendium.*` to
 `td.inference.*` and `td.incendium.*` system properties. Use
 `-PtdProbe.performanceAudit=true` with `-PtdProbe.performanceParity=true` and
@@ -1188,6 +1202,17 @@ Require `vegetation_snow_fixture` to pass dry-floor, planted-floor, warm-biome,
 water and restoration controls. A warm natural cohort is inconclusive for
 natural snow coverage; the controlled fixture separately verifies the canopy
 hook with the installed Snow! Real Magic! adapter.
+The canopy fixture starts with two bare branch tiers and invokes vanilla top-layer
+snow followed by Snow Under Trees. Require the floor and crown masks to agree with
+local climate despite forced warm/cold biome labels, plus plant preservation,
+fluid/light/support guards, idempotence, and vanilla freezing controls. Run warm
+and cold cohorts so `eligibleSites` exercises both outcomes. Reload completed
+chunks before fixtures because generation tickets may have expired.
+
+The Greeneries fixture also calls the registered common red-fescue placed feature
+over real open and leaf-covered grass floors, using identical random seeds.
+Require equal positive density/species counts, zero on sand/water, and restoration.
+Run it in a temperate biome so the native biome filter permits this feature.
 
 `-PtdProbe.greeneriesDensityAudit=true` requires Greeneries 1.0.3, Terrain Slabs
 3.1.2 with vegetation enabled, and Immersive Weathering 1.0.5 in the test fixture.
@@ -1199,3 +1224,55 @@ render-offset branch; this verifies the offset math, not an in-game screenshot.
 Neighbor updates, removal of support, waterlogging and fixture restoration are
 checked. Also generate a fresh chunk to detect feature-order cycles hidden by
 saved FULL chunks. Counts measure accepted attempts, not final landscape coverage.
+
+The fixture enters the native `Feature.place` with its original config/provider
+for soil/survival trials. Streams 2.13.8's `ConfiguredFeatureMixin` vetoes synthetic
+platforms anywhere in protected river columns, even well above the water; routing
+those trials through `ConfiguredFeature.place` produced zero for every substrate
+and for unscoped/non-TD controls. `configuredBaseline:false` together with
+`isolatedBaseline:true` records this distinction. Production river exclusion is
+unchanged. The fixture also checks native provider identity, original flowers,
+base-before-addition order, and absence of simultaneous climate groundcover.
+
+For the optional Nature X depth bridge, use `client-flow.init.gradle` with the
+audited Continuity JAR in an isolated client directory and cached model assets.
+Set `-Dtd.cattailDepthAudit=true -Dtd.cattailDepthAudit.exit=true`; require
+`[TD-CATTAIL-AUDIT] PASS`, not just a successful Gradle exit. This exercises actual
+transformed Continuity properties/predicates at the title screen, including all
+five paired rules, different elevations, half/full/deep water and unrelated CTM.
+The controlled biome must be non-null: Continuity rejects a null cached biome
+before calling its biome predicate. This verifies rendering decisions, not a
+full-pack screenshot or shader output.
+
+For chunk disconnects, inspect `debug/disconnect-*-client.txt` as well as crash
+reports: a failed chunk packet can disconnect singleplayer without a JVM crash.
+The NeoForge client captures the first failed chunk update per process in
+`debug/td-chunk-packet/latest.bin` and `latest.txt` (coordinates and byte count).
+This is diagnostic evidence, not recovery; the original exception still propagates.
+Normal chunk updates do not copy or write diagnostic payloads.
+
+`-Dtd.paletteWireAudit=true` with `client-flow.init.gradle` runs 63 palette and
+21 consecutive section roundtrips with receiver reuse. Require the explicit
+`TD-PALETTE-AUDIT PASS` marker and exact state/biome/boundary checks. Passing this
+does not rule out a concurrent worldgen mutation. `ChunkFailureCaptureAudit` is
+an opt-in malformed-packet test restricted to the copied disconnect fixture;
+require `TD-CHUNK-CAPTURE-AUDIT PASS`. Never include diagnostic classes in the
+installed production JAR or run the malformed-packet test on an original save.
+
+### Shared cold-climate and river-source regression
+
+Use `-PtdProbe.coldWeatherAudit=true` with both cold and warm completed chunks.
+Reload the chunks before auditing: a completed earlier candidate can unload while
+another is generated. Require `cold_weather_audit` passed receipts, both eligibility
+outcomes, and zero computed windows/provider misses during weather decisions.
+Snow Real Magic 12.2.3 reports `12.2.3+neoforge` at runtime; the compatibility gate
+must accept that audited build string. Test the transformed SRM method, not just
+the helper, since an excluded mixin otherwise passes helper-only tests.
+`coldBiomeSpatialAudit` exports actual cached climate/biome/snow samples; it is a
+distribution check, not a rendered-world visual acceptance test.
+
+River profile v8 increases native source admission accumulation from 6 to 24;
+v1–v7 remain frozen. Conservative border guards can preserve short whole coastal
+components, so pruning alone does not guarantee sparse headwaters. Compare native
+saved networks with identical seed/scale and separate v7/v8 caches. Never clear or
+upgrade an original world's river marker/cache for this comparison.

@@ -22,7 +22,11 @@ public final class EcologyShowcaseProfile {
             Map.entry("snowy_boreal_forest", new Climate(-3.0F, 1.25F)),
             Map.entry("temperate_rainforest", new Climate(13.0F, 1.60F)),
             Map.entry("montane_forest", new Climate(10.0F, 1.25F)),
-            Map.entry("steppe", new Climate(13.0F, .45F)));
+            Map.entry("steppe", new Climate(13.0F, .45F)),
+            Map.entry("snowy_boreal_woodland", new Climate(-4.0F, .80F)),
+            Map.entry("snowy_tundra", new Climate(-5.0F, .40F)),
+            Map.entry("alpine_tundra", new Climate(-6.0F, .50F)),
+            Map.entry("glacial_highlands", new Climate(-12.0F, .35F)));
 
     private EcologyShowcaseProfile() {
     }
@@ -51,6 +55,7 @@ public final class EcologyShowcaseProfile {
         var sample = EcologyClassifier.select(x, z, elevation, slope, false,
                 climate.temperature(), rainfall, elevation).sample();
         return new EcologyClassifier.Sample(EcologyClassifier.BIOMES.indexOf(name) + 1,
-                sample.treeCover(), sample.temperature(), sample.moisture(), sample.slope());
+                name.equals("alpine_tundra") || name.equals("glacial_highlands") ? 0 : sample.treeCover(),
+                sample.temperature(), sample.moisture(), sample.slope());
     }
 }

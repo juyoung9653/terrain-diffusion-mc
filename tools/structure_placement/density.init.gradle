@@ -1,0 +1,52 @@
+gradle.projectsEvaluated {
+    def prefetchProperty = gradle.rootProject.findProperty('tdDensityPrefetch')
+    def prefetch = 8
+    if (prefetchProperty != null) {
+        try {
+            prefetch = Integer.parseInt(prefetchProperty.toString())
+        } catch (NumberFormatException ignored) {
+            throw new GradleException('tdDensityPrefetch must be an integer from 1 to 32')
+        }
+        if (prefetch < 1 || prefetch > 32)
+            throw new GradleException('tdDensityPrefetch must be an integer from 1 to 32')
+    }
+    def project = gradle.rootProject.findProject(':neoforge')
+    if (project == null) return
+    def terrainMode = gradle.rootProject.findProperty('tdTerrainMode')?.toString() ?: 'full'
+    if (!(terrainMode in ['full', 'record', 'replay'])) throw new GradleException('Invalid tdTerrainMode')
+    def snapshotDirectory = gradle.rootProject.findProperty('tdTerrainSnapshotDir')?.toString()
+    def snapshotId = gradle.rootProject.findProperty('tdTerrainSnapshotId')?.toString()
+    if (terrainMode != 'full') {
+        if (!snapshotDirectory || !(snapshotId ==~ /[0-9a-f]{64}/))
+            throw new GradleException('Terrain replay requires a prepared snapshot path and fingerprint')
+        if (terrainMode == 'replay' && gradle.rootProject.findProperty('tdShoreAudit')?.toString()?.toBoolean())
+            throw new GradleException('Shore classification cannot be verified against frozen terrain')
+    }
+    project.sourceSets.main.java.srcDir(new File(gradle.rootProject.rootDir, 'tools/structure_placement/probe-java'))
+    project.sourceSets.main.resources.srcDir(new File(gradle.rootProject.rootDir, 'tools/structure_placement/probe-resources'))
+    def directory = gradle.rootProject.findProperty('tdStructureProbeDir')
+    project.extensions.getByName('neoForge').runs.named('server') {
+        gameDirectory = project.file(directory)
+    }
+    project.tasks.named('runServer') {
+        args 'nogui'
+        maxHeapSize = '8G'
+        systemProperty 'td.densityProbe', 'true'
+        systemProperty 'td.densityPrefetch', prefetch.toString()
+        systemProperty 'td.terrainMode', terrainMode
+        if (terrainMode != 'full') {
+            systemProperty 'td.terrainSnapshotDir', snapshotDirectory
+            systemProperty 'td.terrainSnapshotId', snapshotId
+            systemProperty 'td.inference.metrics', 'true'
+            args '--mixin', 'td-terrain-replay.mixins.json'
+        }
+        if (gradle.rootProject.findProperty('tdShoreAudit')?.toString()?.toBoolean()) {
+            systemProperty 'td.shoreAudit', 'true'
+            args '--mixin', 'td-shore-audit.mixins.json'
+        }
+        if (gradle.rootProject.findProperty('tdDensitySupport')?.toString()?.toBoolean())
+            systemProperty 'td.densitySupport', 'true'
+        if (gradle.rootProject.findProperty('tdDensityWellSupport')?.toString()?.toBoolean())
+            systemProperty 'td.densityWellSupport', 'true'
+    }
+}

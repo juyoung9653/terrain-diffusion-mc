@@ -31,6 +31,28 @@ public final class NaturalRiverBankMarginTest {
             }
         }
         require(max - min > .5, "margin is a uniform strip");
+        int narrowSediment = 0, wideSediment = 0;
+        for (int x = -96; x <= 96; x++) for (int z = -96; z <= 96; z++) {
+            double thin = NaturalRiverBankMargin.sedimentWidth(1, x, z);
+            double broad = NaturalRiverBankMargin.sedimentWidth(12, x, z);
+            require(thin < .67 && broad <= 3.75 && broad > thin * 4,
+                    "tributary sediment apron is too broad");
+            require(Math.abs(thin - NaturalRiverBankMargin.sedimentWidth(1, x - 1, z)) < .04,
+                    "sediment width jumps at a block/chunk boundary");
+            for (double edge = .25; edge <= 6; edge += .25) {
+                if (NaturalRiverBankMargin.drySediment(1 + edge, 1, 75, 74, x, z)) narrowSediment++;
+                if (NaturalRiverBankMargin.drySediment(12 + edge, 12, 75, 74, x, z)) wideSediment++;
+            }
+            require(!NaturalRiverBankMargin.drySediment(1.25, 1, 90, 74, x, z),
+                    "dry hillside acquired river sediment");
+            require(!NaturalRiverBankMargin.drySediment(1.25, Double.NaN, 74, 74, x, z),
+                    "invalid plan acquired river sediment");
+            require(!NaturalRiverBankMargin.drySediment(Double.NaN, 1, 74, 74, x, z),
+                    "invalid distance acquired river sediment");
+            require(!NaturalRiverBankMargin.drySediment(1.25, 1, Integer.MIN_VALUE, Integer.MAX_VALUE, x, z),
+                    "overflow acquired river sediment");
+        }
+        require(wideSediment > narrowSediment * 4, "dry sediment coverage ignores river width");
         // Flat and stepped banks still block every lateral cell up to the highest source Y.
         for (int water = -60; water <= 300; water++) {
             int crest = NaturalRiverBankMargin.containmentCrest(7, water);
@@ -40,7 +62,8 @@ public final class NaturalRiverBankMarginTest {
                 require(NaturalRiverBankMargin.containmentCrest(version, water) == water + 1,
                         "frozen legacy geometry changed");
         }
-        System.out.println("NaturalRiverBankMarginTest: passed width, invalid-plan, seam, and containment checks");
+        System.out.println("NaturalRiverBankMarginTest: passed width, invalid-plan, seam, and containment checks; "
+                + "dry sediment samples narrow=" + narrowSediment + " wide=" + wideSediment);
     }
 
     private static void require(boolean condition, String message) {

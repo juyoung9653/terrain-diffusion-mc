@@ -37,6 +37,13 @@ public final class StreamsNaturalConfig {
         if (version == 5) return watershedProfile(config, scale);
         if (version == 6) return watershedProfile(config, scale);
         if (version == 7) return watershedProfile(config, scale);
+        if (version == 8 || version == 9 || version == 10) {
+            // Admit fewer weak native sources before the conservative border and
+            // connector guards run. Keep every other v7 routing setting frozen.
+            return StreamsRecordAccess.copy(watershedProfile(config, scale), Map.of(
+                    "minRiverAccumulation", NaturalRiverProfile.minimumAccumulation(
+                            StreamsRecordAccess.number(config, "minRiverAccumulation"))));
+        }
         if (version != 2) throw new IllegalArgumentException("Unsupported natural river profile " + version);
         Object legacy = apply(config, scale);
         Object hydraulics = StreamsRecordAccess.copy(StreamsRecordAccess.read(legacy, "hydraulics"), Map.of(

@@ -20,6 +20,10 @@ config="${mod_id}.client.mixins.json"
 config="${mod_id}.neoforge.mixins.json"
 [[mixins]]
 config="${mod_id}.preview.mixins.json"
+[[mixins]]
+config="${mod_id}.continuity.mixins.json"
+[[mixins]]
+config="${mod_id}.lush.mixins.json"
 
 [[dependencies.${fml_mod_id}]]
 modId="neoforge"

@@ -58,7 +58,7 @@ class EcologyOfflineAtlasTest(unittest.TestCase):
     def test_material_fractions_and_tree_probability_bounds(self) -> None:
         for row in self.rows():
             current = sum(float(row[f"current_{name}_fraction"])
-                          for name in ("grass", "coarse_dirt", "sand", "podzol"))
+                          for name in ("grass", "coarse_dirt", "sand", "podzol", "gravel", "stone"))
             legacy = sum(float(row[f"legacy_{name}_fraction"])
                          for name in ("grass", "coarse_dirt", "sand"))
             self.assertAlmostEqual(1.0, current, places=8)

@@ -5,11 +5,16 @@
   "compatibilityLevel": "JAVA_21",
   "plugin": "com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin",
   "mixins": [
+    "TerrainSlabRiverFeatureMixin",
     "IncendiumFunctionMixin",
     "IncendiumOriginLifecycleMixin",
     "GreeneriesSimpleBlockFeatureMixin",
     "GreeneriesPlacedFeatureMixin",
     "SnowUnderTreesFeatureMixin",
+    "SimpleSnowyFixSnowMixin",
+    "NaturalSnowCoverMixin",
+    "NaturalSnowWeatherMixin",
+    "SnowRealMagicClimateMixin",
     "SeagrassFeatureMixin",
     "StreamsSeagrassFeatureMixin",
     "StreamsStructureShieldMixin",
@@ -29,6 +34,7 @@
     "StreamsBankMaterialMixin",
     "StreamsBankMaterial2138Mixin"
   ],
+  "client": ["ChunkPacketFailureCaptureMixin"],
   "injectors": {
     "defaultRequire": 1
   }

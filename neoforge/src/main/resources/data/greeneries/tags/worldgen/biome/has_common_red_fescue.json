@@ -1,9 +1,0 @@
-{
-  "replace": false,
-  "values": [
-    "terrain-diffusion-mc:ecology/temperate_forest",
-    "terrain-diffusion-mc:ecology/temperate_woodland",
-    "terrain-diffusion-mc:ecology/temperate_grassland",
-    "terrain-diffusion-mc:ecology/temperate_rainforest"
-  ]
-}

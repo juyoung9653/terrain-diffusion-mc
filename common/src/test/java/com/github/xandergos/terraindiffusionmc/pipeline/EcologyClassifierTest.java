@@ -24,11 +24,13 @@ public final class EcologyClassifierTest {
             }
         }
         reached.add(EcologyClassifier.select(0, 0, 900, .1f, false, 10, 1000, 900).sample().biomeId());
+        reached.add(EcologyClassifier.select(0, 0, 2000, 1.1f, false, -5, 250, 2000).sample().biomeId());
+        reached.add(EcologyClassifier.select(0, 0, 2000, 1.1f, false, -10, 250, 2000).sample().biomeId());
         require(reached.size() == EcologyClassifier.BIOMES.size(), "unreachable ecosystems: " + reached);
         require(transitions > 50, "exercise real label boundaries");
         var base = EcologyClassifier.select(0, 0, 300, .1f, false, 15, 800, 300).sample();
         var high = EcologyClassifier.select(0, 0, 800, .1f, false, 15, 800, 300).sample();
-        require(Math.abs(base.temperature() - high.temperature() - 3) < .0001f, "relative elevation lapse");
+        require(base.temperature() - high.temperature() > 1 && base.temperature() - high.temperature() < 2, "relative elevation lapse");
         for (int x = -1024; x < 1024; x++) {
             var a = EcologyClassifier.select(x, 0, 300, .1f, false, 15, 800, 300).sample();
             require(a.biomeId() == base.biomeId(), "no coordinate-dithered biome labels");
@@ -37,6 +39,7 @@ public final class EcologyClassifierTest {
         require(EcologyClassifier.select(0, 0, -100, .1f, false, 15, 800, 300).sample().biomeId() == 0, "ocean retained");
         checkCoastalWater();
         checkRegionalLandIdentity();
+        checkColdEcology();
         checkDryWoodlandBand();
         checkSoilCoveredHills();
         checkSubdivisions();
@@ -113,11 +116,53 @@ public final class EcologyClassifierTest {
         var temperate = EcologyClassifier.select(0, 0, 300, .1f, false, 6, 800, 300);
         require(cold.sample().biomeId() != temperate.sample().biomeId(), "different broad climates must retain different ecosystems");
 
-        var isolatedHighpoint = EcologyClassifier.select(0, 0, 1900, .1f, false, -2, 800, 300);
-        require(isolatedHighpoint.terrainBiomeId() == 0, "isolated highpoint must not become alpine");
-        var broadHighland = EcologyClassifier.select(0, 0, 300, .1f, false, -2, 800, 1900);
-        require("terralith:alpine_highlands".equals(TerralithBiomeClassifier.biomeName(broadHighland.terrainBiomeId())),
-                "cold broad highlands must retain alpine terrain");
+    }
+
+    private static void checkColdEcology() {
+        require(EcologyClassifier.BIOMES.get(11).equals("snowy_boreal_forest")
+                && EcologyClassifier.BIOMES.get(14).equals("steppe"), "existing registry indices remain stable");
+        require(EcologyClassifier.select(0, 0, 300, .1f, false, -5, 700, 300).sample().biomeId() == 12,
+                "wet cold lowlands must be snowy forest");
+        require(EcologyClassifier.select(0, 0, 300, .1f, false, -5, 400, 300).sample().biomeId() == 16,
+                "intermediate moisture must be snowy woodland");
+        require(EcologyClassifier.select(0, 0, 300, .1f, false, -5, 160, 300).sample().biomeId() == 17,
+                "dry cold lowlands must be snowy tundra");
+        require(EcologyClassifier.select(0, 0, 2000, 1.1f, false, -5, 700, 2000).sample().biomeId() == 18,
+                "cold rugged land must be alpine tundra");
+        require(EcologyClassifier.select(0, 0, 2000, 1.1f, false, -10, 700, 2000).sample().biomeId() == 19,
+                "severe cold rugged land must be glacial");
+        for (int elevation = 0; elevation <= 6000; elevation += 25) {
+            var warm = EcologyClassifier.select(0, 0, elevation, .8f, false, 12, 900, 300).sample();
+            require(EcologyClassifier.coldState(warm.temperature()) == 0, "warm mountains cannot become glacial by height");
+            require(!EcologyClassifier.naturalSnowCover(0, 0, elevation, warm.temperature()), "no height-only snow");
+            require(Math.abs(warm.temperature() - 12) <= 2, "local lapse must stay bounded");
+        }
+        for (float moisture : new float[]{.3f, .8f, 1.5f}) {
+            float priorSnow = 1, priorCover = 0;
+            for (int step = -1500; step <= 1000; step++) {
+                float t = step / 100f;
+                var sample = EcologyClassifier.select(-17, 16, 300, .1f, false, t,
+                        moisture * (500 + 20 * Math.max(0, t)), 300).sample();
+                float snow = EcologyClassifier.naturalSnowCoverage(t, 0);
+                require(snow <= priorSnow && priorSnow - snow < .025f, "continuous monotonic snow exposure");
+                require(Math.abs(sample.treeCover() - priorCover) < .01f, "no tree wall at a cold label edge");
+                boolean snowyLabel = sample.biomeId() == 12 || sample.biomeId() >= 16;
+                require(snowyLabel == (EcologyClassifier.coldState(t) >= .5f), "snow identity shares cold state");
+                if (snow == 1) require(snowyLabel, "full snow may not blanket a warm identity");
+                priorSnow = snow; priorCover = sample.treeCover();
+            }
+        }
+        for (float t : new float[]{-5, -2, -1.5f, -1, 2}) {
+            int snow = 0;
+            for (int x = -128; x < 128; x++) for (int z = -128; z < 128; z++) {
+                boolean covered = EcologyClassifier.naturalSnowCover(x, z, 300, t);
+                require(covered == EcologyClassifier.naturalSnowCover(x, z, 4000, t), "snow depends on climate, not height");
+                if (covered) snow++;
+            }
+            float expected = EcologyClassifier.naturalSnowCoverage(t, 0);
+            require(Math.abs(snow / 65536f - expected) < .02f, "column snow fraction follows continuous climate");
+            System.out.printf(java.util.Locale.ROOT, "Cold climate T=%.1f snow=%.4f expected=%.4f%n", t, snow / 65536f, expected);
+        }
     }
     private static void require(boolean ok, String message) { if (!ok) throw new AssertionError(message); }
 }

@@ -13,6 +13,37 @@ SPEC.loader.exec_module(GENERATOR)
 
 
 class GenerateEcologyBiomeTests(unittest.TestCase):
+    def test_steppe_keeps_plain_grass_generation(self):
+        self.assertEqual(("plains", "plains", .7), GENERATOR.SPECS["steppe"])
+
+    def test_native_route_is_conditional_and_preserves_placements_and_flowers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vanilla = root / "vanilla.jar"
+            self._write_fixture(vanilla)
+            output, neo = root / "out", root / "neo"
+            GENERATOR.generate(vanilla, output, neo)
+            first = {p.relative_to(neo): p.read_bytes() for p in neo.rglob("*.json")}
+            GENERATOR.generate(vanilla, output, neo)
+            self.assertEqual(first, {p.relative_to(neo): p.read_bytes() for p in neo.rglob("*.json")})
+            modifiers = neo / "data/terrain-diffusion-mc/neoforge/biome_modifier/greeneries_native"
+            conditions = [{"type": "neoforge:mod_loaded", "modid": "greeneries"}]
+            for name in GENERATOR.SPECS:
+                data = json.loads((modifiers / f"{name}.json").read_text())
+                self.assertEqual(conditions, data["neoforge:conditions"])
+                self.assertEqual("terrain-diffusion-mc:greeneries_native_vegetation", data["type"])
+                self.assertEqual("terrain-diffusion-mc:ecology/" + name, data["biomes"])
+                self.assertEqual(["terrain-diffusion-mc:greeneries_native/" + path
+                                  for path in ("bamboo_light", "vines", "flowers")], data["features"])
+            removal = json.loads((modifiers / "remove_climate_groundcover.json").read_text())
+            self.assertEqual(conditions, removal["neoforge:conditions"])
+            self.assertEqual("neoforge:remove_features", removal["type"])
+            self.assertEqual("terrain-diffusion-mc:eco_groundcover", removal["features"])
+            with ZipFile(vanilla) as jar:
+                for path in (neo / "data/terrain-diffusion-mc/worldgen/placed_feature/greeneries_native").glob("*.json"):
+                    self.assertEqual(json.loads(jar.read(f"data/minecraft/worldgen/placed_feature/{path.name}")),
+                                     json.loads(path.read_text()))
+
     def test_generation_removes_tree_chains_and_preserves_tags_idempotently(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -80,6 +111,10 @@ class GenerateEcologyBiomeTests(unittest.TestCase):
                 archive.writestr(f"data/minecraft/worldgen/biome/{name}.json", json.dumps(biome))
             archive.writestr("data/minecraft/worldgen/placed_feature/trees_chain.json", json.dumps({"feature": "minecraft:tree_config"}))
             archive.writestr("data/minecraft/worldgen/configured_feature/tree_config.json", json.dumps({"type": "minecraft:tree", "config": {}}))
+            for name in ("bamboo_light", "vines", "flowers"):
+                archive.writestr(f"data/minecraft/worldgen/placed_feature/{name}.json",
+                                 json.dumps({"feature": "minecraft:" + name,
+                                             "placement": [{"type": "minecraft:biome"}]}))
             archive.writestr("data/minecraft/tags/worldgen/biome/is_forest.json", json.dumps({"values": ["minecraft:forest", "minecraft:taiga"]}))
             archive.writestr("data/minecraft/tags/worldgen/biome/is_overworld.json", json.dumps({"values": ["#minecraft:is_forest", "minecraft:plains"]}))
 

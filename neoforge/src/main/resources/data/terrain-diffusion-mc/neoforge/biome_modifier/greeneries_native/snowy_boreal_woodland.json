@@ -1,0 +1,20 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "greeneries"
+    }
+  ],
+  "type": "terrain-diffusion-mc:greeneries_native_vegetation",
+  "biomes": "terrain-diffusion-mc:ecology/snowy_boreal_woodland",
+  "features": [
+    "terrain-diffusion-mc:greeneries_native/patch_large_fern",
+    "terrain-diffusion-mc:greeneries_native/flower_default",
+    "terrain-diffusion-mc:greeneries_native/patch_grass_taiga_2",
+    "terrain-diffusion-mc:greeneries_native/brown_mushroom_taiga",
+    "terrain-diffusion-mc:greeneries_native/red_mushroom_taiga",
+    "terrain-diffusion-mc:greeneries_native/patch_sugar_cane",
+    "terrain-diffusion-mc:greeneries_native/patch_pumpkin",
+    "terrain-diffusion-mc:greeneries_native/patch_berry_rare"
+  ]
+}

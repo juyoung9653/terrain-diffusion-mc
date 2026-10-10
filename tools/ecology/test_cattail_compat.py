@@ -23,16 +23,20 @@ def heights(value):
     return range(int(low), int(high or low) + 1)
 
 
-def matches(rule, texture, biome, y):
+def matches(rule, texture, biome, y, *, depth=1.0, source_water=True, fluid_above=False, bridge=True):
+    if rule.get("terrainDiffusion.cattailDepth") == "0.5 1" and bridge:
+        depth_matches = source_water and not fluid_above and depth in (0.5, 1.0)
+    else:
+        depth_matches = y in heights(rule["heights"])
     return (texture in rule["matchTiles"].split() and biome in rule["biomes"].split()
-            and y in heights(rule["heights"]))
+            and depth_matches)
 
 
 class CattailCompatibilityTest(unittest.TestCase):
     def test_freshwater_has_complete_plane_and_base_mask_pair(self):
         rules = [properties((PACK / name).read_text(encoding="utf-8")) for name in RULES[:5]]
         for biome in ("minecraft:river", "minecraft:swamp", "minecraft:mangrove_swamp", "terralith:warm_river"):
-            for y in (62, 63, 125, 196, 319):
+            for y in (-63, 0, 61, 62, 63, 125, 196, 319):
                 with self.subTest(biome=biome, y=y):
                     self.assertTrue(matches(rules[0], "inv_x32", biome, y))
                     self.assertTrue(matches(rules[1], "seagrass", biome, y))
@@ -41,8 +45,19 @@ class CattailCompatibilityTest(unittest.TestCase):
         self.assertEqual(rules[1]["tiles"], "inv_16x")
         self.assertEqual(rules[1]["method"], "fixed")
         for rule in rules:
-            self.assertNotIn(61, heights(rule["heights"]))
-            self.assertNotIn(320, heights(rule["heights"]))
+            self.assertEqual(rule["heights"], "2147483647")
+            self.assertEqual(rule["terrainDiffusion.cattailDepth"], "0.5 1")
+
+    def test_all_paired_rules_reject_deep_flowing_and_covered_plants(self):
+        for name in RULES[:5]:
+            rule = properties((PACK / name).read_text(encoding="utf-8"))
+            for y in (-63, 61, 125, 319):
+                for depth in (0.5, 1.0):
+                    self.assertTrue(matches(rule, rule["matchTiles"], "minecraft:river", y, depth=depth))
+                for depth in (0, 0.25, 0.75, 8/9, 1.5, 2, 10):
+                    self.assertFalse(matches(rule, rule["matchTiles"], "minecraft:river", y, depth=depth))
+                for failure in ({"source_water": False}, {"fluid_above": True}, {"bridge": False}):
+                    self.assertFalse(matches(rule, rule["matchTiles"], "minecraft:river", y, **failure))
 
     def test_marine_and_unclassified_ecology_keep_underwater_textures(self):
         for name in RULES:
@@ -71,8 +86,9 @@ class CattailCompatibilityTest(unittest.TestCase):
             for name in RULES:
                 original = properties(archive.read(name).decode("utf-8"))
                 overlay = properties((PACK / name).read_text(encoding="utf-8"))
-                self.assertEqual({k: v for k, v in original.items() if k not in ("heights", "biomes")},
-                                 {k: v for k, v in overlay.items() if k not in ("heights", "biomes")})
+                changed_keys = ("heights", "biomes", "terrainDiffusion.cattailDepth")
+                self.assertEqual({k: v for k, v in original.items() if k not in changed_keys},
+                                 {k: v for k, v in overlay.items() if k not in changed_keys})
                 for tile in overlay["tiles"].split():
                     tiles = list(heights(tile)) if re.fullmatch(r"\d+-\d+", tile) else [tile]
                     for entry in tiles:
@@ -89,6 +105,10 @@ class CattailCompatibilityTest(unittest.TestCase):
                 self.assertEqual(Image.open(stream).convert("RGBA").getchannel("A").getextrema(), (0, 0))
             model = json.loads(archive.read("assets/minecraft/models/block/tall_seagrass_top.json"))
             self.assertIn("block/inv_x32_1", model["textures"].values())
+            model = json.loads(archive.read("assets/minecraft/models/block/seagrass.json"))
+            self.assertEqual(min(element["from"][1] for element in model["elements"]), 0)
+            self.assertEqual(max(element["to"][1] for element in model["elements"]), 32)
+            self.assertIn("block/inv_x32", model["textures"].values())
 
 
 if __name__ == "__main__":

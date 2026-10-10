@@ -5,6 +5,7 @@
     "terrain-diffusion-mc:ecology/cold_grassland",
     "terrain-diffusion-mc:ecology/dry_woodland",
     "terrain-diffusion-mc:ecology/dry_grassland",
-    "terrain-diffusion-mc:ecology/steppe"
+    "terrain-diffusion-mc:ecology/steppe",
+    "terrain-diffusion-mc:ecology/snowy_tundra"
   ]
 }

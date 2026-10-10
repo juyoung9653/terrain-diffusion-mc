@@ -26,5 +26,6 @@ public final class StreamsRiverBanksMixin {
             at=@At("RETURN"), require=1, remap=false)
     private void terrainDiffusion$finishBanks(FeaturePlaceContext<NoneFeatureConfiguration> context, CallbackInfoReturnable<Boolean> result) {
         if (result.getReturnValueZ()) StreamsRiverBanks.finish(context.level(), context.origin().getX() & ~15, context.origin().getZ() & ~15);
+        else StreamsRiverBanks.finishDryLakeShore(context.level(), context.origin().getX() & ~15, context.origin().getZ() & ~15);
     }
 }

@@ -24,8 +24,9 @@ public final class StreamsShallowBanks {
             Object engine = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen")
                     .getMethod("engine", WorldGenLevel.class).invoke(null, level);
             Object config = engine.getClass().getMethod("config").invoke(engine);
-            if (StreamsNaturalRiverAdapter.version(config) < 6
-                    || (Boolean) engine.getClass().getMethod("lakeNearChunk", int.class, int.class, int.class)
+            int version = StreamsNaturalRiverAdapter.version(config);
+            if (version < 6
+                    || version < 9 && (Boolean) engine.getClass().getMethod("lakeNearChunk", int.class, int.class, int.class)
                     .invoke(engine, pos.getX() & ~15, pos.getZ() & ~15, 8)) return false;
 
             Method plan = engine.getClass().getMethod("plan", int.class, int.class);
@@ -41,6 +42,7 @@ public final class StreamsShallowBanks {
                     || (Boolean) source.invoke(centre) || (Boolean) terminal.invoke(centre)
                     || !Double.isFinite(halfWidth) || !Double.isFinite(lateralDistance)
                     || !(halfWidth > 0.0 && halfWidth < 4.0) || lateralDistance > halfWidth + 3.0) return false;
+            if (version >= 9 && StreamsBankLakeMask.nearColumn(engine, pos.getX(), pos.getZ(), 2)) return false;
 
             boolean nearbyChannel = false;
             int safeWater = Integer.MIN_VALUE;

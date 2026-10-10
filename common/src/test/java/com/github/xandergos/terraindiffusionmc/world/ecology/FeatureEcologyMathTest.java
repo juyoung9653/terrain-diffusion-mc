@@ -145,9 +145,9 @@ public final class FeatureEcologyMathTest {
         for (int modelX = -513; modelX <= 513; modelX += 19) {
             int modelZ = modelX * -3;
             for (float moisture : new float[]{.18f, .28f, .33f}) {
-                var scaleTwo = FeatureEcologyMath.surfaceMaterial(28, moisture, .1f, 0,
+                var scaleTwo = FeatureEcologyMath.surfaceMaterialAt(28, moisture, .1f, 0, 0,
                         seed, modelX * 2, modelZ * 2, 2);
-                var scaleOne = FeatureEcologyMath.surfaceMaterial(28, moisture, .1f, 0,
+                var scaleOne = FeatureEcologyMath.surfaceMaterialAt(28, moisture, .1f, 0, 0,
                         seed, modelX, modelZ, 1);
                 require(scaleTwo == scaleOne, "material field must preserve model-space scale below the fine-patch cap");
             }
@@ -159,8 +159,8 @@ public final class FeatureEcologyMathTest {
             for (int x = -1024; x <= 1024; x += 31) {
                 int z = x * -2 + 7;
                 require(FeatureEcologyMath.surfaceMaterial(0, .2f, .1f, .05f, seed, x, z, 2)
-                                == FeatureEcologyMath.SurfaceMaterial.GRASS,
-                        "cold grassland must exclude warm-arid sand and coarse dirt");
+                                != FeatureEcologyMath.SurfaceMaterial.SAND,
+                        "cold grassland must exclude warm-arid sand while allowing tundra soil");
                 require(FeatureEcologyMath.surfaceMaterial(10, .12f, .1f, 0, seed, x, z, 2)
                                 != FeatureEcologyMath.SurfaceMaterial.SAND,
                         "sand eligibility must remain excluded at the warm-climate boundary");

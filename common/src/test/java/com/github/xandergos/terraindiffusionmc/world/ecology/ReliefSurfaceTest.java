@@ -43,7 +43,7 @@ public final class ReliefSurfaceTest {
         require(valley.biomeId() == ridge.biomeId(), "relief must preserve broad climate identity");
         require(valley.moisture() > ridge.moisture(), "sheltered lowland retains more moisture than drained ridge");
         require(valley.temperature() > ridge.temperature(), "existing physical altitude lapse must remain active");
-        for (float t : new float[]{-5, 4.9f, 5.1f, 17.1f, 22.9f, 23.1f, 28}) {
+        for (float t : new float[]{4.9f, 5.1f, 17.1f, 22.9f, 23.1f, 28}) {
             for (float m : new float[]{.28f, .31f, .50f, .54f, .64f, .66f, 1.1f, 1.5f}) {
                 float rain = m * (500 + 20 * Math.max(0, t));
                 int baseId = EcologyClassifier.select(-16, 16, 300, .1f, false, t, rain, 300).sample().biomeId();
@@ -58,6 +58,7 @@ public final class ReliefSurfaceTest {
         require(!FeatureEcologyMath.dryMineralShore(28, 1.5f), "humid coast is not desert");
         require(!FeatureEcologyMath.dryMineralShore(-4, .2f), "frozen coast is not desert");
         checkBanks();
+        checkFineDither();
         try {
             FeatureEcologyMath.surfaceMaterial(28, .3f, .1f, 0, 100, 0L, 0, 0, 0);
             throw new AssertionError("invalid scale must fail explicitly");
@@ -85,6 +86,27 @@ public final class ReliefSurfaceTest {
         require(desertMineral > total * .95, "deep desert banks remain predominantly mineral");
         System.out.printf("bank grass near=%.3f far=%.3f desert-mineral=%.3f%n",
                 nearGrass / (float) total, farGrass / (float) total, desertMineral / (float) total);
+    }
+
+    private static void checkFineDither() {
+        int changed = 0;
+        for (int x = -128; x < 128; x++) for (int z = -128; z < 128; z++) {
+            var actual = FeatureEcologyMath.surfaceMaterial(28, .26f, .2f, 0, 180, 91357L, x, z, 1);
+            var original = FeatureEcologyMath.surfaceMaterialAt(28, .26f, .2f, 0, 180, 91357L, x, z, 1);
+            require(actual == FeatureEcologyMath.surfaceMaterial(28, .26f, .2f, 0, 180, 91357L, x, z, 1),
+                    "fine dither must be independent of traversal and chunk boundaries");
+            if (actual == original) continue;
+            changed++;
+            boolean nearby = false;
+            for (int dz = -3; dz <= 3 && !nearby; dz++) for (int dx = -3; dx <= 3; dx++) {
+                if (actual == FeatureEcologyMath.surfaceMaterialAt(28, .26f, .2f, 0, 180, 91357L, x+dx, z+dz, 1)) {
+                    nearby = true; break;
+                }
+            }
+            require(nearby, "dither may only borrow existing material within three blocks");
+        }
+        require(changed > 100 && changed < 65536 / 5, "fine dither must change borders while retaining broad patches");
+        System.out.println("Surface fine dither: changed=" + changed + "/65536, radius=3 blocks");
     }
 
     private static float height(int x, int z) {

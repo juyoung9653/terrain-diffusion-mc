@@ -31,6 +31,7 @@ public final class ClientFlowProbe {
 
     @SubscribeEvent
     public static void afterClientTick(ClientTickEvent.Post event) {
+        CattailDepthAudit.tick();
         if (!Boolean.getBoolean("td.clientFlowProbe")) return;
         Minecraft minecraft = Minecraft.getInstance();
         ClientLevel level = minecraft.level;

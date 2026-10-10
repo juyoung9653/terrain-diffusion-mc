@@ -16,6 +16,13 @@ import net.minecraft.world.level.levelgen.Heightmap.Types;
 public final class StreamsRiverBanks {
     private StreamsRiverBanks() { }
     public static void finish(WorldGenLevel level, int minX, int minZ) {
+        finish(level, minX, minZ, true);
+    }
+    /** Native dry chunks can still own the dry side of a lake shore. */
+    public static void finishDryLakeShore(WorldGenLevel level, int minX, int minZ) {
+        if (WorldNaturalRiverState.version(level.getLevel()) >= 9) finish(level, minX, minZ, false);
+    }
+    private static void finish(WorldGenLevel level, int minX, int minZ, boolean nativeCarved) {
         if (WorldNaturalRiverState.version(level.getLevel()) < 4) return;
         try {
             Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen");
@@ -23,8 +30,14 @@ public final class StreamsRiverBanks {
             Object config = engine.getClass().getMethod("config").invoke(engine);
             int version = StreamsNaturalRiverAdapter.version(config);
             if (version < 4) return;
-            if ((Boolean) engine.getClass().getMethod("lakeNearChunk", int.class, int.class, int.class)
+            if (version < 9 && (Boolean) engine.getClass().getMethod("lakeNearChunk", int.class, int.class, int.class)
                     .invoke(engine, minX, minZ, 8)) return;
+            StreamsBankLakeMask lakes = null;
+            if (!nativeCarved) {
+                if (version < 9) return;
+                lakes = new StreamsBankLakeMask(engine, minX, minZ);
+                if (!lakes.hasLake()) return;
+            }
             Class<?> carver = Class.forName("dev.streamsreflowing.worldgen.RiverCarverFeature");
             Method shields = carver.getDeclaredMethod("a", WorldGenLevel.class, ChunkPos.class);
             Method shielded = carver.getDeclaredMethod("a", int[].class, int.class, int.class, int.class);
@@ -33,6 +46,10 @@ public final class StreamsRiverBanks {
             Method blockedBiome = Class.forName("dev.streamsreflowing.worldgen.StreamBiomeBlacklist")
                     .getMethod("isBlocked", Holder.class);
             int sea = (int) StreamsNaturalNetwork.n(config, "seaLevel");
+            if (!nativeCarved) {
+                StreamsNaturalBanks.refineLakeShore(level, minX, minZ, engine, protection, shielded, blockedBiome, lakes);
+                return;
+            }
             if (version == 5) {
                 StreamsNaturalBanks.refine(level, minX, minZ, engine, sea, protection, shielded, blockedBiome);
             }
@@ -57,16 +74,19 @@ public final class StreamsRiverBanks {
                         && bank.distance - bank.width > .5
                         && bank.distance - bank.width < NaturalRiverBankShape.wideCorridor(bank.width)) {
                     int top = level.getHeight(Types.MOTION_BLOCKING_NO_LEAVES, minX + x - 1, minZ + z - 1) - 1;
-                    wideBank = top > bank.surface + 1
+                    wideBank = top > bank.surface
                             && soil(level.getBlockState(new BlockPos(minX + x - 1, top, minZ + z - 1)));
                 }
             }
             if (version >= 7 && wideBank) {
-                StreamsNaturalBanks.refine(level, minX, minZ, engine, sea, protection, shielded, blockedBiome, true);
+                if (version >= 9) lakes = new StreamsBankLakeMask(engine, minX, minZ);
+                StreamsNaturalBanks.refine(level, minX, minZ, engine, sea, protection, shielded, blockedBiome, true, lakes);
             }
             for (int x = 1; x <= 16; x++) for (int z = 1; z <= 16; z++) {
                 BankPlan p = plans[x][z];
                 if (p.channel || !p.corridor || p.source || p.terminal || p.surface <= sea+2 || p.distance > p.width+2) continue;
+                if (version >= 9 && lakes == null) lakes = new StreamsBankLakeMask(engine, minX, minZ);
+                if (lakes != null && lakes.excludes(minX + x - 1, minZ + z - 1, 2)) continue;
                 if (p.distance <= p.width+.5 && connectingCorner(plans, x, z)) {
                     BlockPos cut = new BlockPos(minX+x-1, p.surface, minZ+z-1);
                     boolean clear = soil(level.getBlockState(cut)) && soil(level.getBlockState(cut.below()));
@@ -112,7 +132,14 @@ public final class StreamsRiverBanks {
                 if ((Boolean) shielded.invoke(null, protection, pos.getX(), pos.getZ(), crest-depth)
                         || (Boolean) blockedBiome.invoke(null, level.getBiome(pos.below(depth)))) continue;
                 for (int dy=1;dy<depth;dy++) level.setBlock(pos.below(dy), Blocks.DIRT.defaultBlockState(), 2);
-                level.setBlock(pos, ground.is(Blocks.MUD) ? Blocks.MUD.defaultBlockState() : Blocks.GRASS_BLOCK.defaultBlockState(), 2);
+                BlockState cap = ground.is(Blocks.MUD) ? Blocks.MUD.defaultBlockState() : Blocks.GRASS_BLOCK.defaultBlockState();
+                if (version >= 10) cap = StreamsBankMaterialPolicy.climateBankTop(level,
+                        pos.getX(), pos.getY(), pos.getZ(), cap);
+                level.setBlock(pos, cap, 2);
+            }
+            if (version >= 9) {
+                if (lakes == null) lakes = new StreamsBankLakeMask(engine, minX, minZ);
+                StreamsNaturalBanks.refineLakeShore(level, minX, minZ, engine, protection, shielded, blockedBiome, lakes);
             }
         } catch (ReflectiveOperationException failure) {
             throw new IllegalStateException("Unsupported Streams v4 bank adapter", failure);

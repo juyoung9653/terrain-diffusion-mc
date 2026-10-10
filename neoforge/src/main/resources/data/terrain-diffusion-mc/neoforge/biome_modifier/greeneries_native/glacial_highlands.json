@@ -1,0 +1,18 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "greeneries"
+    }
+  ],
+  "type": "terrain-diffusion-mc:greeneries_native_vegetation",
+  "biomes": "terrain-diffusion-mc:ecology/glacial_highlands",
+  "features": [
+    "terrain-diffusion-mc:greeneries_native/flower_default",
+    "terrain-diffusion-mc:greeneries_native/patch_grass_badlands",
+    "terrain-diffusion-mc:greeneries_native/brown_mushroom_normal",
+    "terrain-diffusion-mc:greeneries_native/red_mushroom_normal",
+    "terrain-diffusion-mc:greeneries_native/patch_sugar_cane",
+    "terrain-diffusion-mc:greeneries_native/patch_pumpkin"
+  ]
+}

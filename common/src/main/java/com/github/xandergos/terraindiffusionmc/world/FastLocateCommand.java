@@ -8,8 +8,9 @@ import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import net.minecraft.commands.CommandSourceStack;
-import net.minecraft.commands.SharedSuggestionProvider;
-import net.minecraft.commands.arguments.ResourceLocationArgument;
+import net.minecraft.commands.arguments.ResourceOrTagKeyArgument;
+import net.minecraft.core.Registry;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
@@ -33,6 +34,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -51,7 +53,6 @@ import static net.minecraft.commands.Commands.literal;
 public final class FastLocateCommand {
     private static final Logger LOG = LoggerFactory.getLogger(FastLocateCommand.class);
     private static final Map<MinecraftServer, Job> JOBS = new IdentityHashMap<>();
-    private static final long DURATION = TimeUnit.SECONDS.toNanos(60);
     private static final net.minecraft.server.level.TicketType<ChunkPos> SEARCH_TICKET =
             net.minecraft.server.level.TicketType.create("td-fast-locate", java.util.Comparator.comparingLong(ChunkPos::toLong));
     private static final int TICKET_DISTANCE = 33 - net.minecraft.server.level.ChunkLevel.byStatus(ChunkStatus.STRUCTURE_STARTS);
@@ -64,15 +65,30 @@ public final class FastLocateCommand {
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> branch(String name, boolean structures) {
-        return literal(name).then(argument("id", ResourceLocationArgument.id())
-                .suggests((context, builder) -> SharedSuggestionProvider.suggestResource(
-                        structures ? context.getSource().registryAccess().registryOrThrow(Registries.STRUCTURE).keySet()
-                                : context.getSource().registryAccess().registryOrThrow(Registries.BIOME).keySet(), builder))
-                .executes(context -> start(context.getSource(), ResourceLocationArgument.getId(context, "id"),
-                        DEFAULT_RADIUS, structures))
+        return structures ? branch(name, Registries.STRUCTURE, true) : branch(name, Registries.BIOME, false);
+    }
+
+    private static <T> LiteralArgumentBuilder<CommandSourceStack> branch(
+            String name, ResourceKey<Registry<T>> registry, boolean structures) {
+        return literal(name).then(argument("id", ResourceOrTagKeyArgument.resourceOrTagKey(registry))
+                .executes(context -> start(context.getSource(),
+                        context.getArgument("id", ResourceOrTagKeyArgument.Result.class), DEFAULT_RADIUS, DEFAULT_SECONDS, structures))
                 .then(argument("radius", IntegerArgumentType.integer(16, MAX_RADIUS))
-                        .executes(context -> start(context.getSource(), ResourceLocationArgument.getId(context, "id"),
-                                IntegerArgumentType.getInteger(context, "radius"), structures))));
+                        .executes(context -> start(context.getSource(),
+                                context.getArgument("id", ResourceOrTagKeyArgument.Result.class),
+                                IntegerArgumentType.getInteger(context, "radius"), DEFAULT_SECONDS, structures))
+                        .then(argument("seconds", IntegerArgumentType.integer(1, MAX_SECONDS))
+                                .executes(context -> start(context.getSource(),
+                                        context.getArgument("id", ResourceOrTagKeyArgument.Result.class),
+                                        IntegerArgumentType.getInteger(context, "radius"),
+                                        IntegerArgumentType.getInteger(context, "seconds"), structures)))));
+    }
+
+    private static <T> List<Holder<T>> resolve(ResourceOrTagKeyArgument.Result<?> target, Registry<T> registry) {
+        var typed = target.cast(registry.key()).orElseThrow();
+        return typed.unwrap().map(key -> registry.getHolder(key)
+                        .map(holder -> List.<Holder<T>>of(holder)).orElse(List.of()),
+                tag -> registry.getTag(tag).map(holders -> holders.stream().toList()).orElse(List.of()));
     }
 
     /** Call before provider shutdown. No interrupt or native future cancellation is safe here. */
@@ -101,7 +117,8 @@ public final class FastLocateCommand {
         return 1;
     }
 
-    private static int start(CommandSourceStack source, ResourceLocation id, int radius, boolean structures) {
+    private static int start(CommandSourceStack source, ResourceOrTagKeyArgument.Result<?> target, int radius, int seconds, boolean structures) {
+        String id = target.asPrintable();
         MinecraftServer server = source.getServer();
         synchronized (JOBS) {
             if (JOBS.containsKey(server)) {
@@ -118,43 +135,48 @@ public final class FastLocateCommand {
         try {
             BlockPos origin = BlockPos.containing(source.getPosition());
             Set<Holder<Biome>> accepted;
-            Holder<Structure> structure = null;
-            List<RandomSpreadStructurePlacement> placements = new ArrayList<>();
+            List<PlacementTarget> placements = new ArrayList<>();
             ChunkGeneratorStructureState state = level.getChunkSource().getGeneratorState();
             if (structures) {
                 var registry = source.registryAccess().registryOrThrow(Registries.STRUCTURE);
-                var holder = registry.getHolder(net.minecraft.resources.ResourceKey.create(Registries.STRUCTURE, id));
-                if (holder.isEmpty()) {
-                    source.sendFailure(Component.literal("[td-locate] 등록되지 않은 구조물: " + id)); return 0;
+                var holders = resolve(target, registry);
+                if (holders.isEmpty()) {
+                    source.sendFailure(Component.literal("[td-locate] Missing structure or empty/missing tag: " + id)); return 0;
                 }
-                structure = holder.get();
-                for (var placement : state.getPlacementsForStructure(structure)) {
-                    if (!(placement instanceof RandomSpreadStructurePlacement random)) {
-                        source.sendFailure(Component.literal("[td-locate] 원형/사용자 정의 배치는 빠른 탐색을 지원하지 않습니다. /locate structure " + id));
-                        return 0;
+                Set<Holder<Biome>> biomes = new HashSet<>();
+                int unsupported = 0;
+                for (var holder : holders) {
+                    boolean supported = false;
+                    for (var placement : state.getPlacementsForStructure(holder)) {
+                        if (placement instanceof RandomSpreadStructurePlacement random) {
+                            placements.add(new PlacementTarget(holder, random)); supported = true;
+                        } else unsupported++;
                     }
-                    placements.add(random);
+                    if (supported) holder.value().biomes().forEach(biomes::add);
                 }
                 if (placements.isEmpty()) {
-                    source.sendFailure(Component.literal("[td-locate] 이 차원에 해당 구조물 배치가 없습니다. /locate structure " + id)); return 0;
+                    source.sendFailure(Component.literal("[td-locate] No supported random-spread placements in this dimension: " + id
+                            + ". Use /locate structure " + id)); return 0;
                 }
-                accepted = Set.copyOf(structure.value().biomes().stream().toList());
+                if (unsupported > 0) tell(source, "[td-locate] Skipping " + unsupported
+                        + " unsupported ring/custom placements in " + id + "; use /locate for those.");
+                accepted = Set.copyOf(biomes);
             } else {
                 var registry = source.registryAccess().registryOrThrow(Registries.BIOME);
-                var holder = registry.getHolder(net.minecraft.resources.ResourceKey.create(Registries.BIOME, id));
-                if (holder.isEmpty()) {
-                    source.sendFailure(Component.literal("[td-locate] 등록되지 않은 바이옴: " + id)); return 0;
+                var holders = resolve(target, registry);
+                if (holders.isEmpty()) {
+                    source.sendFailure(Component.literal("[td-locate] Missing biome or empty/missing tag: " + id)); return 0;
                 }
-                accepted = Set.of(holder.get());
-                if (!biomeSource.possibleBiomes().contains(holder.get())) {
-                    source.sendFailure(Component.literal("[td-locate] 이 바이옴 소스는 해당 바이옴을 생성하지 않습니다: " + id)); return 0;
+                accepted = Set.copyOf(holders.stream().filter(biomeSource.possibleBiomes()::contains).toList());
+                if (accepted.isEmpty()) {
+                    source.sendFailure(Component.literal("[td-locate] No biome in this target is generated by this source: " + id)); return 0;
                 }
             }
             Job job = new Job(source, level, biomeSource, LocalTerrainProvider.getInstance(), origin,
-                    radius, id, accepted, structure, List.copyOf(placements), state);
+                    radius, seconds, id, accepted, structures, List.copyOf(placements), state);
             synchronized (JOBS) { JOBS.put(server, job); }
             tell(source, "[td-locate] START " + id + " · 반경 " + radius
-                    + " · 후보 우선 탐색 후 실제 검증 (가장 가까운 결과 보장 없음), 탐색 예산 60초 (진행 중인 계산 정리는 더 걸릴 수 있음)");
+                    + " · 후보 우선 탐색 후 실제 검증 (가장 가까운 결과 보장 없음), 탐색 예산 " + seconds + "초 (진행 중인 계산 정리는 더 걸릴 수 있음)");
             Thread thread = new Thread(job::run, "td-fast-locate");
             thread.setDaemon(true);
             thread.start();
@@ -170,8 +192,10 @@ public final class FastLocateCommand {
         source.sendSuccess(() -> Component.literal(text), false);
     }
 
-    private record StructureCandidate(Point point, RandomSpreadStructurePlacement placement, int sector) { }
-    private record Match(BlockPos position, String semantics) { }
+    private record PlacementTarget(Holder<Structure> structure, RandomSpreadStructurePlacement placement) { }
+    private record PlacementGroup(RandomSpreadStructurePlacement placement, List<Holder<Structure>> structures) { }
+    private record StructureCandidate(Point point, PlacementGroup group) { }
+    private record Match(BlockPos position, ResourceLocation matchedId, String semantics) { }
 
     private static final class Job {
         final CommandSourceStack source;
@@ -184,13 +208,18 @@ public final class FastLocateCommand {
         final Point center;
         final int radius, tileSize, scale;
         final int[] heights;
-        final ResourceLocation id;
+        final String id;
         final Set<Holder<Biome>> accepted;
-        final Holder<Structure> structure;
+        final boolean searchingStructures;
+        final List<Point> searchPatches;
         final ChunkGeneratorStructureState state;
-        final List<StructureCandidate> structureCandidates;
+        final List<PlacementGroup> placementGroups;
+        final Map<PlacementGroup, Set<Point>> visitedRegions = new HashMap<>();
+        final Map<Point, List<StructureCandidate>> structuresByPoint = new HashMap<>();
+        final Set<Point> visitedTiles = new HashSet<>();
+        final Set<Point> visitedStarts = new HashSet<>();
         final UUID playerId;
-        final Budget budget = new Budget(System::nanoTime, DURATION);
+        final Budget budget;
         volatile boolean stopped;
         volatile String phase = "광역 기후 후보 준비";
         // Server-thread owned. UNKNOWN tickets expire after one tick; remote async
@@ -205,31 +234,60 @@ public final class FastLocateCommand {
         }
 
         Job(CommandSourceStack source, ServerLevel level, TerrainDiffusionBiomeSource biomeSource,
-            LocalTerrainProvider provider, BlockPos origin, int radius, ResourceLocation id,
-            Set<Holder<Biome>> accepted, Holder<Structure> structure,
-            List<RandomSpreadStructurePlacement> placements, ChunkGeneratorStructureState state) {
+            LocalTerrainProvider provider, BlockPos origin, int radius, int seconds, String id,
+            Set<Holder<Biome>> accepted, boolean searchingStructures,
+            List<PlacementTarget> placements, ChunkGeneratorStructureState state) {
             this.source = source; this.server = source.getServer(); this.level = level;
             this.chunks = level.getChunkSource(); this.biomeSource = biomeSource; this.provider = provider;
             this.origin = origin; this.center = new Point(origin.getX(), origin.getZ());
-            this.radius = radius; this.id = id; this.accepted = accepted; this.structure = structure; this.state = state;
+            this.radius = radius; this.id = id; this.accepted = accepted; this.searchingStructures = searchingStructures;
+            this.budget = new Budget(System::nanoTime, TimeUnit.SECONDS.toNanos(seconds));
+            this.searchPatches = patches(center, radius); this.state = state;
             this.tileSize = LocalTerrainProvider.sampleTileSize(); this.scale = WorldScaleManager.getCurrentScale();
             this.heights = Mth.outFromOrigin(Mth.clamp(origin.getY(), level.getMinBuildHeight() + 1, level.getMaxBuildHeight() - 1),
                     level.getMinBuildHeight() + 1, level.getMaxBuildHeight(), 32).map(y -> Math.floorDiv(y, 4) * 4).distinct().toArray();
             this.playerId = source.getEntity() instanceof ServerPlayer player ? player.getUUID() : null;
-            // Capture placement-derived coordinates on the server, before background inference.
-            List<StructureCandidate> candidates = new ArrayList<>();
-            Set<String> seen = new HashSet<>();
-            int sector = 0;
-            for (Point patch : patches(center, radius)) {
-                for (Point probe : probes(patch)) for (var placement : placements) {
-                    ChunkPos chunk = placement.getPotentialStructureChunk(state.getLevelSeed(), probe.x() >> 4, probe.z() >> 4);
-                    Point point = new Point(chunk.getMinBlockX(), chunk.getMinBlockZ());
-                    if (inside(point, center, radius) && seen.add(chunk.toLong() + ":" + placements.indexOf(placement)))
-                        candidates.add(new StructureCandidate(point, placement, sector));
+            // Village variants share one placement. Snapshot only the immutable grouping here;
+            // enumerate coordinates lazily in bounded server tasks after the command returns.
+            Map<RandomSpreadStructurePlacement, List<Holder<Structure>>> grouped = new LinkedHashMap<>();
+            for (PlacementTarget target : placements)
+                grouped.computeIfAbsent(target.placement(), ignored -> new ArrayList<>()).add(target.structure());
+            this.placementGroups = grouped.entrySet().stream()
+                    .map(entry -> new PlacementGroup(entry.getKey(), List.copyOf(entry.getValue()))).toList();
+        }
+
+        List<StructureCandidate> planStructures(Point patch, int extent, int remainingPatches) throws Exception {
+            List<StructureCandidate> result = new ArrayList<>();
+            int patchEnd = budget.regions() + regionAllowance(REGION_LIMIT - budget.regions(), remainingPatches);
+            for (int groupIndex = 0; groupIndex < placementGroups.size(); groupIndex++) {
+                if (!budget.live() || budget.regions() >= patchEnd) break;
+                PlacementGroup group = placementGroups.get(groupIndex);
+                int allowance = regionAllowance(patchEnd - budget.regions(), placementGroups.size() - groupIndex);
+                Set<Point> seen = visitedRegions.computeIfAbsent(group, ignored -> new HashSet<>());
+                List<Point> regions = placementRegions(patch, extent, center, radius, group.placement().spacing())
+                        .stream().filter(region -> !seen.contains(region)).limit(allowance).toList();
+                for (int first = 0; first < regions.size() && budget.live(); first += REGION_BATCH) {
+                    List<Point> batch = regions.subList(first, Math.min(first + REGION_BATCH, regions.size()));
+                    List<StructureCandidate> planned = main(() -> {
+                        List<StructureCandidate> candidates = new ArrayList<>();
+                        for (Point region : batch) {
+                            if (!budget.takeRegion()) break;
+                            seen.add(region);
+                            ChunkPos chunk = group.placement().getPotentialStructureChunk(state.getLevelSeed(),
+                                    region.x() * group.placement().spacing(), region.z() * group.placement().spacing());
+                            Point point = new Point(chunk.getMinBlockX(), chunk.getMinBlockZ());
+                            if (inside(point, center, radius)) candidates.add(new StructureCandidate(point, group));
+                        }
+                        return candidates;
+                    });
+                    for (StructureCandidate candidate : planned) {
+                        structuresByPoint.computeIfAbsent(candidate.point(), ignored -> new ArrayList<>()).add(candidate);
+                        result.add(candidate);
+                    }
+                    if (budget.regions() >= REGION_LIMIT) break;
                 }
-                sector++;
             }
-            this.structureCandidates = List.copyOf(candidates);
+            return result;
         }
 
         List<Point> probes(Point patch) {
@@ -242,7 +300,8 @@ public final class FastLocateCommand {
             return result;
         }
 
-        String counts() { return "기후 " + budget.patches() + "/25, 지형 " + budget.tiles() + "/64, 구조물 시작 " + budget.starts() + "/32"; }
+        String counts() { return "기후 " + budget.patches() + "/" + searchPatches.size() + ", 지형 " + budget.tiles() + "/" + TILE_LIMIT + ", 구조물 시작 " + budget.starts() + "/" + START_LIMIT
+                + (searchingStructures ? ", 배치 영역 " + budget.regions() + "/" + REGION_LIMIT : ""); }
 
         /** All player/world liveness reads happen on the server. */
         boolean valid() {
@@ -276,14 +335,21 @@ public final class FastLocateCommand {
         void run() {
             try {
                 Match match = provider.withBinding(() -> provider.withPriority(InferenceExecutor.Priority.BACKGROUND, () -> {
-                    List<Candidate> candidates = coarse();
-                    return structure == null ? biomes(candidates) : structures(candidates);
+                    for (int first = 0; first < searchPatches.size() && budget.live(); first += PATCH_BATCH) {
+                        if (searchingStructures ? budget.starts() >= START_LIMIT : budget.tiles() >= TILE_LIMIT) break;
+                        int allowance = batchAllowance(searchingStructures ? START_LIMIT - budget.starts() : TILE_LIMIT - budget.tiles(),
+                                searchPatches.size() - first);
+                        List<Candidate> candidates = coarse(first, Math.min(first + PATCH_BATCH, searchPatches.size()));
+                        Match result = searchingStructures ? structures(candidates, allowance) : biomes(candidates, allowance);
+                        if (result != null) return result;
+                    }
+                    return null;
                 }));
                 main(() -> {
                     if (match == null || !budget.live()) tell(source, "[td-locate] EXHAUSTED 탐색 예산/후보 내에서 검증된 결과를 찾지 못했습니다. 존재하지 않는다는 뜻은 아닙니다. " + counts());
                     else {
                         BlockPos pos = match.position();
-                        tell(source, "[td-locate] FOUND " + id + " [" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ()
+                        tell(source, "[td-locate] FOUND " + match.matchedId() + " (" + id + ") [" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ()
                                 + "] · " + match.semantics() + " · 가장 가까운 결과 보장 없음 · " + counts());
                     }
                     return null;
@@ -304,13 +370,18 @@ public final class FastLocateCommand {
             }
         }
 
-        List<Candidate> coarse() throws Exception {
+        List<Candidate> coarse(int first, int end) throws Exception {
+            phase = "광역 기후 후보 준비";
             List<Candidate> candidates = new ArrayList<>();
-            int sector = 0;
-            for (Point patch : patches(center, radius)) {
+            int sector = first;
+            for (Point patch : searchPatches.subList(first, end)) {
                 if (!budget.takePatch()) break;
                 main(() -> null); // Reject disconnected/moved owners before every native batch.
                 int extent = Math.min(512, Math.max(16, radius / 2));
+                List<StructureCandidate> localStructures = searchingStructures
+                        ? planStructures(patch, extent, searchPatches.size() - sector) : List.of();
+                if (searchingStructures && localStructures.isEmpty()) { sector++; continue; }
+                if (!budget.live()) break;
                 BroadEcologyClimate climate = biomeSource.naturalBiomes()
                         ? LocalTerrainProvider.getBroadEcologyClimate(patch.x() - extent, patch.z() - extent,
                                 patch.x() + extent + 1, patch.z() + extent + 1, scale) : null;
@@ -318,30 +389,32 @@ public final class FastLocateCommand {
                         ? LocalTerrainProvider.getCoarseBiomeHints(patch.x() - extent, patch.z() - extent,
                                 patch.x() + extent + 1, patch.z() + extent + 1, scale) : null;
                 if (!budget.live()) break;
-                if (structure == null) {
+                if (!searchingStructures) {
                     for (Point point : probes(patch)) {
                         Holder<Biome> hint = biomeSource.fastLocateHint(point.x(), point.z(), climate, hints);
                         candidates.add(new Candidate(point, hint != null && accepted.contains(hint) ? 1 : 0, sector));
                     }
                 } else {
-                    for (StructureCandidate candidate : structureCandidates) if (candidate.sector() == sector) {
-                        // Large spacing may place the candidate outside this local climate patch.
-                        // The clamped hint only ranks; actual placement and starts remain authoritative.
-                        int x = Mth.clamp(candidate.point().x(), patch.x() - extent, patch.x() + extent);
-                        int z = Mth.clamp(candidate.point().z(), patch.z() - extent, patch.z() + extent);
-                        Holder<Biome> hint = biomeSource.fastLocateHint(x, z, climate, hints);
+                    for (StructureCandidate candidate : localStructures) {
+                        // A region's start can fall beyond this climate patch. Keep it as an
+                        // unranked fallback instead of borrowing an unrelated clamped biome.
+                        Holder<Biome> hint = inside(candidate.point(), patch, extent)
+                                ? biomeSource.fastLocateHint(candidate.point().x(), candidate.point().z(), climate, hints) : null;
                         candidates.add(new Candidate(candidate.point(), hint != null && accepted.contains(hint) ? 1 : 0, sector));
                     }
                 }
                 sector++;
                 if (sector % 5 == 0) main(() -> { tell(source, "[td-locate] PROGRESS " + phase + " · " + counts()); return null; });
             }
-            return ranked(candidates, center, structure == null ? tileSize : 16);
+            return ranked(candidates, center, !searchingStructures ? tileSize : 16);
         }
 
-        Match biomes(List<Candidate> candidates) throws Exception {
+        Match biomes(List<Candidate> candidates, int allowance) throws Exception {
             phase = "정확한 지형 타일/Y 바이옴 검증";
-            return findVerified(candidates, budget, candidate -> {
+            List<Candidate> unseen = candidates.stream().filter(c -> !visitedTiles.contains(c.point().tile(tileSize)))
+                    .limit(allowance).toList();
+            return findVerified(unseen, budget, candidate -> {
+                visitedTiles.add(candidate.point().tile(tileSize));
                 main(() -> null);
                 Point tile = candidate.point().tile(tileSize);
                 var data = provider.fetchBiomeHeightmap(tile.z(), tile.x(), tile.z() + tileSize, tile.x() + tileSize);
@@ -350,8 +423,9 @@ public final class FastLocateCommand {
                     for (int x = tile.x(); x < tile.x() + tileSize; x += 4) {
                         if (!inside(new Point(x, z), center, radius)) continue;
                         for (int y : heights) {
-                            if (accepted.contains(biomeSource.fastLocateBiome(x, y, z, tile.x(), tile.z(), data)))
-                                return new Match(new BlockPos(x, y, z), "바이옴 소스의 정확한 quart 표본 (저장 청크/F3 경계와 다를 수 있음)");
+                            Holder<Biome> actual = biomeSource.fastLocateBiome(x, y, z, tile.x(), tile.z(), data);
+                            if (accepted.contains(actual))
+                                return new Match(new BlockPos(x, y, z), actual.unwrapKey().orElseThrow().location(), "바이옴 소스의 정확한 quart 표본 (저장 청크/F3 경계와 다를 수 있음)");
                         }
                     }
                 }
@@ -360,20 +434,20 @@ public final class FastLocateCommand {
             });
         }
 
-        Match structures(List<Candidate> candidates) throws Exception {
+        Match structures(List<Candidate> candidates, int allowance) throws Exception {
             phase = "구조물 배치 및 실제 시작 검증";
-            Map<Point, List<StructureCandidate>> byPoint = new HashMap<>();
-            for (StructureCandidate candidate : structureCandidates)
-                byPoint.computeIfAbsent(candidate.point(), ignored -> new ArrayList<>()).add(candidate);
+            int batchEnd = budget.starts() + allowance;
             for (Candidate candidate : candidates) {
-                if (!budget.live()) break;
+                if (!budget.live() || budget.starts() >= batchEnd) break;
+                if (visitedStarts.contains(candidate.point())) continue;
                 StructureCandidate chosen = main(() -> {
-                    for (StructureCandidate option : byPoint.get(candidate.point()))
-                        if (option.placement().isStructureChunk(state, option.point().x() >> 4, option.point().z() >> 4)) return option;
+                    for (StructureCandidate option : structuresByPoint.get(candidate.point()))
+                        if (option.group().placement().isStructureChunk(state, option.point().x() >> 4, option.point().z() >> 4)) return option;
                     return null;
                 });
                 if (chosen == null) continue;
                 if (!budget.takeStart()) break;
+                visitedStarts.add(candidate.point());
                 main(() -> {
                     releaseTicket();
                     if (!budget.live()) throw new CancellationException();
@@ -402,11 +476,23 @@ public final class FastLocateCommand {
                 Match match = main(() -> {
                     var chunk = future.join().orElse(null);
                     if (chunk == null) throw new IllegalStateException("Structure-start chunk unavailable: " + future.join().getError());
-                    var start = chunk.getStartForStructure(structure.value());
-                    if (start == null || !start.isValid()) return null;
-                    BlockPos pos = chosen.placement().getLocatePos(start.getChunkPos());
-                    if (!inside(new Point(pos.getX(), pos.getZ()), center, radius)) return null;
-                    return new Match(pos, "STRUCTURE_STARTS의 유효한 실제 구조물 시작 확인");
+                    // Planning is incremental, so inspect every requested variant in this exact
+                    // chunk, including variants whose region would be encountered in a later patch.
+                    for (PlacementGroup group : placementGroups) {
+                        boolean placementChecked = false;
+                        for (Holder<Structure> structure : group.structures()) {
+                            var start = chunk.getStartForStructure(structure.value());
+                            if (start == null || !start.isValid()) continue;
+                            if (!placementChecked && !group.placement().isStructureChunk(state,
+                                    candidate.point().x() >> 4, candidate.point().z() >> 4)) break;
+                            placementChecked = true;
+                            BlockPos pos = group.placement().getLocatePos(start.getChunkPos());
+                            if (!inside(new Point(pos.getX(), pos.getZ()), center, radius)) continue;
+                            return new Match(pos, structure.unwrapKey().orElseThrow().location(),
+                                    "STRUCTURE_STARTS의 유효한 실제 구조물 시작 확인");
+                        }
+                    }
+                    return null;
                 });
                 if (match != null) return match;
                 if (budget.starts() % 4 == 0) main(() -> { tell(source, "[td-locate] PROGRESS " + phase + " · " + counts()); return null; });

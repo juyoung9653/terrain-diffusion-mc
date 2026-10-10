@@ -2,6 +2,9 @@
   "replace": false,
   "values": [
     "terrain-diffusion-mc:snowy_taiga_sparse",
-    "terrain-diffusion-mc:ecology/snowy_boreal_forest"
+    "terrain-diffusion-mc:ecology/snowy_boreal_forest",
+    "terrain-diffusion-mc:ecology/snowy_boreal_woodland",
+    "terrain-diffusion-mc:ecology/snowy_tundra",
+    "terrain-diffusion-mc:ecology/alpine_tundra"
   ]
 }

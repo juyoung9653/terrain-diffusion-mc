@@ -1,0 +1,15 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "lush"
+    },
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "greeneries"
+    }
+  ],
+  "type": "terrain-diffusion-mc:lush_ecology_vegetation",
+  "biomes": "#terrain-diffusion-mc:ecology",
+  "features": "terrain-diffusion-mc:lush_ecology_vegetation"
+}

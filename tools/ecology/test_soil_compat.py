@@ -57,7 +57,7 @@ class SoilCompatibilityResourcesTest(unittest.TestCase):
         feature_tag = load_json(FEATURE_TAG)
         modifier = load_json(MODIFIER)
 
-        self.assertEqual(15, len(expected_biomes))
+        self.assertEqual(19, len(expected_biomes))
         self.assertEqual({"replace": False, "values": expected_biomes}, biome_tag)
         self.assertEqual(
             {

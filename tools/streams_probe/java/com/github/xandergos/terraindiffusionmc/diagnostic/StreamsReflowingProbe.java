@@ -97,6 +97,12 @@ public final class StreamsReflowingProbe {
         String terminal = "success";
         try {
             ServerLevel level = server.overworld();
+            if (Boolean.getBoolean("td.streamsProbe.riverScreenshotAudit")) {
+                RiverScreenshotAudit.run(level, server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
+                        .resolve("river-screenshot-audit"));
+                emit(receipts, json("river_screenshot_audit", "status", "passed"));
+                return;
+            }
             int expectedNaturalProfile = Integer.getInteger("td.streamsProbe.expectedNaturalProfile", 0);
             if (expectedNaturalProfile > 0 && (!com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.enabled(level)
                     || com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.version(level) != expectedNaturalProfile)) {
@@ -248,6 +254,10 @@ public final class StreamsReflowingProbe {
             if (Boolean.getBoolean("td.streamsProbe.ecologyOverview")) {
                 emit(receipts, writeEcologyOverview(server));
             }
+            if (Boolean.getBoolean("tdProbe.riverClimateAudit") || Boolean.getBoolean("td.streamsProbe.riverClimateAudit")) {
+                for (String entry : server.submit(() -> RiverClimateAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS)) emit(receipts, entry);
+            }
             if (Boolean.getBoolean("td.streamsProbe.bankWidthAudit") && !completed.isEmpty()) {
                 tickAuditForcedChunks.addAll(server.submit(() -> forceTickAuditChunks(level, completed))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
@@ -259,14 +269,67 @@ public final class StreamsReflowingProbe {
             }
             if (Boolean.getBoolean("td.streamsProbe.greeneriesDensityAudit") && !completed.isEmpty()) {
                 ChunkReceipt first = completed.getFirst();
-                emit(receipts, server.submit(() -> GreeneriesDensityAudit.runFixture(level, first.chunkX, first.chunkZ))
+                emit(receipts, server.submit(() -> {
+                    level.getChunk(first.chunkX, first.chunkZ);
+                    return GreeneriesDensityAudit.runFixture(level, first.chunkX, first.chunkZ);
+                })
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.lushDensityAudit") && !completed.isEmpty()) {
+                ChunkReceipt first = completed.getFirst();
+                emit(receipts, server.submit(() -> {
+                    level.getChunk(first.chunkX, first.chunkZ);
+                    return LushDensityAudit.run(level, first.chunkX, first.chunkZ);
+                })
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.surfaceBoundaryAudit") && !completed.isEmpty()) {
+                ChunkReceipt first = completed.getFirst();
+                emit(receipts, server.submit(() -> {
+                    level.getChunk(first.chunkX, first.chunkZ);
+                    return SurfaceBoundaryAudit.run(level, first.chunkX * 16 + 8, first.chunkZ * 16 + 8, 128);
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.coldWeatherAudit")) {
+                for (ChunkReceipt receipt : completed) {
+                    emit(receipts, server.submit(() -> {
+                        try {
+                            level.getChunk(receipt.chunkX, receipt.chunkZ);
+                            return ColdWeatherAudit.run(level, receipt.chunkX, receipt.chunkZ);
+                        }
+                        catch (ReflectiveOperationException error) { throw new IllegalStateException(error); }
+                    })
+                            .get(config.timeoutSeconds, TimeUnit.SECONDS));
+                }
+            }
+            if (Boolean.getBoolean("td.streamsProbe.coldBiomeSpatialAudit") && !completed.isEmpty()) {
+                emit(receipts, server.submit(() -> ColdBiomeSpatialAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.terrainSnowAudit") && !completed.isEmpty()) {
+                ChunkReceipt first = completed.getFirst();
+                emit(receipts, server.submit(() -> TerrainSnowAudit.run(level,
+                        first.chunkX * 16 + 8, first.chunkZ * 16 + 8))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            }
+            if (Boolean.getBoolean("td.streamsProbe.snowGroundAudit") && !completed.isEmpty()) {
+                ChunkReceipt first = completed.getFirst();
+                for (String entry : server.submit(() -> {
+                    level.getChunk(first.chunkX, first.chunkZ);
+                    return SnowGroundAudit.run(level, first.chunkX, first.chunkZ, 2);
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS)) emit(receipts, entry);
             }
             if (Boolean.getBoolean("td.streamsProbe.vegetationSnowAudit") && !completed.isEmpty()) {
                 ChunkReceipt first = completed.getFirst();
-                emit(receipts, server.submit(() -> VegetationSnowAudit.run(level, first.chunkX, first.chunkZ, 1))
+                emit(receipts, server.submit(() -> {
+                    level.getChunk(first.chunkX, first.chunkZ);
+                    return VegetationSnowAudit.run(level, first.chunkX, first.chunkZ, 1);
+                })
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
-                emit(receipts, server.submit(() -> VegetationSnowAudit.runFixture(level, first.chunkX, first.chunkZ))
+                emit(receipts, server.submit(() -> {
+                    level.getChunk(first.chunkX, first.chunkZ);
+                    return VegetationSnowAudit.runFixture(level, first.chunkX, first.chunkZ);
+                })
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
             }
             if (Boolean.getBoolean("td.streamsProbe.aquaticPlacementFixture") && !completed.isEmpty()) {

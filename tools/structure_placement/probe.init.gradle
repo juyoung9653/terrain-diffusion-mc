@@ -1,0 +1,14 @@
+gradle.projectsEvaluated {
+    def project = gradle.rootProject.findProject(':neoforge')
+    if (project == null) return
+    project.sourceSets.main.java.srcDir(new File(gradle.rootProject.rootDir, 'tools/structure_placement/probe-java'))
+    def directory = gradle.rootProject.findProperty('tdStructureProbeDir')
+    if (directory != null) project.extensions.getByName('neoForge').runs.named('server') {
+        gameDirectory = project.file(directory)
+    }
+    project.tasks.named('runServer') {
+        args 'nogui'
+        maxHeapSize = '8G'
+        systemProperty 'td.structureProbe', 'true'
+    }
+}

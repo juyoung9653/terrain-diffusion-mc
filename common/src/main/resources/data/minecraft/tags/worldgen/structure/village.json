@@ -1,0 +1,10 @@
+{
+  "replace": false,
+  "values": [
+    "terrain-diffusion-mc:basic_village_plains",
+    "terrain-diffusion-mc:basic_village_desert",
+    "terrain-diffusion-mc:basic_village_savanna",
+    "terrain-diffusion-mc:basic_village_snowy",
+    "terrain-diffusion-mc:basic_village_taiga"
+  ]
+}

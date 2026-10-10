@@ -19,12 +19,13 @@ public abstract class StructureCheckMixin {
     @Inject(method = "canCreateStructure", at = @At("HEAD"), cancellable = true)
     private void terrainDiffusion$deferLockedTerrainProbe(ChunkPos pos, Structure structure,
                                                          CallbackInfoReturnable<Boolean> cir) {
-        if (biomeSource.getClass() == TerrainDiffusionBiomeSource.class && Thread.holdsLock(this)) {
+        if (biomeSource.getClass() == TerrainDiffusionBiomeSource.class) {
             // Async Locator synchronizes checkStart AND onStructureLoad on this object.
             // A speculative generation point can wait for native terrain for seconds.
             // True means CHUNK_LOAD_NEEDED, never START_PRESENT: the caller still checks
             // the actual STRUCTURE_STARTS chunk. Saved starts and placement restrictions
-            // were already checked before this method. Unlocked vanilla probes stay intact.
+            // were already checked before this method. Bounded alternate jigsaw origins
+            // may succeed when the original stub fails, so unlocked TD probes also defer.
             cir.setReturnValue(true);
         }
     }

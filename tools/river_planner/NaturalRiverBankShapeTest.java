@@ -12,6 +12,7 @@ public final class NaturalRiverBankShapeTest {
         handlesNegativeCoordinatesDeterministically();
         holdsInvariantsAcrossInputs();
         softensMeasuredWideSlope();
+        softensReportedFlatSteppeBank();
         preservesWideBankExclusionsAndContainment();
         System.out.println("NaturalRiverBankShapeTest: passed");
     }
@@ -99,18 +100,34 @@ public final class NaturalRiverBankShapeTest {
 
     private static void softensMeasuredWideSlope() {
         // Same-seed native bank audit: Y66 water, outer grass Y68/69 at these edge distances.
-        check(wide(68, 66, 63, 4.65 + 3.9, 4.65, 0, -841, -1028) == 67,
+        check(wide(68, 66, 63, 4.65 + 3.9, 4.65, 0, -841, -1028) == 66,
                 "observed inner wide slope did not soften");
-        check(wide(69, 66, 63, 4.65 + 4.8, 4.65, 0, -841, -1029) == 68,
+        check(wide(69, 66, 63, 4.65 + 4.8, 4.65, 0, -841, -1029) == 67,
                 "observed outer wide slope did not soften");
         check(wide(69, 66, 63, 4.65 + 5.8, 4.65, 0, -841, -1030) == 69,
                 "cut did not taper into original outer terrain");
-        check(wide(67, 66, 63, 4.65 + 2, 4.65, 0, -841, -1026) == 67,
-                "existing water freeboard was cut");
+        check(wide(67, 66, 63, 4.65 + 2, 4.65, 0, -841, -1026) == 66,
+                "unnecessary flat dry lip remains above the containing block");
         check(wide(69, 69, 63, 8.5, 4.65, 0, -841, -1028) == 69,
                 "higher adjacent channel was not respected");
         check(wide(68, 66, 63, 8.5, 4.65, .4, -841, -1028) == 68,
                 "steep channel margin was flattened");
+    }
+
+    private static void softensReportedFlatSteppeBank() {
+        // World8 seed1711369135124786732, native plan and actual pre-fix cross section.
+        check(wide(75, 74, 63, 6.156349522978685, 4.180684329218915, 0, 606, 1017) == 74,
+                "reported one-block steppe bank still has a dry parapet");
+        check(wide(75, 74, 63, 6.870245802448411, 4.682542634252002, 0, 600, 1017) == 74,
+                "other bank arm retained its dry parapet");
+        check(wide(78, 74, 63, 8.304841438574696, 4.676415184460908, 0, 602, 1017) == 76,
+                "inner ridge must soften within the existing two-block cut cap");
+        check(wide(77, 74, 63, 7.257293408809217, 4.199570266334766, 0, 604, 1017) == 75,
+                "reported outer slope failed to taper toward the waterline");
+        check(wide(74, 74, 63, 6.156349522978685, 4.180684329218915, 0, 606, 1017) == 74,
+                "existing containing bank block was removed");
+        check(wide(75, 75, 63, 6.156349522978685, 4.180684329218915, 0, 606, 1017) == 75,
+                "higher adjacent water at a step must retain containment");
     }
 
     private static void preservesWideBankExclusionsAndContainment() {
@@ -133,7 +150,7 @@ public final class NaturalRiverBankShapeTest {
             check(result <= original && original - result <= 2, "wide cut escaped its bound");
             if (result != original) {
                 changed++;
-                check(result >= water + 1, "wide cut compromised water containment");
+                check(result >= water, "wide cut compromised water containment");
                 check(width >= 4 && water > 65 && edge > .5 && edge < NaturalRiverBankShape.wideCorridor(width),
                         "wide cut changed an excluded bank");
             }

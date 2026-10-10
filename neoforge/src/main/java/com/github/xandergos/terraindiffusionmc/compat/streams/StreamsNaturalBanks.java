@@ -1,9 +1,12 @@
 package com.github.xandergos.terraindiffusionmc.compat.streams;
 
 import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankShape;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankMargin;
+import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -28,6 +31,14 @@ public final class StreamsNaturalBanks {
     public static void refine(WorldGenLevel level, int minX, int minZ, Object engine, int sea,
                               int[] protection, Method shielded, Method blockedBiome, boolean wideBanks)
             throws ReflectiveOperationException {
+        StreamsBankLakeMask lakes = WorldNaturalRiverState.version(level.getLevel()) >= 9
+                ? new StreamsBankLakeMask(engine, minX, minZ) : null;
+        refine(level, minX, minZ, engine, sea, protection, shielded, blockedBiome, wideBanks, lakes);
+    }
+
+    static void refine(WorldGenLevel level, int minX, int minZ, Object engine, int sea,
+                       int[] protection, Method shielded, Method blockedBiome, boolean wideBanks,
+                       StreamsBankLakeMask lakes) throws ReflectiveOperationException {
         Method plan = engine.getClass().getMethod("plan", int.class, int.class);
         Class<?> column = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
         Method channel = column.getMethod("inChannel"), corridor = column.getMethod("inCorridor"),
@@ -72,6 +83,7 @@ public final class StreamsNaturalBanks {
             if (!nearbyChannel) continue;
 
             int blockX = minX + x - radius, blockZ = minZ + z - radius;
+            if (lakes != null && lakes.excludes(blockX, blockZ, radius)) continue;
             // This feature runs at CARVERS.  ProtoChunk maintains FINAL_HEIGHTMAPS
             // here, but OCEAN_FLOOR_WG remains the pre-carve map and can point at
             // air after Streams' own cut.  NO_LEAVES also avoids a canopy top.
@@ -83,7 +95,7 @@ public final class StreamsNaturalBanks {
                             halfWidth, plannedSlope, blockX, blockZ)
                     : NaturalRiverBankShape.targetHeight(originalTop, safeWater, sea, lateralDistance, halfWidth, plannedSlope);
             if (target >= originalTop || originalTop - target > (wideBanks ? 2 : 3)) continue;
-            if (!clearableSoil(level, blockX, blockZ, originalTop, target)) continue;
+            if (!clearableSoil(level, blockX, blockZ, originalTop, target, wideBanks)) continue;
             if (protectedSpan(level, blockX, blockZ, target, originalTop, protection, shielded, blockedBiome)) continue;
             if (!clearCover(level, blockX, blockZ, originalTop)) continue;
 
@@ -112,9 +124,69 @@ public final class StreamsNaturalBanks {
     public static long shapedColumns() { return SHAPED_COLUMNS.get(); }
     public static long removedBlocks() { return REMOVED_BLOCKS.get(); }
 
-    private static boolean clearableSoil(WorldGenLevel level, int x, int z, int top, int target) {
+    /** V9 lake-only shore finishing, using the same native wetting footprint as the carver. */
+    static void refineLakeShore(WorldGenLevel level, int minX, int minZ, Object engine,
+                                int[] protection, Method shielded, Method blockedBiome,
+                                StreamsBankLakeMask lakes) throws ReflectiveOperationException {
+        if (!lakes.hasLake()) return;
+        lakes.prepareWetting(engine);
+        Method plan = engine.getClass().getMethod("plan", int.class, int.class);
+        Class<?> column = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
+        Method channel = column.getMethod("inChannel"), surface = column.getMethod("waterSurfaceY");
+        int[][] channelWater = null;
+        for (int x = minX; x < minX + 16; x++) for (int z = minZ; z < minZ + 16; z++) {
+            // Leave the native lake footprint, including dry islands, untouched.
+            StreamsBankLakeMask.Shore shore = lakes.shore(x, z);
+            if (shore == null) continue;
+            int safeWater = shore.water();
+            double distance = shore.distance();
+            int originalTop = level.getHeight(Types.MOTION_BLOCKING_NO_LEAVES, x, z) - 1;
+            BlockState originalSurface = level.getBlockState(new BlockPos(x, originalTop, z));
+            // Terrain Slabs may decorate this chunk before Streams. Its generated
+            // dry cap is cover over soil, not a reason to preserve the abrupt rim.
+            if (generatedDrySlab(originalSurface)) {
+                originalTop--;
+                originalSurface = level.getBlockState(new BlockPos(x, originalTop, z));
+            }
+            if (!soil(originalSurface) || !originalSurface.getFluidState().isEmpty()) continue;
+            if (NaturalRiverBankMargin.lakeShoreTarget(originalTop, safeWater, distance, x, z) >= originalTop) continue;
+            if (channelWater == null) {
+                channelWater = new int[22][22];
+                for (int hx = 0; hx < 22; hx++) for (int hz = 0; hz < 22; hz++) {
+                    Object p = plan.invoke(engine, minX + hx - 3, minZ + hz - 3);
+                    channelWater[hx][hz] = (Boolean) channel.invoke(p)
+                            ? ((Number) surface.invoke(p)).intValue() : Integer.MIN_VALUE;
+                }
+            }
+            int lx = x - minX + 3, lz = z - minZ + 3;
+            if (channelWater[lx][lz] != Integer.MIN_VALUE) continue;
+            // Include higher nearby river water where a river joins this lake.
+            for (int dx = -3; dx <= 3; dx++) for (int dz = -3; dz <= 3; dz++)
+                safeWater = Math.max(safeWater, channelWater[lx + dx][lz + dz]);
+            int target = NaturalRiverBankMargin.lakeShoreTarget(originalTop, safeWater, distance, x, z);
+            if (target >= originalTop || !clearableSoil(level, x, z, originalTop, target, true)
+                    || protectedSpan(level, x, z, target, originalTop, protection, shielded, blockedBiome)
+                    || !clearCover(level, x, z, originalTop, true)) continue;
+            for (int y = originalTop; y > target; y--)
+                level.setBlock(new BlockPos(x, y, z), Blocks.AIR.defaultBlockState(), 2);
+            level.setBlock(new BlockPos(x, target, z), originalSurface, 2);
+            SHAPED_COLUMNS.incrementAndGet();
+            REMOVED_BLOCKS.addAndGet(originalTop - target);
+            if (Boolean.getBoolean("td.rivers.bankTrace"))
+                LOG.info("[TD-LAKE-SHORE] x={} z={} old={} new={} water={} distance={}",
+                        x, z, originalTop, target, safeWater, distance);
+        }
+    }
+
+    private static boolean clearableSoil(WorldGenLevel level, int x, int z, int top, int target,
+                                         boolean wideBanks) {
+        BlockState support = level.getBlockState(new BlockPos(x, target - 1, z));
+        // Streams lays two soil blocks over native rock. A retained soil cap over that
+        // rock still contains water; requiring a third soil block rejects the lower target.
+        boolean supported = soil(support) || wideBanks && support.is(BlockTags.BASE_STONE_OVERWORLD)
+                && support.getFluidState().isEmpty();
         if (!soil(level.getBlockState(new BlockPos(x, target, z)))
-                || !soil(level.getBlockState(new BlockPos(x, target - 1, z)))) return false;
+                || !supported) return false;
         for (int y = top; y > target; y--) {
             BlockState state = level.getBlockState(new BlockPos(x, y, z));
             if (!soil(state) || !state.getFluidState().isEmpty()) return false;
@@ -136,11 +208,16 @@ public final class StreamsNaturalBanks {
 
     /** Cover scan is deliberately capped at three cells and clears dry replaceable plants only. */
     private static boolean clearCover(WorldGenLevel level, int x, int z, int top) {
+        return clearCover(level, x, z, top, false);
+    }
+
+    private static boolean clearCover(WorldGenLevel level, int x, int z, int top, boolean lakeShore) {
         int cover = Math.min(3, Math.max(0, level.getMaxBuildHeight() - 1 - top));
         for (int dy = 1; dy <= cover; dy++) {
             BlockPos pos = new BlockPos(x, top + dy, z);
             BlockState state = level.getBlockState(pos);
             if (state.isAir()) continue;
+            if (lakeShore && dy == 1 && generatedDrySlab(state)) continue;
             if (!state.getFluidState().isEmpty() || !state.canBeReplaced()) return false;
         }
         for (int dy = 1; dy <= cover; dy++) {
@@ -148,6 +225,17 @@ public final class StreamsNaturalBanks {
             if (!level.getBlockState(pos).isAir()) level.setBlock(pos, Blocks.AIR.defaultBlockState(), 2);
         }
         return true;
+    }
+
+    private static boolean generatedDrySlab(BlockState state) {
+        if (!(state.getBlock() instanceof net.minecraft.world.level.block.SlabBlock)
+                || !state.getFluidState().isEmpty()
+                || state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE)
+                        != net.minecraft.world.level.block.state.properties.SlabType.BOTTOM
+                || !net.minecraft.core.registries.BuiltInRegistries.BLOCK.getKey(state.getBlock())
+                        .getNamespace().equals("terrain_slabs")) return false;
+        return state.getValues().entrySet().stream()
+                .anyMatch(entry -> entry.getKey().getName().equals("generated") && Boolean.TRUE.equals(entry.getValue()));
     }
 
     private static boolean soil(BlockState state) {

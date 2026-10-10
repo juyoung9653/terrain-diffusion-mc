@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    "terrain-diffusion-mc:ecology/temperate_grassland",
+    "terrain-diffusion-mc:ecology/cold_grassland",
+    "terrain-diffusion-mc:ecology/steppe"
+  ]
+}

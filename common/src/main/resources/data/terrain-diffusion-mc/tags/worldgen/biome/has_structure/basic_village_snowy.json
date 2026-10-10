@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    "#minecraft:has_structure/village_snowy",
+    "terrain-diffusion-mc:ecology/snowy_boreal_forest",
+    "terrain-diffusion-mc:ecology/snowy_boreal_woodland"
+  ]
+}

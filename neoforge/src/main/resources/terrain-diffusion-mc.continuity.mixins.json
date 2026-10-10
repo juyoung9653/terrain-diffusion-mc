@@ -1,0 +1,9 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.github.xandergos.terraindiffusionmc.mixin",
+  "plugin": "com.github.xandergos.terraindiffusionmc.compat.continuity.CattailContinuityMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["ContinuityCattailPropertiesMixin", "ContinuityCattailPredicateMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

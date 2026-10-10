@@ -3,6 +3,7 @@ gradle.projectsEvaluated {
     def neoforge = gradle.rootProject.findProject(':neoforge')
     if (neoforge != null) {
         neoforge.sourceSets.main.java.srcDir(new File(gradle.rootProject.rootDir, 'tools/streams_probe/java'))
+        neoforge.sourceSets.main.resources.srcDir(new File(gradle.rootProject.rootDir, 'tools/streams_probe/resources'))
         def probeDir = gradle.rootProject.findProperty('tdProbeDir')
         if (probeDir != null) {
             neoforge.extensions.getByName('neoForge').runs.named('server') {
@@ -19,6 +20,10 @@ gradle.projectsEvaluated {
             }
             maxHeapSize = '6G'
             args 'nogui'
+            if (gradle.rootProject.findProperty('tdProbe.iceTrace')?.toString() == 'true'
+                    || gradle.rootProject.findProperty('tdProbe.bankWriteTrace')?.toString() == 'true') {
+                args '--mixin', 'td-ice-trace.mixins.json'
+            }
             if (gradle.rootProject.hasProperty('tdProbe.carveTrace')) {
                 systemProperty 'streamsreflowing.carvetrace', gradle.rootProject.property('tdProbe.carveTrace').toString()
             }

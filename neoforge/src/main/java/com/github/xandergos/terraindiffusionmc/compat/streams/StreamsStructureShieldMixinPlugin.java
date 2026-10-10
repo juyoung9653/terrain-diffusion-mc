@@ -36,6 +36,22 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.TerrainSlabRiverFeatureMixin")) {
+            return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2138)
+                    && FMLLoader.getLoadingModList().getMods().stream().anyMatch(mod ->
+                    "terrain_slabs".equals(mod.getModId()) && "3.1.2".equals(mod.getVersion().toString()));
+        }
+        if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.SnowRealMagicClimateMixin")) {
+            return FMLLoader.getLoadingModList().getMods().stream()
+                    .anyMatch(mod -> "snowrealmagic".equals(mod.getModId())
+                            && ("12.2.3".equals(mod.getVersion().toString())
+                                || "12.2.3+neoforge".equals(mod.getVersion().toString())));
+        }
+        if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.SimpleSnowyFixSnowMixin")) {
+            return FMLLoader.getLoadingModList().getMods().stream()
+                    .anyMatch(mod -> "simple_snowy_fix".equals(mod.getModId())
+                            && "2.2.1".equals(mod.getVersion().toString()));
+        }
         if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.SnowUnderTreesFeatureMixin")) {
             return FMLLoader.getLoadingModList().getMods().stream()
                     .anyMatch(mod -> "snowundertrees".equals(mod.getModId())

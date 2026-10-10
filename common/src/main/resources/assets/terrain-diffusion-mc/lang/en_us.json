@@ -15,5 +15,10 @@
   "biome.terrain-diffusion-mc.ecology.dry_grassland": "Dry Grassland",
   "biome.terrain-diffusion-mc.ecology.tropical_forest": "Tropical Forest",
   "biome.terrain-diffusion-mc.ecology.tropical_woodland": "Tropical Woodland",
-  "biome.terrain-diffusion-mc.ecology.desert": "Desert"
+  "biome.terrain-diffusion-mc.ecology.desert": "Desert",
+  "biome.terrain-diffusion-mc.ecology.snowy_boreal_forest": "Snowy Boreal Forest",
+  "biome.terrain-diffusion-mc.ecology.snowy_boreal_woodland": "Snowy Boreal Woodland",
+  "biome.terrain-diffusion-mc.ecology.snowy_tundra": "Snowy Tundra",
+  "biome.terrain-diffusion-mc.ecology.alpine_tundra": "Alpine Tundra",
+  "biome.terrain-diffusion-mc.ecology.glacial_highlands": "Glacial Highlands"
 }

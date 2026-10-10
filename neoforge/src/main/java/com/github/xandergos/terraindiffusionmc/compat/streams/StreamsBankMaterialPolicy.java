@@ -11,6 +11,8 @@ import com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMath;
 import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
 import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankShape;
 import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankMargin;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankSurface;
+import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
 import java.lang.reflect.Method;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.core.BlockPos;
@@ -80,12 +82,18 @@ public final class StreamsBankMaterialPolicy {
     public static BlockState climateBankTop(WorldGenLevel level, int x, int y, int z, BlockState proposed) {
         if (proposed == null) return null;
         boolean mud = proposed.is(Blocks.MUD);
-        if (!mud && !proposed.is(Blocks.GRASS_BLOCK)) return proposed;
+        int version = WorldNaturalRiverState.version(level.getLevel());
+        boolean v9 = version >= 9;
+        boolean sediment = proposed.is(Blocks.GRAVEL) || proposed.is(Blocks.SAND);
+        if (!mud && !proposed.is(Blocks.GRASS_BLOCK) && !(v9 && sediment)) return proposed;
         BlockPos top = new BlockPos(x, y, z);
         if (!level.getFluidState(top).isEmpty() || !level.getFluidState(top.above()).isEmpty()) return proposed;
         BankSample bank = bankSample(level, x, z);
-        float waterDistance = bank == null ? nearbyWaterDistance(level, top)
+        float waterDistance = bank == null ? (v9 ? Float.POSITIVE_INFINITY : nearbyWaterDistance(level, top))
                 : NaturalRiverBankMargin.moistureDistance(bank.distance, bank.width, x, z);
+        if (v9 && sediment && (bank == null || bank.channel
+                || NaturalRiverBankMargin.drySediment(bank.distance, bank.width, y, bank.water, x, z)))
+            return proposed;
         // Keep the channel and inner wet apron. Only the outer exposed mud top
         // fades through soil into the surrounding climate's grass or forest floor.
         if (mud && (bank == null || bank.channel || waterDistance <= 2)) return proposed;
@@ -97,20 +105,29 @@ public final class StreamsBankMaterialPolicy {
         if (surface.terrainBiomeId() == GRAVEL_BEACH)
             return supportedMineralTop(level, top, Blocks.GRAVEL.defaultBlockState());
         // Snow, ocean and other retained terrain are not ordinary river soil.
-        if (sample.biomeId() == 0 && surface.terrainBiomeId() != ShoreClassifier.BEACH) return proposed;
+        if (version < 10 && sample.biomeId() == 0
+                && surface.terrainBiomeId() != ShoreClassifier.BEACH) return proposed;
         boolean dryShore = surface.terrainBiomeId() == ShoreClassifier.BEACH
                 && FeatureEcologyMath.dryMineralShore(sample.temperature(), sample.moisture());
-        var material = dryShore ? FeatureEcologyMath.SurfaceMaterial.SAND
+        var material = version >= 10
+                ? NaturalRiverBankSurface.material(sample, surface.terrainBiomeId(), surface.elevation(),
+                        waterDistance, level.getSeed(), x, z, WorldScaleManager.getCurrentScale())
+                : dryShore ? FeatureEcologyMath.SurfaceMaterial.SAND
                 : FeatureEcologyMath.bankSurfaceMaterial(sample.temperature(), sample.moisture(), sample.slope(),
                         sample.treeCover(), surface.elevation(), waterDistance,
                         level.getSeed(), x, z, WorldScaleManager.getCurrentScale());
+        if (material == null) return proposed;
         return switch (material) {
             // A supported top is required so selecting sand cannot alter the bank geometry by falling.
             case SAND -> supportedMineralTop(level, top, Blocks.SAND.defaultBlockState());
             case COARSE_DIRT -> Blocks.COARSE_DIRT.defaultBlockState();
             case PODZOL -> Blocks.PODZOL.defaultBlockState();
+            case GRAVEL -> v9 ? supportedMineralTop(level, top, Blocks.GRAVEL.defaultBlockState())
+                    : Blocks.GRAVEL.defaultBlockState();
+            case STONE -> Blocks.STONE.defaultBlockState();
             case GRASS -> mud ? (waterDistance < 3.25F ? Blocks.COARSE_DIRT.defaultBlockState()
-                    : Blocks.GRASS_BLOCK.defaultBlockState()) : proposed;
+                    : Blocks.GRASS_BLOCK.defaultBlockState())
+                    : v9 && sediment ? Blocks.GRASS_BLOCK.defaultBlockState() : proposed;
         };
     }
 
@@ -162,6 +179,9 @@ public final class StreamsBankMaterialPolicy {
                                                               int zone, boolean pointBar,
                                                               BlockState proposed) {
         if (proposed == null) return null;
+        if (WorldNaturalRiverState.version(level.getLevel()) >= 9) {
+            return preserveV9NaturalShoreSubstrate(level, surface, zone, pointBar, proposed);
+        }
         if (proposed.is(Blocks.MUD)) {
             BankSample bank = bankSample(level, surface.getX(), surface.getZ());
             int radius = 2;
@@ -173,6 +193,21 @@ public final class StreamsBankMaterialPolicy {
                 radius = Math.max(1, Math.min(6, (int) Math.ceil(margin)));
             }
             if (!waterNearSurface(level, surface, radius)) return null;
+        }
+        return preserveNaturalShoreSubstrate(level, surface.getX(), surface.getZ(), zone, pointBar, proposed);
+    }
+
+    private static BlockState preserveV9NaturalShoreSubstrate(WorldGenLevel level, BlockPos surface,
+                                                              int zone, boolean pointBar, BlockState proposed) {
+        boolean sediment = proposed.is(Blocks.MUD) || proposed.is(Blocks.GRAVEL) || proposed.is(Blocks.SAND);
+        if (sediment && level.getFluidState(surface).isEmpty()
+                && level.getFluidState(surface.above()).isEmpty()) {
+            BankSample bank = bankSample(level, surface.getX(), surface.getZ());
+            // A lake/non-river style is outside this river-width policy. Inside a river,
+            // reject the entire dry skin (including native depth fill) beyond its apron.
+            if (bank != null && !bank.channel && !NaturalRiverBankMargin.drySediment(
+                    bank.distance, bank.width, surface.getY(), bank.water, surface.getX(), surface.getZ()))
+                return null;
         }
         return preserveNaturalShoreSubstrate(level, surface.getX(), surface.getZ(), zone, pointBar, proposed);
     }
@@ -195,7 +230,7 @@ public final class StreamsBankMaterialPolicy {
         return false;
     }
 
-    private record BankSample(boolean channel, double width, double distance) { }
+    private record BankSample(boolean channel, double width, double distance, int water) { }
 
     /** Cached API lookup; one existing engine plan per material candidate, no neighbour plans. */
     private static BankSample bankSample(WorldGenLevel level, int x, int z) {
@@ -205,14 +240,15 @@ public final class StreamsBankMaterialPolicy {
             if (!(Boolean) BankAccess.CORRIDOR.invoke(plan)) return null;
             return new BankSample((Boolean) BankAccess.CHANNEL.invoke(plan),
                     ((Number) BankAccess.WIDTH.invoke(plan)).doubleValue(),
-                    ((Number) BankAccess.DISTANCE.invoke(plan)).doubleValue());
+                    ((Number) BankAccess.DISTANCE.invoke(plan)).doubleValue(),
+                    ((Number) BankAccess.WATER.invoke(plan)).intValue());
         } catch (ReflectiveOperationException failure) {
             throw new IllegalStateException("Unsupported Streams bank material adapter", failure);
         }
     }
 
     private static final class BankAccess {
-        static final Method ENGINE, PLAN, CORRIDOR, CHANNEL, WIDTH, DISTANCE;
+        static final Method ENGINE, PLAN, CORRIDOR, CHANNEL, WIDTH, DISTANCE, WATER;
         static {
             try {
                 ENGINE = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen")
@@ -224,6 +260,7 @@ public final class StreamsBankMaterialPolicy {
                 CHANNEL = column.getMethod("inChannel");
                 WIDTH = column.getMethod("width");
                 DISTANCE = column.getMethod("distance");
+                WATER = column.getMethod("waterSurfaceY");
             } catch (ReflectiveOperationException failure) {
                 throw new ExceptionInInitializerError(failure);
             }

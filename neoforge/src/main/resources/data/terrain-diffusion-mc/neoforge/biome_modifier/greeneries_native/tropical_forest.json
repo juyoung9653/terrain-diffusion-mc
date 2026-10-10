@@ -1,0 +1,21 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "greeneries"
+    }
+  ],
+  "type": "terrain-diffusion-mc:greeneries_native_vegetation",
+  "biomes": "terrain-diffusion-mc:ecology/tropical_forest",
+  "features": [
+    "terrain-diffusion-mc:greeneries_native/bamboo_light",
+    "terrain-diffusion-mc:greeneries_native/flower_warm",
+    "terrain-diffusion-mc:greeneries_native/patch_grass_jungle",
+    "terrain-diffusion-mc:greeneries_native/brown_mushroom_normal",
+    "terrain-diffusion-mc:greeneries_native/red_mushroom_normal",
+    "terrain-diffusion-mc:greeneries_native/patch_sugar_cane",
+    "terrain-diffusion-mc:greeneries_native/patch_pumpkin",
+    "terrain-diffusion-mc:greeneries_native/vines",
+    "terrain-diffusion-mc:greeneries_native/patch_melon"
+  ]
+}
