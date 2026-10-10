@@ -637,7 +637,8 @@ override the staged world's game mode when saving. Recheck `GameType` before ins
 The coarse model stride is 256 native pixels, or 512 game blocks at scale 2;
 30 meters per native pixel converts physical altitude, not this horizontal stride.
 Check exact
-95-ID coverage, synthetic selection reachability, negative-coordinate/tile
+95-ID registry coverage, synthetic selection reachability (83 surface + 11 cave
+IDs; `warm_river` stays reserved), negative-coordinate/tile
 continuity, underground depth guards, resource references, and feature-order
 cycles before testing new seeds in Minecraft. Synthetic checks do not establish
 that every biome occurs in every seed or that its scenery looks correct.
@@ -646,8 +647,12 @@ The legacy table is `common/src/main/resources/terralith-biomes.tsv` (tab-separa
 Surface elevation thresholds and horizontal regions use physical terrain meters;
 the 8192-meter regions are roughly 546 blocks wide at scale 2. Underground region
 coordinates and cave elevation thresholds use Minecraft blocks. Low coastal land
-hosts island-themed biomes; warm shallow water is an estuary proxy for `warm_river`.
-These proxies do not detect island connectivity or generate river channels.
+hosts island-themed biomes; shallow water retains the underlying ocean biome
+instead of being classified as `warm_river`. River biomes are assigned by Streams
+in its generated channels, not inferred from coastal temperature, depth or slope.
+The `warm_river` palette entry and its legacy underwater guards remain for stable
+IDs. This changes new biome generation; existing saved chunks are not repaired.
+The island proxy does not detect island connectivity or generate river channels.
 
 Run the focused checks from the repository root (replace the JAR argument):
 

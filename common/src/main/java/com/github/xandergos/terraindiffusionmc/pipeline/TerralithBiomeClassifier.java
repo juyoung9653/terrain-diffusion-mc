@@ -51,8 +51,9 @@ public final class TerralithBiomeClassifier {
                                       float temp, float precip, float pCv, boolean coastal) {
         if (Float.isNaN(temp)) return 0;
         if (isVanillaOcean(baseBiome) || localElevation < 0) {
-            String water = localElevation >= -40 && temp >= 18 && localSlope <= .15f ? "estuary" : "ocean";
-            return pick(water, temp, localElevation, localSlope, blockX, blockZ);
+            // Shallow coastal water is not evidence of a river. Streams assigns
+            // river biomes to its generated channels; zero retains the vanilla ocean.
+            return pick("ocean", temp, localElevation, localSlope, blockX, blockZ);
         }
         if (coastal && localElevation <= 120 && localSlope < .45f)
             return pick("coast", temp, localElevation, localSlope, blockX, blockZ);
@@ -70,8 +71,7 @@ public final class TerralithBiomeClassifier {
 
     private static String group(int blockX, int blockZ, short base, float elevation, float slope, float temp, float precip, float pCv, boolean coastal) {
         if (isVanillaOcean(base) || elevation < 0) {
-            // Shallow warm water is an estuary proxy; no river channels are carved here.
-            return elevation >= -40 && temp >= 18 && slope <= .15f ? "estuary" : "ocean";
+            return "ocean";
         }
         if (coastal && elevation <= 120 && slope < .45f) return "coast";
         if (slope >= .48f) return temp < 3 ? "cold_cliff" : "cliff";

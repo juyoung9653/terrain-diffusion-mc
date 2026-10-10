@@ -13,8 +13,10 @@ public final class TerralithBiomeClassifierTest {
         System.out.println("inventory: 95 exact registry IDs");
         checkClassifierCompatibility();
         System.out.println("compatibility: baseline and overload agree");
+        checkCoastalWater();
+        System.out.println("coastal water: ocean fallback without synthetic river biomes");
         checkReachability();
-        System.out.println("reachability: 84 surface + 11 cave IDs");
+        System.out.println("reachability: 83 surface + 11 cave IDs; warm_river reserved");
         checkSeamsAndCaves();
         System.out.println("coherence/guards: deterministic seams, low neighbor change, cave depth guards");
         System.out.println("TerralithBiomeClassifierTest: PASS");
@@ -53,11 +55,44 @@ public final class TerralithBiomeClassifierTest {
                 short id = TerralithBiomeClassifier.selectSurface(x, z, base, e, slope, c[0], c[1], 0);
                 if (id != 0) found.add(id);
             }
-        for (short id = 1; id <= 84; id++) require(found.contains(id), "surface ID not reachable: " + id);
+        for (short id = 1; id <= 84; id++) {
+            if ("terralith:warm_river".equals(TerralithBiomeClassifier.biomeName(id)))
+                require(!found.contains(id), "terrain classifier must not synthesize river biomes");
+            else require(found.contains(id), "surface ID not reachable: " + id);
+        }
         for (int x = -6000; x <= 6000; x += 29) for (int y = -60; y < 80; y += 13) {
             short id = TerralithBiomeClassifier.selectCave(x, y, x * 3, 100, (short) 44); if (id != 0) found.add(id);
         }
         for (short id = 85; id <= 95; id++) require(found.contains(id), "cave ID not reachable: " + id);
+    }
+
+    private static void checkCoastalWater() {
+        short legacyRiver = (short) (TerralithBiomeClassifier.biomeNames().indexOf("terralith:warm_river") + 1);
+        require(legacyRiver == 75, "retain the saved warm_river palette ID");
+        require(TerralithBiomeClassifier.selectCave(0, 20, 0, 100, legacyRiver) == 0,
+                "legacy coastal river IDs retain their underwater cave guard");
+        for (int x : new int[]{-8193, -1, 0, 8192})
+            for (float temp : new float[]{-5, 17.99f, 18, 26})
+                for (float elevation : new float[]{-40.01f, -40, -39.99f, -20, -.01f, 0})
+                    for (float slope : new float[]{0, .15f, .1501f}) {
+                        short expected = elevation <= -40 && temp >= 18 ? (short) 19 : 0;
+                        for (boolean coastal : new boolean[]{false, true}) {
+                            short actual = TerralithBiomeClassifier.selectSurface(x, -x, (short) 41,
+                                    elevation, slope, 700, .6f, temp, 800, 0, coastal);
+                            require(actual == expected, "coastal water must use ocean selection or vanilla fallback");
+                            short local = TerralithBiomeClassifier.selectSurface(x, -x, (short) 41,
+                                    elevation, slope, temp, 800, 0, coastal);
+                            require(local == expected, "local selector must preserve ocean fallback");
+                        }
+                        short legacy = TerralithBiomeClassifier.selectSurface(x, -x, (short) 41,
+                                elevation, slope, temp, 800, 0);
+                        require(legacy == expected, "legacy selector must preserve ocean fallback");
+                        if (elevation < 0) {
+                            short submerged = TerralithBiomeClassifier.selectSurface(x, -x, (short) 1,
+                                    elevation, slope, temp, 800, 0, false);
+                            require(submerged == expected, "submerged terrain must stay marine even with a land hint");
+                        }
+                    }
     }
 
     private static void checkSeamsAndCaves() {

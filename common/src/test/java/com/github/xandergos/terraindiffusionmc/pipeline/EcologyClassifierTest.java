@@ -35,11 +35,28 @@ public final class EcologyClassifierTest {
         }
         require(EcologyClassifier.select(0, 0, 0, .1f, true, 15, 800, 300).terrainBiomeId() != 0, "coast retained");
         require(EcologyClassifier.select(0, 0, -100, .1f, false, 15, 800, 300).sample().biomeId() == 0, "ocean retained");
+        checkCoastalWater();
         checkRegionalLandIdentity();
         checkDryWoodlandBand();
         checkSoilCoveredHills();
         checkSubdivisions();
         System.out.println("EcologyClassifierTest: PASS (" + EcologyClassifier.BIOMES.size() + " ecosystems, " + transitions + " continuous label transitions)");
+    }
+
+    private static void checkCoastalWater() {
+        for (int x : new int[]{-513, 0, 512})
+            for (float temperature : new float[]{18, 26, 32})
+                for (float elevation : new float[]{-39.99f, -20, -.01f}) {
+                    var water = EcologyClassifier.select(x, -x, elevation, .1f,
+                            temperature, 1200, 0, 0, .8f, .1f);
+                    require(water.terrainBiomeId() == 0 && water.sample().biomeId() == 0,
+                            "warm shallow ecology must retain the vanilla ocean fallback, not a river or land biome");
+                }
+        var shore = EcologyClassifier.select(0, 0, 0, .1f, 26, 800, 0, 1, .8f, .1f);
+        require(shore.terrainBiomeId() == ShoreClassifier.BEACH, "warm coastal land must retain its beach");
+        var inland = EcologyClassifier.select(0, 0, 30, .1f, 26, 1200, 30, 100, 0, .1f);
+        require(inland.terrainBiomeId() == 0 && inland.sample().biomeId() != 0,
+                "warm land away from the water must retain its ecology");
     }
 
     private static void checkSubdivisions() {
