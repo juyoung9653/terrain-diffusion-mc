@@ -1,0 +1,10 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="td_fps_probe"
+version="1.0.0"
+displayName="TD FPS Probe"
+description="Controlled client frame-time measurement for a cloned saved world."
+[[mixins]]
+config="td-fps-probe.mixins.json"

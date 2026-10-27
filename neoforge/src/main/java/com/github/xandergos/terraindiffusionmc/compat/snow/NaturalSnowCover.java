@@ -3,6 +3,7 @@ package com.github.xandergos.terraindiffusionmc.compat.snow;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
 import net.minecraft.core.BlockPos;
 import net.minecraft.tags.BlockTags;
@@ -31,7 +32,8 @@ public final class NaturalSnowCover {
     private NaturalSnowCover() { }
 
     public static boolean isNatural(ChunkGenerator generator) {
-        return generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource source && source.naturalBiomes();
+        TerrainDiffusionBiomeSource source = TerrainDiffusionBiomeSources.find(generator.getBiomeSource());
+        return source != null && source.naturalBiomes();
     }
 
     public static void finish(WorldGenLevel level, ChunkGenerator generator, BlockPos origin) {

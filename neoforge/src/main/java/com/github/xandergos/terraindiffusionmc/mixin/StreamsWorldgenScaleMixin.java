@@ -5,6 +5,7 @@ import net.minecraft.world.level.WorldGenLevel;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Group;
 import org.spongepowered.asm.mixin.injection.ModifyArgs;
 import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
@@ -12,14 +13,14 @@ import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 @Pseudo
 @Mixin(targets = "dev.streamsreflowing.worldgen.StreamsWorldgen", remap = false)
 public final class StreamsWorldgenScaleMixin {
+    @Group(name = "terrainDiffusion$scaleDefaults", min = 1, max = 1)
     @ModifyArgs(
             method = "engine(Lnet/minecraft/world/level/WorldGenLevel;)Ldev/streamsreflowing/core/RiverEngine;",
             at = @At(
                     value = "INVOKE",
                     target = "Ldev/streamsreflowing/core/config/StreamsConfig;defaults(IDIII)Ldev/streamsreflowing/core/config/StreamsConfig;",
                     remap = false),
-            require = 1,
-            expect = 1,
+            require = 0,
             remap = false)
     private static void terrainDiffusion$scaleDefaults(Args arguments, WorldGenLevel level) {
         if (!StreamsScalePolicy.appliesTo(level)) {
@@ -37,6 +38,15 @@ public final class StreamsWorldgenScaleMixin {
                 "TD scale {}: Streams plate extent {} -> {} blocks, width factor {} -> {}",
                 scale, plateScale, StreamsScalePolicy.plateScale(plateScale, scale),
                 widthScale, StreamsScalePolicy.widthScale(widthScale, scale));
+    }
+
+    // 2.15.2 adds terrain fit, lake spacing and shaping inputs. Preserve them all.
+    @Group(name = "terrainDiffusion$scaleDefaults", min = 1, max = 1)
+    @ModifyArgs(method = "engine(Lnet/minecraft/world/level/WorldGenLevel;)Ldev/streamsreflowing/core/RiverEngine;",
+            at = @At(value = "INVOKE", target = "Ldev/streamsreflowing/core/config/StreamsConfig;defaults(IDIIIIIZ)Ldev/streamsreflowing/core/config/StreamsConfig;", remap = false),
+            require = 0, remap = false)
+    private static void terrainDiffusion$scaleDefaults2152(Args arguments, WorldGenLevel level) {
+        terrainDiffusion$scaleDefaults(arguments, level);
     }
 
     @ModifyArgs(

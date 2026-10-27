@@ -4,7 +4,7 @@ import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfile;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import net.minecraft.world.level.chunk.ChunkGenerator;
 
 /** Feature-facing read-only lookup; uses the same cached fields as biome assignment. */
@@ -31,7 +31,8 @@ public final class NaturalEcology {
     }
 
     private static SurfaceSample surfaceSample(ChunkGenerator generator, int x, int z, boolean cachedOnly) {
-        if (!(generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource source) || !source.naturalBiomes())
+        var source = TerrainDiffusionBiomeSources.find(generator.getBiomeSource());
+        if (source == null || !source.naturalBiomes())
             return null;
         int size = TerrainDiffusionConfig.tileSize();
         int x0 = Math.floorDiv(x, size) * size, z0 = Math.floorDiv(z, size) * size;

@@ -35,6 +35,7 @@ public final class NaturalAdapterHarness {
         Class<?> configClass = Class.forName("dev.streamsreflowing.core.config.StreamsConfig");
         Method defaults = configClass.getMethod("defaults");
         Object original = defaults.invoke(null);
+        verifyNativeSamplingSettings(original);
         for (int scale : new int[]{2, 5}) verifyVersionDispatch(original, scale);
         verifyNetworkRefinement(original);
         verifyLakeGuard(original);
@@ -47,6 +48,21 @@ public final class NaturalAdapterHarness {
         catch (IllegalStateException expected) { failedClosed = true; }
         require(failedClosed, "unknown record replacement must fail closed");
         System.out.println("NaturalAdapterHarness: PASS " + configClass.getProtectionDomain().getCodeSource().getLocation());
+    }
+
+    private static void verifyNativeSamplingSettings(Object original) throws Exception {
+        try { original.getClass().getMethod("terrainFit"); }
+        catch (NoSuchMethodException legacy) { return; }
+        Map<String, Object> settings = Map.of("terrainFit", 3, "lakeSampleSpacing", 24,
+                "legacyShaping", false, "adaptiveGridRead", true);
+        Object selected = StreamsRecordAccess.copy(original, settings);
+        for (int version = 1; version <= 10; version++) {
+            Object adapted = StreamsNaturalConfig.apply(selected, 2, version);
+            for (var entry : settings.entrySet()) {
+                require(Objects.equals(StreamsRecordAccess.read(adapted, entry.getKey()), entry.getValue()),
+                        "v" + version + " preserves native " + entry.getKey());
+            }
+        }
     }
 
     private static void verifyVersionDispatch(Object original, int scale) {

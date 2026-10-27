@@ -2,6 +2,7 @@ package com.github.xandergos.terraindiffusionmc;
 
 import com.github.xandergos.terraindiffusionmc.compat.greeneries.GreeneriesNativeVegetationModifier;
 import com.github.xandergos.terraindiffusionmc.compat.lush.LushEcologyVegetationModifier;
+import com.github.xandergos.terraindiffusionmc.compat.hybridaquatic.HybridAquaticContinentalnessDensityFunction;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
@@ -59,8 +60,11 @@ public class TerrainDiffusionMc {
     private void onRegister(RegisterEvent event) {
         event.register(Registries.BIOME_SOURCE, helper ->
                 TerrainDiffusionLifecycle.registerBiomeSourceCodecs(helper::register));
-        event.register(Registries.DENSITY_FUNCTION_TYPE, helper ->
-                TerrainDiffusionLifecycle.registerDensityFunctionCodecs(helper::register));
+        event.register(Registries.DENSITY_FUNCTION_TYPE, helper -> {
+            TerrainDiffusionLifecycle.registerDensityFunctionCodecs(helper::register);
+            helper.register(ResourceLocation.fromNamespaceAndPath(MOD_ID, "hybrid_continentalness"),
+                    HybridAquaticContinentalnessDensityFunction.CODEC);
+        });
         event.register(Registries.FEATURE, helper ->
                 TerrainDiffusionLifecycle.registerEcologyFeatures(helper::register));
         event.register(NeoForgeRegistries.Keys.BIOME_MODIFIER_SERIALIZERS, helper ->

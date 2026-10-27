@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.world.structure;
 
 import com.github.xandergos.terraindiffusionmc.config.StructurePlacementConfig;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.*;
 import net.minecraft.core.registries.Registries;
@@ -64,7 +64,7 @@ public final class StructurePlacementRuntime {
             BiomeSource biomes, RandomState random, StructureTemplateManager templates, long seed, ChunkPos owner,
             int references, LevelHeightAccessor height, Predicate<Holder<Biome>> validBiome, ChunkGeneratorStructureState state,
             StructureSet generatingSet) {
-        if (!(biomes instanceof TerrainDiffusionBiomeSource)) return structure.generate(access,generator,biomes,random,templates,seed,owner,references,height,validBiome);
+        if (!TerrainDiffusionBiomeSources.isTerrainDiffusion(biomes)) return structure.generate(access,generator,biomes,random,templates,seed,owner,references,height,validBiome);
         var registry = access.registryOrThrow(Registries.STRUCTURE);
         var config = StructurePlacementConfig.snapshotFor(registry);
         if (!config.enabled()) return structure.generate(access,generator,biomes,random,templates,seed,owner,references,height,validBiome);
@@ -167,15 +167,16 @@ public final class StructurePlacementRuntime {
                 // Underground/native assemblies can intentionally share corridors and rooms.
                 // House-overlap protection belongs to the opted-in ground adapter; external
                 // reservation separation applies equally to every supported namespace.
+                var collisions=new StructurePieceOccupancy.CollisionContext();
                 for (int i=0; accepted && shaped && i<pieces.size(); i++) for (int j=i+1; j<pieces.size(); j++) {
-                    if (!StructurePieceOccupancy.hasBlocks(pieces.get(i)) || !StructurePieceOccupancy.hasBlocks(pieces.get(j))) continue;
+                    if (!collisions.hasBlocks(pieces.get(i)) || !collisions.hasBlocks(pieces.get(j))) continue;
                     boolean stackedBuildings=pieces.get(i) instanceof PoolElementStructurePiece a
                             && pieces.get(j) instanceof PoolElementStructurePiece b
                             && a.getElement().getProjection()==net.minecraft.world.level.levelgen.structure.pools.StructureTemplatePool.Projection.RIGID
                             && b.getElement().getProjection()==net.minecraft.world.level.levelgen.structure.pools.StructureTemplatePool.Projection.RIGID
                             && shaped
                             && a.getBoundingBox().intersects(b.getBoundingBox().minX(),b.getBoundingBox().minZ(),b.getBoundingBox().maxX(),b.getBoundingBox().maxZ());
-                    if (StructurePieceOccupancy.conflicts(pieces.get(i),pieces.get(j),
+                    if (collisions.conflicts(pieces.get(i),pieces.get(j),
                             stackedBuildings || pieces.get(i).getBoundingBox().intersects(pieces.get(j).getBoundingBox()))) {
                         if (DIAGNOSTICS.add(id+":first-component-conflict")) {
                             LogUtils.getLogger().info("TD component conflict {} owner={} horizontal={} first={} box={} second={} box={}",
@@ -315,7 +316,7 @@ public final class StructurePlacementRuntime {
 
     private static void forEachTerrainPlan(WorldGenRegion region, ChunkGenerator generator, RandomState random,
             ChunkAccess chunk, java.util.function.BiConsumer<StructureStart,StructureTerrain.Plan> action) {
-        if (!(generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource)) return;
+        if (!TerrainDiffusionBiomeSources.isTerrainDiffusion(generator.getBiomeSource())) return;
         var registry=region.registryAccess().registryOrThrow(Registries.STRUCTURE);
         var config=StructurePlacementConfig.snapshotFor(registry);
         if (!config.enabled()) return;

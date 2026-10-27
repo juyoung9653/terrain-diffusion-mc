@@ -19,6 +19,14 @@ ext {
     ]
     terrainDiffusionOnnxRuntimeVersion = '1.20.0'
     terrainDiffusionOnnxDmlVersion = '1.0'
+    // Opt-in NeoForge-only distribution mode. The normal release keeps the
+    // portable Jar-in-Jar payload; this mode creates an FML LIBRARY companion
+    // jar for a Windows instance's mods directory instead.
+    terrainDiffusionNeoForgeDiskLibraries = { Project targetProject ->
+        def value = targetProject.findProperty('neoforgeDiskLibraries')
+                ?: rootProject.findProperty('neoforgeDiskLibraries')
+        return value?.toString()?.equalsIgnoreCase('true') ?: false
+    }
     terrainDiffusionLocalDmlMavenRepo = rootProject.file('.gradle/terrain-diffusion-local-maven')
 
     terrainDiffusionPrepareLocalDmlMavenArtifact = { ->
@@ -136,6 +144,15 @@ rootProject.ext.terrainDiffusionBuildVariants.each { String variantKey, Map vari
                 "Compatibility alias for build${variant.taskSuffix}."
         )
     }
+}
+
+tasks.register('buildNeoForgeCudaDiskLibraries', Exec) {
+    group = terrainDiffusionBuildTaskGroup
+    description = 'Builds the NeoForge CUDA mod plus its disk-backed ONNX Runtime library.'
+    workingDir rootProject.projectDir
+    commandLine terrainDiffusionGradlewExecutable.get(), terrainDiffusionLoaderTaskPath('neoforge'),
+            terrainDiffusionVariantPropertyFlag(terrainDiffusionBuildVariants.cuda),
+            '-PneoforgeDiskLibraries=true'
 }
 
 rootProject.ext.terrainDiffusionLoaderProjects.each { String loaderName ->
@@ -317,18 +334,107 @@ subprojects { subproject ->
                     String buildVariant = subproject.ext.terrainDiffusionBuildVariant
                     def onnxModule = rootProject.ext.terrainDiffusionOnnxModule(buildVariant)
                     def onnxNotation = "${onnxModule.group}:${onnxModule.name}:${onnxModule.version}"
+                    boolean diskLibraries = subproject.name == 'neoforge'
+                            && rootProject.ext.terrainDiffusionNeoForgeDiskLibraries(subproject)
 
                     // Needed by NeoForge 1.21.1 development runs. Jar-in-Jar handles
                     // production packaging but dev runs on 1.21.8 and below also need
                     // non-Minecraft libraries on additionalRuntimeClasspath.
                     add('additionalRuntimeClasspath', onnxNotation)
 
-                    jarJar(implementation("${onnxModule.group}:${onnxModule.name}")) {
-                        version {
-                            strictly "[${onnxModule.version}]"
-                            prefer onnxModule.version
+                    if (!diskLibraries) {
+                        jarJar(implementation("${onnxModule.group}:${onnxModule.name}")) {
+                            version {
+                                strictly "[${onnxModule.version}]"
+                                prefer onnxModule.version
+                            }
                         }
                     }
+                }
+
+                boolean diskLibraries = subproject.name == 'neoforge'
+                        && rootProject.ext.terrainDiffusionNeoForgeDiskLibraries(subproject)
+                if (diskLibraries) {
+                    String buildVariant = subproject.ext.terrainDiffusionBuildVariant
+                    if (!(buildVariant in ['cuda', 'windows', 'cpu'])) {
+                        throw new GradleException("neoforgeDiskLibraries does not support ONNX variant: ${buildVariant}")
+                    }
+                    def onnxModule = rootProject.ext.terrainDiffusionOnnxModule(buildVariant)
+                    def onnxNotation = "${onnxModule.group}:${onnxModule.name}:${onnxModule.version}"
+                    def diskOnnx = subproject.configurations.maybeCreate('terrainDiffusionDiskOnnx')
+                    diskOnnx.canBeConsumed = false
+                    diskOnnx.canBeResolved = true
+                    subproject.dependencies.add(diskOnnx.name, onnxNotation)
+                    def libraryTask = subproject.tasks.register('prepareDiskOnnxLibrary', Jar) {
+                        group = terrainDiffusionBuildTaskGroup
+                        description = 'Creates the FML LIBRARY ONNX Runtime companion jar for a NeoForge disk-library install.'
+                        archiveBaseName = 'terrain-diffusion-onnxruntime-library'
+                        archiveVersion = "${onnxModule.version}-${buildVariant}+${subproject.minecraft_version}"
+                        destinationDirectory = subproject.layout.buildDirectory.dir('disk-libraries')
+                        duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+                        from { subproject.zipTree(diskOnnx.singleFile) }
+                        exclude 'META-INF/MANIFEST.MF', 'META-INF/*.SF', 'META-INF/*.RSA', 'META-INF/*.DSA'
+                        manifest {
+                            attributes(
+                                    'FMLModType': 'LIBRARY',
+                                    'Automatic-Module-Name': "terrain.diffusion.onnxruntime.${buildVariant}",
+                                    'Implementation-Title': 'Terrain Diffusion bundled ONNX Runtime library',
+                                    'Implementation-Version': onnxModule.version
+                            )
+                        }
+                    }
+                    def receiptTask = subproject.tasks.register('writeDiskOnnxReceipt') {
+                        group = terrainDiffusionBuildTaskGroup
+                        description = 'Writes hashes and exact-version receipt for the NeoForge disk ONNX Runtime package.'
+                        dependsOn libraryTask
+                        // ModDevGradle's jarJar task materializes a directory
+                        // consumed by the ordinary archive task; it is not an
+                        // archive task and has no archiveFile property.
+                        def modJarTask = subproject.tasks.named('jar', Jar)
+                        dependsOn modJarTask
+                        def receipt = subproject.layout.buildDirectory.file('disk-libraries/onnx-runtime-receipt.properties')
+                        inputs.file(libraryTask.flatMap { it.archiveFile })
+                        inputs.file(modJarTask.flatMap { it.archiveFile })
+                        inputs.files(diskOnnx)
+                        inputs.property('onnxModule', onnxNotation)
+                        inputs.property('buildVariant', buildVariant)
+                        outputs.file(receipt)
+                        doLast {
+                            File source = diskOnnx.singleFile
+                            File library = libraryTask.get().archiveFile.get().asFile
+                            File mod = modJarTask.get().archiveFile.get().asFile
+                            def sha256 = { File file ->
+                                def digest = java.security.MessageDigest.getInstance('SHA-256')
+                                file.withInputStream { input ->
+                                    byte[] buffer = new byte[8192]
+                                    for (int read; (read = input.read(buffer)) >= 0;) digest.update(buffer, 0, read)
+                                }
+                                digest.digest().collect { String.format('%02x', it) }.join()
+                            }
+                            def nested = new java.util.zip.ZipFile(mod).withCloseable { zip ->
+                                def entries = zip.entries()
+                                def found = null
+                                while (entries.hasMoreElements() && found == null) {
+                                    def entry = entries.nextElement()
+                                    if (entry.name.contains('onnxruntime') || entry.name.contains('onnxruntime-dml')) found = entry
+                                }
+                                found
+                            }
+                            if (nested != null) throw new GradleException("Disk-library mod unexpectedly contains ONNX payload: ${nested.name}")
+                            File target = receipt.get().asFile
+                            target.parentFile.mkdirs()
+                            target.text = """formatVersion=1
+mode=neoforge-disk-library
+module=${onnxNotation}
+sourceSha256=${sha256(source)}
+libraryFile=${library.name}
+librarySha256=${sha256(library)}
+modFile=${mod.name}
+modSha256=${sha256(mod)}
+"""
+                        }
+                    }
+                    subproject.tasks.named('build') { dependsOn receiptTask }
                 }
 
                 subproject.tasks.named('build') {

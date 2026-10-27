@@ -1,0 +1,9 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.terrain.chunkreadprobe.mixin",
+  "plugin": "com.terrain.chunkreadprobe.C2meReadMixinPlugin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["ReadFromDiskAsyncMixin", "NoTickSystemMixin", "ServerChunkCacheMixin", "ChunkMapSchedulingMixin", "TheChunkSystemMixin"],
+  "injectors": {"defaultRequire": 1}
+}

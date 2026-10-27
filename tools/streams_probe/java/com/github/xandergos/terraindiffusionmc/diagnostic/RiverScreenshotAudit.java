@@ -232,6 +232,43 @@ public final class RiverScreenshotAudit {
                     + " waterWithoutWall=" + withoutWall + " drySlope=" + drySlope + " flat=" + flat);
         System.out.println("TerrainSlabAdmissionAudit: PASS v" + version + " waterWithWall=" + withWall
                 + " waterWithoutWall=" + withoutWall + " drySlope=" + drySlope + " flat=" + flat);
+        verifyOceanSlab(level, feature, instance, candidate);
+    }
+
+    /** Exercise native admission AND placement using the real ocean biome tag and fluid states. */
+    private static void verifyOceanSlab(ServerLevel level, Class<?> feature, Object instance,
+                                       java.lang.reflect.Method candidate) throws Exception {
+        BlockPos origin = new BlockPos(600, -40, 688);
+        var written = new java.util.HashMap<BlockPos, BlockState>();
+        java.util.function.Function<BlockPos, BlockState> states = pos -> written.getOrDefault(pos,
+                pos.getY() < origin.getY() ? Blocks.GRAVEL.defaultBlockState()
+                : pos.getZ() == origin.getZ() - 1 && pos.getY() == origin.getY()
+                        ? Blocks.STONE.defaultBlockState()
+                : pos.getY() == origin.getY() ? Blocks.WATER.defaultBlockState() : Blocks.AIR.defaultBlockState());
+        var fixture = (WorldGenLevel) Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),
+                new Class<?>[]{WorldGenLevel.class}, (proxy, called, args) -> switch (called.getName()) {
+                    case "getLevel" -> level;
+                    case "getBlockState" -> states.apply((BlockPos) args[0]);
+                    case "getFluidState" -> states.apply((BlockPos) args[0]).getFluidState();
+                    case "getBiome" -> level.registryAccess().registryOrThrow(Registries.BIOME).getHolderOrThrow(Biomes.OCEAN);
+                    case "setBlock" -> { written.put(((BlockPos) args[0]).immutable(), (BlockState) args[1]); yield true; }
+                    default -> throw new AssertionError("Unexpected ocean fixture access: " + called.getName());
+                });
+        boolean admitted = (Boolean) candidate.invoke(instance, fixture, origin, false, false);
+        int version = WorldNaturalRiverState.version(level);
+        if (admitted != (version < 9 || version >= 10)) throw new AssertionError("Ocean slab admission v" + version);
+        if (admitted) {
+            var place = feature.getDeclaredMethod("placeBottomSlab", WorldGenLevel.class, BlockPos.class);
+            place.setAccessible(true);
+            place.invoke(instance, fixture, origin);
+            BlockState slab = written.get(origin);
+            if (slab == null || !slab.toString().contains("generated=true")
+                    || !slab.toString().contains("type=bottom") || !slab.toString().contains("waterlogged=true")
+                    || !slab.getFluidState().isSource()
+                    || slab.getFluidState().getOwnHeight() != Blocks.WATER.defaultBlockState().getFluidState().getOwnHeight())
+                throw new AssertionError("Native ocean slab did not preserve source water: " + slab);
+        }
+        System.out.println("OceanSlabAudit: PASS v" + version + " admitted=" + admitted + " state=" + written.get(origin));
     }
 
     private static boolean candidate(ServerLevel level, Object feature, java.lang.reflect.Method method,
@@ -240,7 +277,8 @@ public final class RiverScreenshotAudit {
         java.util.function.Function<BlockPos, BlockState> states = pos -> {
             if (pos.getY() < y) return Blocks.GRAVEL.defaultBlockState();
             if (pos.equals(origin)) return centre;
-            if (wall && pos.equals(origin.north())) return Blocks.STONE.defaultBlockState();
+            if (wall && pos.getZ() == origin.getZ() - 1 && pos.getY() == y)
+                return Blocks.STONE.defaultBlockState();
             return Blocks.AIR.defaultBlockState();
         };
         WorldGenLevel fixture = (WorldGenLevel) Proxy.newProxyInstance(WorldGenLevel.class.getClassLoader(),

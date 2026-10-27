@@ -94,9 +94,28 @@ public final class StreamsReflowingProbe {
         }
         List<ChunkPos> tickAuditForcedChunks = new ArrayList<>();
         long started = System.nanoTime();
+        if (Boolean.getBoolean("td.inference.metrics")) {
+            emit(receipts, json("inference_metrics_start", "onnxTotals",
+                    com.github.xandergos.terraindiffusionmc.pipeline.OnnxModel.runtimeMetrics(),
+                    "onnxByModel", com.github.xandergos.terraindiffusionmc.pipeline.OnnxModel.modelRunMetrics(),
+                    "providerTotals", LocalTerrainProvider.getInstance().performanceSnapshot()));
+        }
         String terminal = "success";
+        TerrainCpuProfile cpuProfile = null;
         try {
             ServerLevel level = server.overworld();
+            if (Boolean.getBoolean("td.streamsProbe.hybridAquaticAudit"))
+                emit(receipts, server.submit(() -> HybridAquaticAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            if (Boolean.getBoolean("td.streamsProbe.hybridAquaticKelpAudit"))
+                emit(receipts, server.submit(() -> HybridAquaticKelpAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            if (Boolean.getBoolean("td.inference.metrics")) auditInferenceProfile(server, receipts);
+            if (Boolean.getBoolean("td.streamsProbe.terrainSlabAudit")) {
+                TerrainSlabPlacementAudit.run(level);
+                emit(receipts, json("terrain_slab_audit", "status", "passed"));
+                return;
+            }
             if (Boolean.getBoolean("td.streamsProbe.riverScreenshotAudit")) {
                 RiverScreenshotAudit.run(level, server.getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT)
                         .resolve("river-screenshot-audit"));
@@ -179,10 +198,24 @@ public final class StreamsReflowingProbe {
                 emit(receipts, json("natural_plan_export", "status", "exported", "physicalChunksChecked", 0));
                 return;
             }
-            List<RouteCandidate> candidates = new ArrayList<>(config.fixedCandidates.isEmpty()
+            boolean hybridMarineFixture = Boolean.getBoolean("td.streamsProbe.hybridMarineAudit")
+                    && config.fixedCandidates.isEmpty();
+            HybridAquaticAudit.MarinePlan marinePlan = hybridMarineFixture
+                    ? HybridAquaticAudit.selectMarineFixture(level) : null;
+            if (Boolean.getBoolean("td.streamsProbe.cpuProfile")) cpuProfile = TerrainCpuProfile.start();
+            List<RouteCandidate> candidates = new ArrayList<>(hybridMarineFixture ? List.of() : (config.fixedCandidates.isEmpty()
                     ? (riverPreview ? discoverRiverPreviewCandidates(level, config, receipts)
                     : (Boolean.getBoolean("td.streamsProbe.streamsTopologyAudit") ? discoverTopologyCandidates(level, config, receipts) : discoverRoutes(level, config, receipts)))
-                    : config.fixedCandidates);
+                    : config.fixedCandidates));
+            if (marinePlan != null) {
+                for (HybridAquaticAudit.FixtureTarget target : marinePlan.targets())
+                    if (candidates.stream().noneMatch(candidate -> candidate.chunkX == target.chunkX()
+                            && candidate.chunkZ == target.chunkZ()))
+                        candidates.add(new RouteCandidate(target.chunkX(), target.chunkZ(), -1, Integer.MIN_VALUE,
+                                "hybrid_marine_" + target.role()));
+                emit(receipts, json("hybrid_marine_fixture", "status", "selected", "candidates", candidates.size(),
+                        "candidateSummary", candidates.toString(), "firstRole", marinePlan.targets().getFirst().role()));
+            }
             if (!config.fixedCandidates.isEmpty() && Boolean.getBoolean("td.streamsProbe.streamsTopologyAudit")) {
                 // Every audited source/junction/outlet/flow chunk must join the
                 // generated and tick-forced cohort, even for long fixed paths.
@@ -275,6 +308,9 @@ public final class StreamsReflowingProbe {
                 })
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
             }
+            if (Boolean.getBoolean("td.streamsProbe.hybridMarineAudit"))
+                emit(receipts, marinePlan == null ? HybridAquaticAudit.runMarine(level)
+                        : HybridAquaticAudit.runMarine(level, marinePlan));
             if (Boolean.getBoolean("td.streamsProbe.lushDensityAudit") && !completed.isEmpty()) {
                 ChunkReceipt first = completed.getFirst();
                 emit(receipts, server.submit(() -> {
@@ -554,6 +590,7 @@ public final class StreamsReflowingProbe {
             terminal = "error";
             emit(receipts, json("fatal", "error", t.getClass().getName(), "message", safe(t.getMessage())));
         } finally {
+            if (cpuProfile != null) emit(receipts, cpuProfile.finishJson());
             if (Boolean.getBoolean("td.streamsProbe.containmentAudit")) {
                 try {
                     server.submit(() -> server.tickRateManager().setFrozen(false)).get(15, TimeUnit.SECONDS);
@@ -582,14 +619,47 @@ public final class StreamsReflowingProbe {
                 emit(receipts, json("shallow_bank_retention", "status", "observed",
                         "retainedWrites", com.github.xandergos.terraindiffusionmc.compat.streams.StreamsShallowBanks.retainedWrites()));
             }
-            emit(receipts, json("complete", "status", terminal, "elapsedMs",
-                    TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started),
+            if (Boolean.getBoolean("td.inference.metrics")) {
+                emit(receipts, json("inference_metrics", "onnxTotals",
+                        com.github.xandergos.terraindiffusionmc.pipeline.OnnxModel.runtimeMetrics(),
+                        "onnxByModel", com.github.xandergos.terraindiffusionmc.pipeline.OnnxModel.modelRunMetrics(),
+                        "providerTotals", LocalTerrainProvider.getInstance().performanceSnapshot()));
+            }
+            long elapsedMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started);
+            emit(receipts, json("complete", "status", terminal, "elapsedMs", elapsedMs,
                     "surfaceConvention", "tdPreCarveIsDensityZeroBoundary;expectedTopSolid=preCarve-1;baseHeightIsComparedToBoundary"));
             writeReceipts(server, receipts);
             if (config.stopWhenDone) {
                 server.submit(() -> server.halt(false));
             }
         }
+    }
+
+    private static void auditInferenceProfile(MinecraftServer server, List<String> receipts) {
+        var registry = server.registryAccess();
+        var legacyTag = new net.minecraft.nbt.CompoundTag();
+        legacyTag.putInt("scale", 2);
+        legacyTag.putBoolean("explicit_scale", true);
+        var legacy = com.github.xandergos.terraindiffusionmc.world.WorldScaleSettingsState.fromNbt(legacyTag, registry);
+        var malformedTag = legacyTag.copy();
+        malformedTag.putInt("scale", 5);
+        malformedTag.putString("fast_ground_sampling", "invalid");
+        var malformed = com.github.xandergos.terraindiffusionmc.world.WorldScaleSettingsState.fromNbt(malformedTag, registry);
+        var fresh = com.github.xandergos.terraindiffusionmc.world.WorldScaleSettingsState.createDefault();
+        fresh.setScale(3);
+        var encoded = fresh.save(new net.minecraft.nbt.CompoundTag(), registry);
+        var reopened = com.github.xandergos.terraindiffusionmc.world.WorldScaleSettingsState.fromNbt(encoded, registry);
+        if (legacy.getScale() != 2 || malformed.getScale() != 5
+                || !malformed.hasExplicitScale()
+                || legacy.isFastGroundSampling() || malformed.isFastGroundSampling()
+                || !fresh.isFastGroundSampling() || !reopened.isFastGroundSampling()
+                || reopened.getScale() != 3 || !reopened.hasExplicitScale()) {
+            throw new IllegalStateException("Saved inference profile migration/roundtrip failed");
+        }
+        emit(receipts, json("inference_profile_audit", "status", "passed",
+                "legacyFastGround", legacy.isFastGroundSampling(), "newWorldFastGround", fresh.isFastGroundSampling(),
+                "fastGround", com.github.xandergos.terraindiffusionmc.world.WorldScaleManager.isFastGroundSampling(),
+                "activeFastGround", LocalTerrainProvider.getInstance().isFastGroundSampling()));
     }
 
     private static void auditCustomBiomes(ServerLevel level, List<String> receipts) {

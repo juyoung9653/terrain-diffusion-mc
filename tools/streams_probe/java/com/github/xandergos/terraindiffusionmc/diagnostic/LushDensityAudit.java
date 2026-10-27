@@ -66,7 +66,7 @@ public final class LushDensityAudit {
                 if (lushCount != 1) failures.add("lush_feature_count:" + biomeId + ":" + lushCount);
                 if (climateGroundcover) failures.add("duplicate_climate_groundcover:" + biomeId);
             }
-            if (ecologyBiomes != 15) failures.add("ecology_biome_count:" + ecologyBiomes);
+            if (ecologyBiomes != 19) failures.add("ecology_biome_count:" + ecologyBiomes);
 
             int highest = level.getMinBuildHeight();
             int minX = chunkX * 16, minZ = chunkZ * 16;
@@ -98,7 +98,7 @@ public final class LushDensityAudit {
             int dirt = samples.get("dirt").plants();
             int coarse = samples.get("coarse_dirt").plants();
             if (grass == 0) failures.add("grass_empty");
-            if (grass > 0 && (dirt / (double) grass < .38 || dirt / (double) grass > .62))
+            if (grass > 0 && (dirt / (double) grass < .20 || dirt / (double) grass > .40))
                 failures.add("dirt_ratio:" + dirt + "/" + grass);
             if (grass > 0 && (coarse / (double) grass < .04 || coarse / (double) grass > .17))
                 failures.add("coarse_ratio:" + coarse + "/" + grass);

@@ -1,0 +1,8 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="td_chunk_profile"
+version="1.0.0"
+displayName="TD Chunk Profile"
+description="Diagnostic-only fresh chunk generation profiler."

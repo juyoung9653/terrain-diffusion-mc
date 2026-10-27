@@ -1,0 +1,8 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="optimization_bench"
+version="1.0.0"
+displayName="Optimization Bench"
+description="Automated stationary client render benchmark fixture."

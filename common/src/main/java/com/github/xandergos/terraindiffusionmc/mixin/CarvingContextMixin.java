@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.world.LowlandCarvingContext;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
@@ -30,7 +30,7 @@ public class CarvingContextMixin implements LowlandCarvingContext {
                                                    LevelHeightAccessor level, NoiseChunk noiseChunk,
                                                    RandomState randomState, SurfaceRules.RuleSource surfaceRule,
                                                    CallbackInfo ci) {
-        this.terrainDiffusion$world = generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource;
+        this.terrainDiffusion$world = TerrainDiffusionBiomeSources.isTerrainDiffusion(generator.getBiomeSource());
         this.terrainDiffusion$seaLevel = generator.getSeaLevel();
     }
 

@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.compat.streams;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import java.io.IOException;
 import java.util.Map;
@@ -21,11 +21,12 @@ public final class StreamsStartupPolicy {
         if (!level.getServer().isSameThread()) throw new IllegalStateException("Streams sampler initialization requires server thread");
         if (TerrainDiffusionLifecycle.isPreviewServer(level.getServer())
                 || !level.dimension().equals(Level.OVERWORLD)
-                || !(level.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource)) return;
+                || !TerrainDiffusionBiomeSources.isTerrainDiffusion(
+                        level.getChunkSource().getGenerator().getBiomeSource())) return;
         var world = level.getServer().getWorldPath(LevelResource.ROOT);
         if (!StreamsStructureShieldMixinPlugin.hasStartupAdapter()) {
             if (StreamsStartupState.hasMarker(world)) throw new IllegalStateException(
-                    "This world's exact Streams terrain sampler requires Streams Reflowing 2.13.8");
+                    "This world's exact Streams terrain sampler requires Streams Reflowing 2.13.8 or 2.15.2");
             return;
         }
         try {

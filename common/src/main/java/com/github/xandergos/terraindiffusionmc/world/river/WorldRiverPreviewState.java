@@ -1,6 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.world.river;
 
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
@@ -82,7 +82,7 @@ public final class WorldRiverPreviewState extends SavedData {
             throw new IllegalStateException("River preview settings must initialize on the server thread");
         }
         if (!level.dimension().equals(Level.OVERWORLD)
-                || !(level.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource)) {
+                || !TerrainDiffusionBiomeSources.isTerrainDiffusion(level.getChunkSource().getGenerator().getBiomeSource())) {
             SETTINGS.put(level, RiverPreviewSettings.disabled(level.getSeed()));
             return;
         }

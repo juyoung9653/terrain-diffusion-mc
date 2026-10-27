@@ -5,6 +5,7 @@ import java.lang.reflect.Method;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.tags.FluidTags;
+import net.minecraft.tags.BiomeTags;
 import net.minecraft.world.level.WorldGenLevel;
 
 /** Protects river water and its containing banks without reading neighbouring chunks. */
@@ -14,12 +15,14 @@ public final class TerrainSlabRiverGuard {
     public static boolean protects(WorldGenLevel level, BlockPos pos) {
         int version = WorldNaturalRiverState.version(level.getLevel());
         if (version < 9) return false;
-        if (level.getFluidState(pos).is(FluidTags.WATER)) return true;
+        boolean water = level.getFluidState(pos).is(FluidTags.WATER);
+        boolean ocean = water && version >= 10 && level.getBiome(pos).is(BiomeTags.IS_OCEAN);
+        if (water && !ocean) return true;
         try {
             Object engine = Access.ENGINE.invoke(null, level.getLevel());
             if (engine == null) return false;
             Object plan = Access.PLAN.invoke(engine, pos.getX(), pos.getZ());
-            return TerrainSlabRiverPolicy.protect(version, false,
+            return TerrainSlabRiverPolicy.protect(version, water, ocean,
                     (Boolean) Access.CORRIDOR.invoke(plan), (Boolean) Access.CHANNEL.invoke(plan),
                     ((Number) Access.DISTANCE.invoke(plan)).doubleValue(),
                     ((Number) Access.WIDTH.invoke(plan)).doubleValue(), pos.getY(),

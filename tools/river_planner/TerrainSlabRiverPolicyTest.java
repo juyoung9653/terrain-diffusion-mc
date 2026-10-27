@@ -19,11 +19,25 @@ public final class TerrainSlabRiverPolicyTest {
             require(!protect(9, false, false, false, Double.NaN, 0, 63, 60, 62, x, z), "absent river changed slabs");
         }
         require(protect(9, true, false, false, Double.NaN, 0, 62, 0, 0, 0, 0), "water requires a river plan");
-        System.out.println("TerrainSlabRiverPolicyTest: passed saved seam, neighbor-order, negative boundary, legacy and dry/cave checks");
+        require(TerrainSlabRiverPolicy.protect(9, true, true, false, false, Double.NaN, 0, 62, 0, 0, 0, 0),
+                "saved V9 ocean policy changed");
+        require(!TerrainSlabRiverPolicy.protect(10, true, true, false, false, Double.NaN, 0, 62, 0, 0, 0, 0),
+                "ocean without river lost wet slabs");
+        require(TerrainSlabRiverPolicy.protect(10, true, false, false, false, Double.NaN, 0, 62, 0, 0, 0, 0),
+                "inland water without river lost protection");
+        require(TerrainSlabRiverPolicy.protect(10, true, true, true, true, 0, 2, 62, 60, 62, 0, 0),
+                "ocean river mouth lost channel protection");
+        require(TerrainSlabRiverPolicy.protect(10, true, true, true, false, 2.5, 2, 63, 60, 62, 0, 0),
+                "ocean river mouth lost containing apron");
+        require(!TerrainSlabRiverPolicy.protect(10, true, true, true, false, 20, 2, 62, 60, 62, 0, 0),
+                "ocean outside river apron lost wet slabs");
+        require(!TerrainSlabRiverPolicy.protect(10, true, true, true, true, 0, 2, -40, 60, 62, 0, 0),
+                "deep ocean slope lost wet slabs");
+        System.out.println("TerrainSlabRiverPolicyTest: passed saved seam, neighbor-order, negative boundary, legacy, ocean/mouth and dry/cave checks");
     }
     private static boolean protect(int v, boolean wet, boolean corridor, boolean channel, double d, double w,
                                    int y, int bed, int surface, int x, int z) {
-        return TerrainSlabRiverPolicy.protect(v, wet, corridor, channel, d, w, y, bed, surface, x, z);
+        return TerrainSlabRiverPolicy.protect(v, wet, false, corridor, channel, d, w, y, bed, surface, x, z);
     }
     private static void require(boolean valid, String message) { if (!valid) throw new AssertionError(message); }
 }

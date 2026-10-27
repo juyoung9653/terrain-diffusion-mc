@@ -1,0 +1,3 @@
+package net.minecraft.world.level.block.state;
+import net.minecraft.world.level.material.FluidState;
+public final class BlockState { private final boolean air; private final Object block; private final FluidState fluid; public BlockState(boolean air,Object block,boolean fluid){this.air=air;this.block=block;this.fluid=new FluidState(!fluid);} public boolean isAir(){return air;} public boolean is(Object wanted){return block==wanted;} public FluidState getFluidState(){return fluid;} }

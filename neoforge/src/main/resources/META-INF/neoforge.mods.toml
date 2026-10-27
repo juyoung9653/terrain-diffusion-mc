@@ -24,6 +24,18 @@ config="${mod_id}.preview.mixins.json"
 config="${mod_id}.continuity.mixins.json"
 [[mixins]]
 config="${mod_id}.lush.mixins.json"
+[[mixins]]
+config="${mod_id}.hybrid-aquatic.mixins.json"
+[[mixins]]
+config="${mod_id}.yung-memory.mixins.json"
+[[mixins]]
+config="${mod_id}.voxy-memory.mixins.json"
+[[mixins]]
+config="${mod_id}.template-memory.mixins.json"
+[[mixins]]
+config="${mod_id}.aether-memory.mixins.json"
+[[mixins]]
+config="${mod_id}.simple-block-physics.mixins.json"
 
 [[dependencies.${fml_mod_id}]]
 modId="neoforge"

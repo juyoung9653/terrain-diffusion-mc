@@ -1,0 +1,20 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.github.xandergos.terraindiffusionmc.mixin.hybridaquatic",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "TerrainDiffusionBiomeSourceAccessor",
+    "HybridAquaticTrenchCarverMixin",
+    "HybridAquaticInjectorScopeMixin",
+    "HybridAquaticBiomeAliasMixin",
+    "HybridAquaticKelpNoiseCountAccessor",
+    "HybridAquaticKelpHeightmapAccessor",
+    "HybridAquaticKelpPlacedFeatureMixin",
+    "HybridAquaticKelpNoiseCountMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "plugin": "com.github.xandergos.terraindiffusionmc.compat.hybridaquatic.HybridAquaticMixinPlugin"
+}

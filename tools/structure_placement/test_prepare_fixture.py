@@ -77,6 +77,17 @@ class PrepareFixtureTest(unittest.TestCase):
         self.assertEqual(result["copiedFiles"], 1)
         self.assertEqual(target.read_bytes(), b"jar-A")
 
+    def test_streams_family_preserves_marine_admission(self) -> None:
+        marker = "world/data/terrain_diffusion_hybrid_aquatic.properties"
+        self.write(marker, b"enabled=true\nprofileVersion=1\nseed=12345\n")
+        self.target = self.root / "build" / "streams-probe" / "trial"
+        self.prepare(family_name="streams-probe")
+        self.assertEqual((self.target / marker).read_bytes(), (self.source / marker).read_bytes())
+        manifest = json.loads((self.target / fixture.MANIFEST).read_text())
+        self.assertIn(marker, manifest["sha256"])
+        self.assertFalse((self.target / "density-center.txt").exists())
+        self.assertFalse((self.target / "world/region").exists())
+
     def test_world_identity_is_required(self) -> None:
         (self.source / "world/level.dat").unlink()
         with self.assertRaisesRegex(ValueError, "level.dat"):

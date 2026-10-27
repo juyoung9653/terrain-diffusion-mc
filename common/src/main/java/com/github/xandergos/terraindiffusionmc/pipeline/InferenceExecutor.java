@@ -19,7 +19,7 @@ public final class InferenceExecutor {
     private int urgentStreak;
     private long submitted, completed, cancelled, queueNanos, executionNanos, maxQueueNanos;
     private static final int MAX_URGENT_STREAK = 8;
-    private boolean accepting = true;
+    private volatile boolean accepting = true;
     private int active;
 
     public InferenceExecutor(String threadName) {
@@ -113,16 +113,16 @@ public final class InferenceExecutor {
 
     public final class Scope {
         private final Set<TrackedTask<?>> tasks = new HashSet<>();
-        private boolean open = true;
+        private volatile boolean open = true;
         private int running;
         private long epoch;
 
         private Scope() { }
 
         public void requireOpen() {
-            synchronized (lock) {
-                if (!open || !accepting) throw new CancellationException("Terrain inference scope is closed");
-            }
+            // Cached terrain reads only need lifecycle visibility. Task admission and
+            // closure still share lock, so no task can be admitted after closure.
+            if (!open || !accepting) throw new CancellationException("Terrain inference scope is closed");
         }
 
         /** Unknown actions are ordering barriers, including seed/store mutations. */

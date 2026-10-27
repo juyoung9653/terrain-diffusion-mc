@@ -1,0 +1,31 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "landmarks"
+    }
+  ],
+  "feature": "landmarks:rocks",
+  "placement": [
+    {
+      "type": "minecraft:rarity_filter",
+      "chance": 750
+    },
+    {
+      "type": "minecraft:in_square"
+    },
+    {
+      "type": "minecraft:heightmap",
+      "heightmap": "OCEAN_FLOOR"
+    },
+    {
+      "type": "minecraft:surface_relative_threshold_filter",
+      "heightmap": "WORLD_SURFACE",
+      "min_inclusive": -33,
+      "max_inclusive": -27
+    },
+    {
+      "type": "minecraft:biome"
+    }
+  ]
+}

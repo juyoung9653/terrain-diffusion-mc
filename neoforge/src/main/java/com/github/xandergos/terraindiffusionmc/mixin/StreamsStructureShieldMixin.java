@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.compat.streams.StructureShieldGeometry;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import it.unimi.dsi.fastutil.longs.LongSet;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -52,7 +52,8 @@ public abstract class StreamsStructureShieldMixin {
     }
 
     private static boolean terrainDiffusion$usesTerrainDiffusionBiomes(WorldGenLevel level) {
-        return level.getLevel().getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource;
+        return TerrainDiffusionBiomeSources.isTerrainDiffusion(
+                level.getLevel().getChunkSource().getGenerator().getBiomeSource());
     }
 
     private static List<StructureShieldGeometry.Replacement> terrainDiffusion$targetReplacements(WorldGenLevel level, ChunkPos chunkPos) {

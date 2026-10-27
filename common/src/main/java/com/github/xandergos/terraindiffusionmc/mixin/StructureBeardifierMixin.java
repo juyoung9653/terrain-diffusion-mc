@@ -1,6 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.structure.StructurePlacementRuntime;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.WorldGenRegion;
@@ -20,7 +20,7 @@ public abstract class StructureBeardifierMixin {
         LevelAccessor accessor=((StructureManagerAccess)manager).terrainDiffusion$level();
         ServerLevel level=accessor instanceof WorldGenRegion region?region.getLevel():accessor instanceof ServerLevel server?server:null;
         List<StructureStart> starts=manager.startsForStructure(pos,predicate);
-        if (level==null || !(level.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource)) return starts;
+        if (level==null || !TerrainDiffusionBiomeSources.isTerrainDiffusion(level.getChunkSource().getGenerator().getBiomeSource())) return starts;
         return starts.stream().filter(start -> !StructurePlacementRuntime.shapes(start,manager.registryAccess())).toList();
     }
 }

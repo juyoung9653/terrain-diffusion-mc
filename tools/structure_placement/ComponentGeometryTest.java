@@ -31,6 +31,31 @@ public final class ComponentGeometryTest {
             check(result.add(new Voxel(x,0,z)),"compressed support rectangles do not overlap");
         return result;
     }
+    private static void assemblyFootprints() {
+        record Piece(int id) {}
+        var first=new Piece(1);
+        var equalButDistinct=new Piece(1);
+        var unknown=new Piece(2);
+        var calls=new int[1];
+        var local=new Footprint(Set.of(new Voxel(0,0,0)),Set.of(new Voxel(1,0,0)));
+        var cache=new ComponentGeometry.FootprintCache<Piece>(piece -> {
+            calls[0]++;
+            return piece==unknown ? null : local.at(1,-33,70,-17);
+        });
+        var world=cache.get(first);
+        for(int i=0;i<20;i++) check(cache.get(first)==world,"one immutable transform per piece identity");
+        check(calls[0]==1,"repeated pair checks do not repeat coordinate transforms");
+        check(cache.get(equalButDistinct).equals(world) && calls[0]==2,
+                "equal but distinct pieces have independent cached transforms");
+        check(cache.get(unknown)==null && cache.get(unknown)==null && calls[0]==3,
+                "unknown footprint remains conservative and is resolved only once");
+        var wall=new Footprint(Set.of(new Voxel(-33,70,-16)),Set.of());
+        check(world.conflicts(wall) && wall.conflicts(world),"cached rotated AIR still conflicts with solid walls");
+        var cavity=new Footprint(Set.of(),Set.of(new Voxel(-33,70,-16)));
+        check(!world.conflicts(cavity),"cached AIR against AIR remains allowed");
+        var next=new ComponentGeometry.FootprintCache<Piece>(piece -> local.at(2,80,-64,90));
+        check(!next.get(first).equals(world),"new assembly never reuses a previous position or rotation");
+    }
     private static void supportMasks(String fixture) throws Exception {
         var solids=new java.util.HashMap<String,Set<Voxel>>();
         for(String row:java.nio.file.Files.readAllLines(java.nio.file.Path.of(fixture))) {
@@ -72,6 +97,7 @@ public final class ComponentGeometryTest {
         check(ComponentGeometry.groundMask(new PlacementGeometry.Occupied(checker),1)==null,"bounded compressed pad count");
     }
     public static void main(String[] args) throws Exception {
+        assemblyFootprints();
         wellShaft();
         supportMasks(args[0]);
         for (String id:new String[]{"minecraft:village/savanna/streets/straight_04",

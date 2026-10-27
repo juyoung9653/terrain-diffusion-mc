@@ -86,6 +86,7 @@ public final class LocalTerrainProvider {
 
     // One weak entry per worker: idle threads retain neither old worlds nor evicted tiles.
     private static final ThreadLocal<RecentTile> RECENT_TILE = new ThreadLocal<>();
+    private static final ThreadLocal<RecentTile> RECENT_GROUND_TILE = new ThreadLocal<>();
     private static final boolean RECENT_TILE_CACHE_ENABLED =
             Boolean.parseBoolean(System.getProperty("td.inference.recentTileCache", "true"));
     private static final class RecentTile {
@@ -106,10 +107,18 @@ public final class LocalTerrainProvider {
     private static final int MAX_CACHE_SIZE = 64;
     private static volatile int activeCacheSize = MAX_CACHE_SIZE;
     private static final int MAX_CACHE_SIZE_HEADROOM = 8;
+    private static final boolean COLD_ECOLOGY_CACHE_ENABLED =
+            Boolean.parseBoolean(System.getProperty("td.inference.coldEcologyCache", "true"));
+    private static final int COLD_ECOLOGY_HOT_TILES = Math.max(0,
+            Integer.getInteger("td.inference.coldEcologyHotTiles", 16));
     private final Map<CacheKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
     private final AtomicLong CACHE_CLOCK = new AtomicLong();
     private final Map<CacheKey, FutureTask<HeightmapData>> PENDING = new LinkedHashMap<>();
+    // Ground-only entries have no biome/ecology payload and never enter CACHE.
+    private final Map<CacheKey, CacheEntry> GROUND_CACHE = new ConcurrentHashMap<>();
+    private final Map<CacheKey, FutureTask<HeightmapData>> GROUND_PENDING = new LinkedHashMap<>();
     private final Object cacheLock = new Object();
+    private final EcologyDataCache coldEcologyCache = new EcologyDataCache(COLD_ECOLOGY_HOT_TILES);
 
     private final Map<PartialKey, HeightmapData> partialCache = new LinkedHashMap<>(16, .75f, true);
     private final Map<PartialKey, FutureTask<HeightmapData>> partialPending = new LinkedHashMap<>();
@@ -133,14 +142,14 @@ public final class LocalTerrainProvider {
     public record PerformanceSnapshot(long hits, long misses, long pendingJoins, long evictions,
                                       long computedWindows, long executionNanos, int fullTiles, int partialTiles,
                                       long referenceHits, long referenceMisses, long referenceEvictions, long referenceBytes, int referenceTiles,
-                                      InferenceExecutor.Snapshot inference) { }
+                                      InferenceExecutor.Snapshot inference, int groundTiles) { }
 
     /** Hit totals are exact after callers drain; a live LongAdder snapshot may lag concurrent hits. */
     public PerformanceSnapshot performanceSnapshot() {
         synchronized (cacheLock) {
             return new PerformanceSnapshot(hits.sum(), misses.get(), joined.get(), evictions.get(),
                     computedWindows.get(), executionNanos.get(), CACHE.size(), partialCache.size(),
-                    referenceHits.get(), referenceMisses.get(), referenceEvictions.get(), referenceBytes, referenceCache.size(), INFERENCE_EXECUTOR.snapshot());
+                    referenceHits.get(), referenceMisses.get(), referenceEvictions.get(), referenceBytes, referenceCache.size(), INFERENCE_EXECUTOR.snapshot(), GROUND_CACHE.size());
         }
     }
 
@@ -170,6 +179,14 @@ public final class LocalTerrainProvider {
         LocalTerrainProvider current = INSTANCE;
         if (current != null) current.evictLruTo(activeCacheSize);
     }
+
+    private static boolean useColdEcologyCache() {
+        return COLD_ECOLOGY_CACHE_ENABLED && activeCacheSize > MAX_CACHE_SIZE;
+    }
+
+    private void retainEcology(HeightmapData data) {
+        if (useColdEcologyCache() && data.ecology != null) data.ecology.retainCold(coldEcologyCache);
+    }
     /** Single thread for pipeline.get() so MemoryTileStore is not accessed concurrently. */
     private static final InferenceExecutor INFERENCE_EXECUTOR =
             new InferenceExecutor("terrain-diffusion-inference");
@@ -179,6 +196,7 @@ public final class LocalTerrainProvider {
     private final InferenceExecutor.Scope scope;
     private volatile long seed;
     private final WorldPipeline pipeline;
+    private volatile boolean fastGroundSampling;
     private PreviewSession previewOwner;
     private static final ThreadLocal<PreviewSession> PREVIEW = new ThreadLocal<>();
     private static final ThreadLocal<LocalTerrainProvider> BOUND_PROVIDER = new ThreadLocal<>();
@@ -188,6 +206,7 @@ public final class LocalTerrainProvider {
         this.seed = seed;
         this.scope = scope;
         this.pipeline = new WorldPipeline(seed, models);
+        this.fastGroundSampling = WorldScaleManager.isFastGroundSampling();
     }
 
     /** Every real server receives an isolated provider/cache lifetime, including same-seed reopen. */
@@ -235,6 +254,7 @@ public final class LocalTerrainProvider {
             provider.scope.submit(() -> {
                 provider.pipeline.setSeed(seed);
                 provider.seed = seed;
+                provider.fastGroundSampling = WorldScaleManager.isFastGroundSampling();
                 provider.clearLocalCache();
                 return null;
             }).get();
@@ -250,6 +270,10 @@ public final class LocalTerrainProvider {
         if (PREVIEW.get() != null) return null;
         LocalTerrainProvider bound = BOUND_PROVIDER.get();
         return bound != null ? bound : INSTANCE;
+    }
+
+    public boolean isFastGroundSampling() {
+        return fastGroundSampling;
     }
 
     public static LocalTerrainProvider getInstance() {
@@ -328,6 +352,8 @@ public final class LocalTerrainProvider {
             HeightmapData data = provider.fetchGroundHeightmap(sz, sx, sz + currentTileSize, sx + currentTileSize);
             CacheEntry fetched = provider.CACHE.get(new CacheKey(sz, sx, sz + currentTileSize,
                     sx + currentTileSize, currentScale));
+            if (fetched == null) fetched = provider.GROUND_CACHE.get(new CacheKey(sz, sx, sz + currentTileSize,
+                    sx + currentTileSize, currentScale));
             // Never attach a pre-clear result to a post-clear generation, nor retain evicted tiles.
             if (fetched != null && fetched.valid && fetched.data == data
                     && provider.cacheGeneration == currentGeneration) {
@@ -354,13 +380,18 @@ public final class LocalTerrainProvider {
             CACHE.values().forEach(entry -> entry.valid = false);
             cacheGeneration++;
             CACHE.clear();
+            GROUND_CACHE.values().forEach(entry -> entry.valid = false);
+            GROUND_CACHE.clear();
             partialCache.clear();
+            coldEcologyCache.clear();
             referenceCache.clear();
             referenceBytes = 0;
             partialPending.values().forEach(task -> task.cancel(false));
             partialPending.clear();
             PENDING.values().forEach(task -> task.cancel(false));
             PENDING.clear();
+            GROUND_PENDING.values().forEach(task -> task.cancel(false));
+            GROUND_PENDING.clear();
         }
     }
 
@@ -428,6 +459,7 @@ public final class LocalTerrainProvider {
                 if (provider == null) {
                     provider = new LocalTerrainProvider(seed, models, scope);
                     provider.previewOwner = this;
+                    provider.fastGroundSampling = true;
                 }
                 return provider;
             }
@@ -640,7 +672,10 @@ public final class LocalTerrainProvider {
                         synchronized (cacheLock) {
                             scope.requireOpen();
                             if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
+                            retainEcology(data);
                             CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
+                            CacheEntry ground = GROUND_CACHE.remove(key);
+                            if (ground != null) ground.valid = false;
                             evictLruTo(activeCacheSize);
                         }
                         return data;
@@ -667,6 +702,20 @@ public final class LocalTerrainProvider {
         }
     }
 
+    private void evictGroundLruTo(int maxSize) {
+        int total = CACHE.size() + GROUND_CACHE.size();
+        if (total <= maxSize) return;
+        GROUND_CACHE.entrySet().stream()
+                .sorted(Comparator.comparingLong(e -> e.getValue().lastAccessed.get()))
+                .limit(total - maxSize)
+                .forEach(entry -> {
+                    if (GROUND_CACHE.remove(entry.getKey(), entry.getValue())) {
+                        entry.getValue().valid = false;
+                        evictions.incrementAndGet();
+                    }
+                });
+    }
+
     private void evictLruTo(int maxSize) {
         int headroomHalf = MAX_CACHE_SIZE_HEADROOM / 2;
         if (CACHE.size() > maxSize + headroomHalf) {
@@ -676,15 +725,131 @@ public final class LocalTerrainProvider {
                 .forEach(entry -> {
                     if (CACHE.remove(entry.getKey(), entry.getValue())) {
                         entry.getValue().valid = false;
+                        coldEcologyCache.forget(entry.getValue().data.ecology);
                         evictions.incrementAndGet();
                     }
                 });
         }
+        evictGroundLruTo(maxSize);
     }
 
     /** Exact ground only; partial entries never masquerade as complete biome/ecology tiles. */
     public HeightmapData fetchGroundHeightmap(int i1, int j1, int i2, int j2) {
-        return legacySampling() ? fetchCompleteRegion(i1, j1, i2, j2) : fetchPartial(i1, j1, i2, j2, false);
+        if (!fastGroundSampling)
+            return legacySampling() ? fetchCompleteRegion(i1, j1, i2, j2) : fetchPartial(i1, j1, i2, j2, false);
+        return fetchFastGround(i1, j1, i2, j2);
+    }
+
+    private HeightmapData fetchFastGround(int i1, int j1, int i2, int j2) {
+        scope.requireOpen();
+        int scale = WorldScaleManager.getCurrentScale(), tile = TerrainDiffusionConfig.tileSize();
+        int ri = Math.floorDiv(i1, tile) * tile, rj = Math.floorDiv(j1, tile) * tile;
+        if (i2 <= i1 || j2 <= j1 || i2 > ri + tile || j2 > rj + tile)
+            throw new IllegalArgumentException("Ground read must fit one terrain tile");
+        boolean full = i1 == ri && j1 == rj && i2 == ri + tile && j2 == rj + tile;
+        long observedGeneration = cacheGeneration;
+        if (RECENT_TILE_CACHE_ENABLED) {
+            RecentTile recent = RECENT_GROUND_TILE.get();
+            if (recent != null && recent.provider.get() == this
+                    && recent.generation == observedGeneration
+                    && recent.key.i1 == ri && recent.key.j1 == rj
+                    && recent.key.i2 == ri + tile && recent.key.j2 == rj + tile && recent.key.scale == scale) {
+                CacheEntry entry = recent.entry.get();
+                if (entry != null && entry.valid) {
+                    hits.increment();
+                    if ((++recent.hits & 63) == 0) entry.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+                    return full ? entry.data : cropData(entry.data, i1 - ri, j1 - rj, i2 - i1, j2 - j1);
+                }
+            }
+        }
+        CacheKey key = new CacheKey(ri, rj, ri + tile, rj + tile, scale);
+        FutureTask<HeightmapData> task;
+        synchronized (cacheLock) {
+            scope.requireOpen();
+            CacheEntry complete = CACHE.get(key);
+            if (complete != null && complete.valid) {
+                hits.increment(); complete.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+                rememberGround(key, complete, observedGeneration);
+                return full ? complete.data : cropData(complete.data, i1-ri, j1-rj, i2-i1, j2-j1);
+            }
+            task = PENDING.get(key);
+            if (task == null) {
+                CacheEntry ground = GROUND_CACHE.get(key);
+                if (ground != null && ground.valid) {
+                    hits.increment(); ground.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+                    rememberGround(key, ground, observedGeneration);
+                    return full ? ground.data : cropData(ground.data, i1-ri, j1-rj, i2-i1, j2-j1);
+                }
+                task = GROUND_PENDING.get(key);
+                if (task == null) {
+                    misses.incrementAndGet(); long generation = cacheGeneration;
+                    task = scope.submit(requestPriority(), () -> {
+                        try {
+                            // A foreground complete request may overtake queued ground work.
+                            // Reuse its result before doing any inference or publishing a duplicate.
+                            synchronized (cacheLock) {
+                                scope.requireOpen();
+                                if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
+                                CacheEntry ready = CACHE.get(key);
+                                if (ready != null && ready.valid) return ready.data;
+                            }
+                            long started = System.nanoTime(), before = pipeline.getTotalComputedWindowCount();
+                            HeightmapData data = handleGround(ri, rj, ri + tile, rj + tile, scale);
+                            computedWindows.addAndGet(pipeline.getTotalComputedWindowCount() - before);
+                            executionNanos.addAndGet(System.nanoTime() - started);
+                            synchronized (cacheLock) {
+                                scope.requireOpen();
+                                if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
+                                GROUND_CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
+                                evictGroundLruTo(activeCacheSize);
+                            }
+                            return data;
+                        } finally {
+                            synchronized (cacheLock) { if (generation == cacheGeneration) GROUND_PENDING.remove(key); }
+                        }
+                    });
+                    GROUND_PENDING.put(key, task);
+                } else { joined.incrementAndGet(); INFERENCE_EXECUTOR.promote(task, requestPriority()); }
+            } else { joined.incrementAndGet(); INFERENCE_EXECUTOR.promote(task, requestPriority()); }
+        }
+        try {
+            HeightmapData data = task.get();
+            CacheEntry entry = CACHE.get(key);
+            if (entry == null || entry.data != data) entry = GROUND_CACHE.get(key);
+            if (entry != null && entry.data == data) rememberGround(key, entry, observedGeneration);
+            return full ? data : cropData(data, i1 - ri, j1 - rj, i2 - i1, j2 - j1);
+        }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); throw new CancellationException("Ground tile caller interrupted"); }
+        catch (java.util.concurrent.ExecutionException failed) {
+            if (failed.getCause() instanceof CancellationException cancelled) throw cancelled;
+            throw new IllegalStateException("Ground tile failed: " + key, failed.getCause());
+        }
+    }
+
+    private void rememberGround(CacheKey key, CacheEntry entry, long generation) {
+        if (RECENT_TILE_CACHE_ENABLED && entry.valid && generation == cacheGeneration)
+            RECENT_GROUND_TILE.set(new RecentTile(this, entry, key, generation));
+    }
+
+    private HeightmapData handleGround(int i1, int j1, int i2, int j2, int scale) {
+        int h = i2 - i1, w = j2 - j1;
+        if (scale == 1) {
+            int halo = MacroBiomeContext.REGION_BLOCKS + 64 + MacroBiomeContext.COAST_BLOCKS + 2;
+            float[] elevation = pipeline.getElevationCrop(i1-halo, j1-halo, i2+halo, j2+halo, i1, j1, i2, j2);
+            return new HeightmapData(toHeights(elevation, h, w), null, w, h);
+        }
+        int i1n = Math.floorDiv(i1, scale), j1n = Math.floorDiv(j1, scale);
+        int i2n = -Math.floorDiv(-i2, scale), j2n = -Math.floorDiv(-j2, scale);
+        int i1p = i1n - 2, j1p = j1n - 2, i2p = i2n + 2, j2p = j2n + 2;
+        int nH = i2p - i1p, nW = j2p - j1p;
+        int halo = (int) Math.ceil(194f / scale) + 2;
+        float[] nativeElevation = pipeline.getElevationCrop(i1n-halo, j1n-halo, i2n+halo, j2n+halo, i1p, j1p, i2p, j2p);
+        int cropI = 2 * scale + (i1 - i1n * scale), cropJ = 2 * scale + (j1 - j1n * scale);
+        float[] padded = ExactTerrainSampling.resizeCrop(nativeElevation, 0, 0, nH, nW, 0, 0, nH, nW,
+                scale, cropI - 1, cropJ - 1, h + 2, w + 2);
+        float[] smooth = cropFlat(padded, 1, 1, h, w, h + 2, w + 2);
+        float[] ground = addElevationNoise(smooth, padded, i1, j1, h, w, NATIVE_RESOLUTION / scale);
+        return new HeightmapData(toHeights(ground, h, w), null, w, h);
     }
 
     /** Original classifiers, including caves' ground and natural ecology, over a small region. */
@@ -764,9 +929,11 @@ public final class LocalTerrainProvider {
     }
 
     private void cachePartial(PartialKey key, HeightmapData data) {
+        retainEcology(data);
         partialCache.put(key, data);
         while (partialCache.size() > 512) {
-            partialCache.remove(partialCache.keySet().iterator().next()); evictions.incrementAndGet();
+            HeightmapData evicted = partialCache.remove(partialCache.keySet().iterator().next());
+            coldEcologyCache.forget(evicted.ecology); evictions.incrementAndGet();
         }
     }
 
@@ -923,9 +1090,6 @@ public final class LocalTerrainProvider {
         float[] climateNativeFlat = cropClimate(macro[1], macroH, macroW, i1p - macroI0, j1p - macroJ0, nH, nW);
 
         // Bilinear upsample elevation: (nH, nW) → (nH*scale, nW*scale)
-        float[][] elevNative2D = to2D(elevNativeFlat, nH, nW);
-        float[][] elevUp = LaplacianUtils.bilinearResize(elevNative2D, nH * scale, nW * scale);
-
         // Crop offsets in the upsampled array
         int padUp   = 2 * scale;
         int offsetI = i1 - i1n * scale;
@@ -933,11 +1097,12 @@ public final class LocalTerrainProvider {
         int cropI1  = padUp + offsetI;
         int cropJ1  = padUp + offsetJ;
 
-        float[] elevSmooth = cropFlat(elevUp, cropI1,     cropJ1,     H,   W,   nH * scale, nW * scale);
-        float[] elevPadded = cropFlat(elevUp, cropI1 - 1, cropJ1 - 1, H+2, W+2, nH * scale, nW * scale);
+        float[] elevPadded = ExactTerrainSampling.resizeCrop(elevNativeFlat, 0, 0, nH, nW,
+                0, 0, nH, nW, scale, cropI1 - 1, cropJ1 - 1, H + 2, W + 2);
+        float[] elevSmooth = cropFlat(elevPadded, 1, 1, H, W, H + 2, W + 2);
 
         // Upsample climate (4, nH, nW) → (4, H, W)
-        float[] climate = upsampleClimate(climateNativeFlat, nH, nW, cropI1, cropJ1, H, W, scale, nH * scale, nW * scale);
+        float[] climate = upsampleClimate(climateNativeFlat, nH, nW, cropI1, cropJ1, H, W, scale);
 
         float[] elevOut = addElevationNoise(elevSmooth, elevPadded, i1, j1, H, W, pixelSizeM);
 
@@ -1024,17 +1189,14 @@ public final class LocalTerrainProvider {
 
     private static float[] upsampleClimate(float[] climNative, int nH, int nW,
                                             int cropI1, int cropJ1, int H, int W,
-                                            int scale, int upH, int upW) {
+                                            int scale) {
         if (climNative == null) return null;
         float[] result = new float[4 * H * W];
         for (int ch = 0; ch < 4; ch++) {
-            float[][] chNative = new float[nH][nW];
-            for (int r = 0; r < nH; r++)
-                System.arraycopy(climNative, ch * nH * nW + r * nW, chNative[r], 0, nW);
-            float[][] chUp = LaplacianUtils.bilinearResize(chNative, upH, upW);
-            for (int r = 0; r < H; r++)
-                for (int c = 0; c < W; c++)
-                    result[ch * H * W + r * W + c] = chUp[cropI1 + r][cropJ1 + c];
+            float[] cropped = ExactTerrainSampling.resizeCrop(climNative, ch * nH * nW,
+                    0, 0, nH, nW,
+                    0, 0, nH, nW, scale, cropI1, cropJ1, H, W);
+            System.arraycopy(cropped, 0, result, ch * H * W, H * W);
         }
         return result;
     }
@@ -1063,12 +1225,6 @@ public final class LocalTerrainProvider {
                 System.arraycopy(source, channel * sourceH * sourceW + (r0 + r) * sourceW + c0,
                         result, channel * h * w + r * w, w);
         return result;
-    }
-
-    private static float[][] to2D(float[] flat, int H, int W) {
-        float[][] a = new float[H][W];
-        for (int r = 0; r < H; r++) System.arraycopy(flat, r * W, a[r], 0, W);
-        return a;
     }
 
     private static HeightmapData buildHeightmapData(float[] elevFlat, short[] biomeFlat, short[] terralithFlat, int H, int W) {

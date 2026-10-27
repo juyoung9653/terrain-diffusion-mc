@@ -66,14 +66,20 @@ public class FloatTensor {
             iterStrides[d] = iterStrides[d + 1] * count[d + 1];
         }
 
-        for (int flat = 0; flat < total; flat++) {
-            int dstFlat = 0, srcFlat = 0;
-            for (int d = 0; d < n; d++) {
+        // The innermost dimension is contiguous in both tensors. Decode its
+        // outer coordinates once per row, preserving the original row-major
+        // addition order (including when the source aliases this tensor).
+        int width = count[n - 1];
+        for (int flat = 0; flat < total; flat += width) {
+            int dstFlat = dstRegion[n - 1][0], srcFlat = srcRegion[n - 1][0];
+            for (int d = 0; d < n - 1; d++) {
                 int idx = (flat / iterStrides[d]) % count[d];
                 dstFlat += (dstRegion[d][0] + idx) * strides[d];
                 srcFlat += (srcRegion[d][0] + idx) * src.strides[d];
             }
-            data[dstFlat] += src.data[srcFlat];
+            for (int column = 0; column < width; column++) {
+                data[dstFlat + column] += src.data[srcFlat + column];
+            }
         }
     }
 

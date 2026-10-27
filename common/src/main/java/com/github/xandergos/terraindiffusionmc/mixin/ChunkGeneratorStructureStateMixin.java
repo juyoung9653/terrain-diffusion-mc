@@ -1,6 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.RingBiomeSourcePolicy;
 import com.mojang.datafixers.util.Pair;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
@@ -40,7 +40,7 @@ public class ChunkGeneratorStructureStateMixin {
     private Pair<BlockPos, Holder<Biome>> terrainDiffusion$findRingBiome(BiomeSource source,
             int x, int y, int z, int radius, Predicate<Holder<Biome>> preferred,
             RandomSource random, Climate.Sampler sampler) {
-        if (source instanceof TerrainDiffusionBiomeSource) {
+        if (RingBiomeSourcePolicy.skipRelocation(source)) {
             // Null retains the original ring position in Minecraft's caller. Do
             // not query terrain here: even bounded searches generate distant AI
             // terrain during world startup. Ordinary biome searches bypass this

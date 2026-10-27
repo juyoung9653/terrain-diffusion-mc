@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--terralith", action="store_true")
     parser.add_argument("--c2me", action="store_true", help="Also include the installed NeoForge C2ME jar")
     parser.add_argument("--seed", type=int, default=12345)
+    parser.add_argument("--streams-version", default="2.13.1", choices=["2.13.1", "2.13.5", "2.13.8", "2.15.2"])
     parser.add_argument("--dry-floor", type=float)
     parser.add_argument("--disable-waterways", action="store_true", help="Same-terrain control: disable Streams rivers and lakes")
     parser.add_argument("--fixed-biome", choices=["minecraft:desert", "minecraft:savanna",
@@ -41,7 +42,7 @@ def main() -> None:
     run = (RUNS / args.name).resolve()
     if not run.is_relative_to(RUNS.resolve()) or run.exists():
         parser.error("a fresh directory inside build/streams-probe is required")
-    mods = list((source / "mods").glob("StreamsReflowing-1.21.1-neoforge-2.13.1.jar"))
+    mods = list((source / "mods").glob(f"StreamsReflowing-1.21.1-neoforge-{args.streams_version}.jar"))
     if args.terralith:
         mods += list((source / "mods").glob("Terralith_1.21.1*_Neoforge.jar"))
         mods += list((source / "mods").glob("lithostitched-*.jar"))
@@ -71,16 +72,19 @@ def main() -> None:
         target = run / "terrain-diffusion-models" / name
         shutil.copy2(assets / name, target)
         manifest["modelAssets"][name] = {"bytes": target.stat().st_size, "sha256": digest(target)}
-    for name in ["terrain-diffusion-mc.properties", "streamsreflowing-common.toml"]:
+    streams_config = "streamsreflowing-common.toml"
+    if args.streams_version == "2.15.2" and (source / "config/streamsreflowing.properties").is_file():
+        streams_config = "streamsreflowing.properties"
+    for name in ["terrain-diffusion-mc.properties", streams_config]:
         target = run / "config" / name
         shutil.copy2(source / "config" / name, target)
-        if name.endswith(".toml") and args.dry_floor is not None:
+        if name == streams_config and args.dry_floor is not None:
             content, count = re.subn(r"(?m)^(\s*wetnessDryFloor\s*=\s*)[^\r\n]+",
                                     lambda m: m[1] + str(args.dry_floor), target.read_text(encoding="utf-8"))
             if count != 1:
                 raise ValueError("expected one wetnessDryFloor setting")
             target.write_text(content, encoding="utf-8")
-        if name.endswith(".toml") and args.disable_waterways:
+        if name == streams_config and args.disable_waterways:
             content = target.read_text(encoding="utf-8")
             for setting in ["generateStreams", "generateLakes"]:
                 content, count = re.subn(rf"(?m)^({setting}\s*=\s*)[^\r\n]+",

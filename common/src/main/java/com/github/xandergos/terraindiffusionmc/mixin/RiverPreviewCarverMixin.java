@@ -1,6 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.river.RiverPreviewService;
 import com.github.xandergos.terraindiffusionmc.world.river.WorldRiverPreviewState;
 import net.minecraft.server.level.WorldGenRegion;
@@ -24,7 +24,7 @@ public class RiverPreviewCarverMixin {
                                                     ChunkAccess chunk, GenerationStep.Carving carving,
                                                     CallbackInfo ci) {
         NoiseBasedChunkGenerator generator = (NoiseBasedChunkGenerator) (Object) this;
-        if (!(generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource)
+        if (!TerrainDiffusionBiomeSources.isTerrainDiffusion(generator.getBiomeSource())
                 || !WorldRiverPreviewState.settings(region.getLevel()).enabled()) {
             return;
         }

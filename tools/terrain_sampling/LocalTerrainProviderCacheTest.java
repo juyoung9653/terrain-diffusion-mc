@@ -35,9 +35,10 @@ public final class LocalTerrainProviderCacheTest {
             concurrentMissesJoin(provider);
             invalidationDoesNotPublishOrRemoveReplacement(provider);
             previewIsolation(provider);
+            groundOnlyProfileParity(provider);
             providerLifecycle(provider);
             System.out.println("PASS recent tile: bounds/scale, clear, eviction, amortized recency, exact hit metrics, full-tile coalescing/invalidation, preview isolation, seed changes, closed provider, same-seed reopen");
-            System.out.println("PASS LocalTerrainProviderCacheTest: completed race, pending coalescing, generation invalidation, 512-entry bound, native-reference reuse/upgrade/byte bounds/invalidation, request-shape-dependent scales1..6 exact height/biome/ecology parity");
+            System.out.println("PASS LocalTerrainProviderCacheTest: completed race, pending coalescing, generation invalidation, 512-entry bound, native-reference reuse/upgrade/byte bounds/invalidation, request-shape-dependent scales1..6 exact height/biome/ecology parity, fast ground profile lifecycle, queued ground promotion");
         } finally { LocalTerrainProvider.shutdownAll(); }
     }
 
@@ -251,12 +252,102 @@ public final class LocalTerrainProviderCacheTest {
         check(first != changed && first.heightmap[0][0] != changed.heightmap[0][0], "seed switch invalidates recent data");
         LocalTerrainProvider.shutdownGameplay();
         expectClosed(() -> provider.fetchHeightmap(0, 0, 16, 16));
+        expectClosed(() -> provider.fetchGroundHeightmap(0, 0, 16, 16));
         LocalTerrainProvider.beginGameplay(); LocalTerrainProvider.init(8);
         var reopened = LocalTerrainProvider.getInstance();
         var fresh = reopened.fetchHeightmap(0, 0, 16, 16);
         check(reopened != provider && fresh != changed, "same-seed reopen uses new provider and data");
         check(fresh.heightmap[0][0] == changed.heightmap[0][0], "same seed preserves terrain");
         expectClosed(() -> provider.fetchHeightmap(0, 0, 16, 16));
+    }
+
+    /** Ground-only reads must retain full-tile coordinate context without climate work. */
+    private static void groundOnlyProfileParity(LocalTerrainProvider provider) throws Exception {
+        System.setProperty("td.inference.legacySampling", "true");
+        WorldScaleManager.fastGroundSampling = true;
+        LocalTerrainProvider.init(91);
+        for (int scale = 1; scale <= 6; scale++) {
+            WorldScaleManager.scale = scale;
+            LocalTerrainProvider.clearCache();
+            int climates = WorldPipeline.climateCalls.get();
+            var ground = provider.fetchGroundHeightmap(-16, 240, 0, 256);
+            check(WorldPipeline.climateCalls.get() == climates, "fast ground avoids climate scale=" + scale);
+            var full = provider.fetchHeightmap(-256, 0, 0, 256);
+            check(full.ecology != null && full.biomeIds.length == 256, "full after ground remains complete scale=" + scale);
+            for (int r = 0; r < 16; r++) for (int c = 0; c < 16; c++)
+                check(ground.heightmap[r][c] == full.heightmap[240 + r][240 + c], "fast ground/full parity scale=" + scale);
+        }
+        WorldScaleManager.scale = 1;
+        LocalTerrainProvider.clearCache();
+        int fullCrops = WorldPipeline.cropCalls.get();
+        var fullGround = provider.fetchGroundHeightmap(0, 0, 256, 256);
+        check(fullGround == provider.fetchGroundHeightmap(0, 0, 256, 256), "repeated fast full-tile ground keeps identity");
+        check(WorldPipeline.cropCalls.get() == fullCrops + 1, "repeated fast full-tile ground reuses recent hint");
+        provider.fetchHeightmap(0, 0, 256, 256);
+        int afterFullPromotion = WorldPipeline.cropCalls.get();
+        provider.fetchGroundHeightmap(0, 0, 16, 16);
+        check(WorldPipeline.cropCalls.get() == afterFullPromotion, "ground crop reuses promoted complete tile");
+        LocalTerrainProvider.clearCache();
+        int crops = WorldPipeline.cropCalls.get();
+        var first = CompletableFuture.supplyAsync(() -> provider.fetchGroundHeightmap(0, 0, 16, 16));
+        var second = CompletableFuture.supplyAsync(() -> provider.fetchGroundHeightmap(0, 0, 16, 16));
+        check(first.get(5, TimeUnit.SECONDS).heightmap[0][0] == second.get(5, TimeUnit.SECONDS).heightmap[0][0],
+                "same fast-ground bounds share one complete result");
+        check(WorldPipeline.cropCalls.get() == crops + 1, "one crop request for same fast-ground bounds");
+        LocalTerrainProvider.clearCache();
+        crops = WorldPipeline.cropCalls.get();
+        var afterClear = provider.fetchGroundHeightmap(0, 0, 16, 16);
+        check(afterClear.heightmap[0][0] == first.get().heightmap[0][0]
+                        && WorldPipeline.cropCalls.get() == crops + 1,
+                "fast-ground invalidation recomputes same-bounds result");
+        queuedBackgroundGroundYieldsToForegroundFull(provider);
+        WorldPipeline.entered = new CountDownLatch(1); WorldPipeline.release = new CountDownLatch(1);
+        var stale = CompletableFuture.supplyAsync(() -> provider.fetchGroundHeightmap(288, 288, 304, 304));
+        check(WorldPipeline.entered.await(5, TimeUnit.SECONDS), "fast-ground pending fixture entered");
+        LocalTerrainProvider.clearCache();
+        WorldPipeline.release.countDown();
+        try { stale.join(); throw new AssertionError("cleared fast-ground pending result escaped"); }
+        catch (java.util.concurrent.CompletionException expected) {
+            check(expected.getCause() instanceof java.util.concurrent.CancellationException, "fast-ground clear cancels stale pending result");
+        }
+        WorldPipeline.entered = null; WorldPipeline.release = null;
+        int[] sampled = provider.withSamplingBinding(() -> new int[] {
+                LocalTerrainProvider.scopedGroundHeight(-1, -1), LocalTerrainProvider.scopedGroundHeight(-1, -1)});
+        check(sampled[0] != Integer.MIN_VALUE && sampled[0] == sampled[1], "sampling cursor falls back to a stable complete tile");
+        WorldScaleManager.fastGroundSampling = false;
+        LocalTerrainProvider.init(91);
+    }
+
+    /** A queued low-priority ground request must recheck after a full tile wins the lane. */
+    private static void queuedBackgroundGroundYieldsToForegroundFull(LocalTerrainProvider provider) throws Exception {
+        LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
+        WorldPipeline.entered = new CountDownLatch(1); WorldPipeline.release = new CountDownLatch(1);
+        try {
+            int calls = WorldPipeline.calls.get(), crops = WorldPipeline.cropCalls.get();
+            var blocker = CompletableFuture.supplyAsync(() -> provider.fetchHeightmap(-256, -256, 0, 0));
+            check(WorldPipeline.entered.await(5, TimeUnit.SECONDS), "priority blocker entered");
+            var ground = CompletableFuture.supplyAsync(() -> {
+                try { return provider.withPriority(InferenceExecutor.Priority.BACKGROUND,
+                        () -> provider.fetchGroundHeightmap(0, 0, 256, 256)); }
+                catch (Exception failure) { throw new java.util.concurrent.CompletionException(failure); }
+            });
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (provider.performanceSnapshot().misses() < 2 && System.nanoTime() < deadline) Thread.onSpinWait();
+            check(provider.performanceSnapshot().misses() >= 2, "background ground queued behind blocker");
+            var full = CompletableFuture.supplyAsync(() -> provider.fetchHeightmap(0, 0, 256, 256));
+            while (provider.performanceSnapshot().misses() < 3 && System.nanoTime() < deadline) Thread.onSpinWait();
+            check(provider.performanceSnapshot().misses() >= 3, "foreground full queued after background ground");
+            WorldPipeline.release.countDown();
+            blocker.get(5, TimeUnit.SECONDS);
+            var fullData = full.get(5, TimeUnit.SECONDS);
+            check(ground.get(5, TimeUnit.SECONDS) == fullData, "foreground full tile wins queued background ground");
+            check(WorldPipeline.calls.get() == calls + 2 && WorldPipeline.cropCalls.get() == crops,
+                    "ground recheck performs no additional pipeline crop work");
+            check(provider.performanceSnapshot().groundTiles() == 0, "ground recheck leaves no duplicate ground cache entry");
+        } finally {
+            WorldPipeline.release.countDown();
+            WorldPipeline.entered = null; WorldPipeline.release = null;
+        }
     }
 
     private static void expectClosed(Runnable action) {

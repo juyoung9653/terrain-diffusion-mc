@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.world.river;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -104,7 +104,7 @@ public final class WorldNaturalRiverState extends SavedData {
             return;
         }
         if (!level.dimension().equals(Level.OVERWORLD)
-                || !(level.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource)) {
+                || !TerrainDiffusionBiomeSources.isTerrainDiffusion(level.getChunkSource().getGenerator().getBiomeSource())) {
             SETTINGS.put(level, DISABLED);
             return;
         }

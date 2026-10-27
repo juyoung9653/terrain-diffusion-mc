@@ -16,6 +16,8 @@ import java.security.NoSuchAlgorithmException;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.TreeMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -38,6 +40,21 @@ public final class OnnxModel implements AutoCloseable {
     private static final LongAdder RUN_NANOS = new LongAdder();
     private static final LongAdder INPUT_NANOS = new LongAdder();
     private static final LongAdder OUTPUT_NANOS = new LongAdder();
+    private static final ConcurrentHashMap<String, RunCounters> MODEL_RUNS = new ConcurrentHashMap<>();
+
+    private static final class RunCounters {
+        final LongAdder calls = new LongAdder();
+        final LongAdder nanos = new LongAdder();
+    }
+
+    public record RunMetrics(long calls, long nanos) { }
+
+    /** Keys include the model and batch size; counters are diagnostic and process-local. */
+    public static Map<String, RunMetrics> modelRunMetrics() {
+        Map<String, RunMetrics> result = new TreeMap<>();
+        MODEL_RUNS.forEach((key, value) -> result.put(key, new RunMetrics(value.calls.sum(), value.nanos.sum())));
+        return result;
+    }
 
     /** Opt-in wall-clock measurements; native run time includes runtime transfer costs. */
     public record RuntimeMetrics(long sessionAttempts, long sessionNanos, long runAttempts,
@@ -69,10 +86,16 @@ public final class OnnxModel implements AutoCloseable {
     private static OrtSession activeGpuSession = null;
 
     private final OrtEnvironment env;
-    private final byte[] optimizedModelBytes;
+    /**
+     * Kept only when a session may need to be recreated. Persistent CPU/GPU
+     * sessions own their native model state, so retaining this second Java copy
+     * would keep the optimized model reachable for the whole client lifetime.
+     */
+    private byte[] optimizedModelBytes;
     private final String name;
     private OrtSession cpuSession;    // non-null in CPU-only mode
     private OrtSession gpuSession;    // non-null when offload_models=false
+    private volatile boolean closed;
 
     private static final class OptimizedModelLoadResult {
         private final byte[] modelBytes;
@@ -110,8 +133,23 @@ public final class OnnxModel implements AutoCloseable {
                 loadedModelBytes = rebuiltOptimizedModelLoadResult.modelBytes;
             }
             this.optimizedModelBytes = loadedModelBytes;
+            releaseOptimizedModelBytesAfterPersistentSession();
         } catch (Exception e) {
             throw new RuntimeException("Failed to load ONNX model: " + modelFilePath, e);
+        }
+    }
+
+    /**
+     * Offloaded models recreate a GPU session after another model uses the
+     * shared slot, so their bytes must remain available. A successfully created
+     * CPU or non-offloaded GPU session is persistent and is always selected by
+     * {@link #run(Object[][])} before the shared-slot path, even if a later
+     * configuration read would differ.
+     */
+    private void releaseOptimizedModelBytesAfterPersistentSession() {
+        if (cpuSession != null || gpuSession != null) {
+            optimizedModelBytes = null;
+            LOG.info("Released optimized ONNX model bytes for persistent '{}' session", name);
         }
     }
 
@@ -267,6 +305,9 @@ public final class OnnxModel implements AutoCloseable {
      * @return the output tensor as a flat float array
      */
     public float[] run(Object[][] inputs) {
+        if (closed) {
+            throw new IllegalStateException("ONNX model '" + name + "' is closed");
+        }
         if (cpuSession != null) {
             return runWithSession(cpuSession, inputs);
         }
@@ -300,6 +341,12 @@ public final class OnnxModel implements AutoCloseable {
     private void claimGpuSlot() {
         if (gpuSlotHolder == this) return;
 
+        byte[] modelBytes = optimizedModelBytes;
+        if (modelBytes == null) {
+            throw new IllegalStateException(
+                    "ONNX model '" + name + "' has no recreatable session bytes after close");
+        }
+
         if (activeGpuSession != null) {
             LOG.debug("Evicting '{}' from GPU, loading '{}'",
                     gpuSlotHolder != null ? gpuSlotHolder.name : "?", name);
@@ -312,7 +359,7 @@ public final class OnnxModel implements AutoCloseable {
             OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
             opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
             addGpuProvider(opts);
-            activeGpuSession = createMeasuredSession(optimizedModelBytes, opts);
+            activeGpuSession = createMeasuredSession(modelBytes, opts);
             gpuSlotHolder = this;
             LOG.debug("GPU session ready for '{}'", name);
         } catch (OrtException e) {
@@ -382,7 +429,7 @@ public final class OnnxModel implements AutoCloseable {
         }
     }
 
-    private static float[] runWithSession(OrtSession session, Object[][] inputs) {
+    private float[] runWithSession(OrtSession session, Object[][] inputs) {
         Map<String, OnnxTensor> feed = new LinkedHashMap<>();
         OrtEnvironment env = OrtEnvironment.getEnvironment();
         try {
@@ -392,11 +439,24 @@ public final class OnnxModel implements AutoCloseable {
                         OnnxTensor.createTensor(env, FloatBuffer.wrap((float[]) inp[1]), (long[]) inp[2]));
             }
             if (METRICS) INPUT_NANOS.add(System.nanoTime() - inputStarted);
-            long runStarted = METRICS ? System.nanoTime() : 0;
+            RunCounters modelRuns = null;
+            if (METRICS) {
+                long[] shape = (long[]) inputs[0][2];
+                String key = name + "/batch" + (shape.length == 0 ? 1 : shape[0]);
+                modelRuns = MODEL_RUNS.computeIfAbsent(key, ignored -> new RunCounters());
+            }
             OrtSession.Result rawResult;
             if (METRICS) RUN_ATTEMPTS.increment();
+            long runStarted = METRICS ? System.nanoTime() : 0;
             try { rawResult = session.run(feed); }
-            finally { if (METRICS) RUN_NANOS.add(System.nanoTime() - runStarted); }
+            finally {
+                if (METRICS) {
+                    long elapsed = System.nanoTime() - runStarted;
+                    RUN_NANOS.add(elapsed);
+                    modelRuns.calls.increment();
+                    modelRuns.nanos.add(elapsed);
+                }
+            }
             try (OrtSession.Result result = rawResult) {
                 long outputStarted = METRICS ? System.nanoTime() : 0;
                 OnnxTensor output = (OnnxTensor) result.get(0);
@@ -415,6 +475,7 @@ public final class OnnxModel implements AutoCloseable {
 
     @Override
     public void close() {
+        closed = true;
         synchronized (GPU_SLOT_LOCK) {
             if (gpuSlotHolder == this && activeGpuSession != null) {
                 try { activeGpuSession.close(); } catch (OrtException ignored) {}

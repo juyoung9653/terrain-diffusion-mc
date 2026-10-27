@@ -6,12 +6,41 @@ import net.minecraft.world.level.WorldGenLevel;
 
 /** V4 voxel resolution and pool continuity, independent of native graph persistence. */
 public final class StreamsRiverRaster {
+    /* Metadata only: these ClassValues deliberately retain no engine, plan, lake,
+       or world instance.  Streams invokes this path for every rastered column. */
+    private static final ClassValue<MethodLookup> CONFIG = methods("config");
+    private static final ClassValue<MethodLookup> LAKE_NEAR = methods("lakeNear", int.class, int.class, int.class);
+    private static final ClassValue<MethodLookup> PLAN = methods("plan", int.class, int.class);
+    private static final ClassValue<MethodLookup> LAKE_NEAR_CHUNK = methods("lakeNearChunk", int.class, int.class, int.class);
+    private static final ClassValue<MethodLookup> LAKE_LEVEL = methods("level");
+
     private StreamsRiverRaster() { }
+
+    private static ClassValue<MethodLookup> methods(String name, Class<?>... parameters) {
+        return new ClassValue<>() {
+            @Override protected MethodLookup computeValue(Class<?> type) {
+                try { return new MethodLookup(type.getMethod(name, parameters)); }
+                catch (NoSuchMethodException failure) { return new MethodLookup(failure); }
+            }
+        };
+    }
+    private static Method method(ClassValue<MethodLookup> methods, Class<?> type)
+            throws NoSuchMethodException {
+        return methods.get(type).get();
+    }
+    private record MethodLookup(Method value, NoSuchMethodException failure) {
+        MethodLookup(Method value) { this(value, null); }
+        MethodLookup(NoSuchMethodException failure) { this(null, failure); }
+        Method get() throws NoSuchMethodException {
+            if (failure != null) throw failure;
+            return value;
+        }
+    }
 
     public static Object resolve(Object engine, Object column, int x, int z) {
         if (column == null || !flag(column,"inCorridor")) return column;
         try {
-            Object config = engine.getClass().getMethod("config").invoke(engine);
+            Object config = method(CONFIG, engine.getClass()).invoke(engine);
             if (StreamsNaturalRiverAdapter.version(config) < 4) return column;
             double width = number(column,"width");
             // Half a voxel diagonal keeps a continuous centreline face-connected.
@@ -24,9 +53,9 @@ public final class StreamsRiverRaster {
                 // A lake's backwater can stand above the incised stream plan.
                 // Keep adjacent dry banks at that waterline instead of cutting
                 // a new opening into the shore. Never raise channel water here.
-                Object lake = engine.getClass().getMethod("lakeNear",int.class,int.class,int.class).invoke(engine,x,z,8);
+                Object lake = method(LAKE_NEAR, engine.getClass()).invoke(engine,x,z,8);
                 if (lake != null) {
-                    int lakeLevel = ((Number)lake.getClass().getMethod("level").invoke(lake)).intValue();
+                    int lakeLevel = ((Number)method(LAKE_LEVEL, lake.getClass()).invoke(lake)).intValue();
                     if (lakeLevel > water && lakeLevel-water <= Math.ceil(number(config,"ditchInset"))) bankReference=lakeLevel;
                 }
             }
@@ -44,12 +73,12 @@ public final class StreamsRiverRaster {
         try {
             Object engine = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen")
                     .getMethod("engine",WorldGenLevel.class).invoke(null,level);
-            Object config = engine.getClass().getMethod("config").invoke(engine);
+            Object config = method(CONFIG, engine.getClass()).invoke(engine);
             if (StreamsNaturalRiverAdapter.version(config) < 4) return proposed;
-            Method plan = engine.getClass().getMethod("plan",int.class,int.class);
+            Method plan = method(PLAN, engine.getClass());
             Object centre = plan.invoke(engine,x,z);
             if (flag(centre,"source") || flag(centre,"terminal")
-                    || (Boolean) engine.getClass().getMethod("lakeNearChunk",int.class,int.class,int.class)
+                    || (Boolean) method(LAKE_NEAR_CHUNK, engine.getClass())
                     .invoke(engine,x & ~15,z & ~15,8)) return proposed;
             int radiusStart = reason.indexOf("r=")+2;
             int radius = Integer.parseInt(reason.substring(radiusStart,reason.indexOf(' ',radiusStart)));

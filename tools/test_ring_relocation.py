@@ -10,6 +10,27 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/mixin/ChunkGeneratorStructureStateMixin.java"
 
 STUBS = {
+    "org.spongepowered.asm.mixin.Shadow": "public @interface Shadow {}",
+    "org.spongepowered.asm.mixin.Final": "public @interface Final {}",
+    "org.spongepowered.asm.mixin.Mutable": "public @interface Mutable {}",
+    "org.spongepowered.asm.mixin.injection.Inject": "public @interface Inject { String[] method(); At at(); }",
+    "org.spongepowered.asm.mixin.injection.callback.CallbackInfo": "public class CallbackInfo {}",
+    "net.minecraft.world.level.levelgen.structure.StructureSet": "public class StructureSet {}",
+    "com.github.xandergos.terraindiffusionmc.world.structure.UnifiedVillageSets": """
+public class UnifiedVillageSets {
+    public static <T> java.util.List<T> rewrite(Object source, java.util.List<T> sets) { return sets; }
+}
+""",
+    "dev.worldgen.lithostitched.impl.worldgen.biomeinjector.internal.InjectorBiomeSource": """
+import net.minecraft.world.level.biome.BiomeSource;
+public class InjectorBiomeSource extends BiomeSource {
+    private final BiomeSource delegate;
+    public InjectorBiomeSource(BiomeSource delegate) { this.delegate = delegate; }
+    public BiomeSource rootDelegate() {
+        return delegate instanceof InjectorBiomeSource wrapped ? wrapped.rootDelegate() : delegate;
+    }
+}
+""",
     "com.mojang.datafixers.util.Pair": "public record Pair<A,B>(A first, B second) {}",
     "net.minecraft.core.BlockPos": "public record BlockPos(int x, int y, int z) {}",
     "net.minecraft.core.Holder": "public record Holder<T>(T value) {}",
@@ -73,6 +94,17 @@ public class RingRelocationTest {
                     forbidden, random, sampler) != null) throw new AssertionError("Expected original-ring fallback");
         }
         if (terrain.calls != 0) throw new AssertionError("Terrain lookup was invoked");
+        var wrapped = new dev.worldgen.lithostitched.impl.worldgen.biomeinjector.internal.InjectorBiomeSource(terrain);
+        var nested = new dev.worldgen.lithostitched.impl.worldgen.biomeinjector.internal.InjectorBiomeSource(wrapped);
+        for (var source : new BiomeSource[]{wrapped, nested}) {
+            if (hook.invoke(mixin, source, 1, 2, 3, 112, forbidden, random, sampler) != null
+                    || source.calls != 0) throw new AssertionError("Wrapped terrain queried at startup");
+        }
+        var wrappedOther = new dev.worldgen.lithostitched.impl.worldgen.biomeinjector.internal.InjectorBiomeSource(new BiomeSource());
+        if (hook.invoke(mixin, wrappedOther, 1, 2, 3, 112, forbidden, random, sampler) != wrappedOther.answer
+                || wrappedOther.calls != 1) throw new AssertionError("Wrapped ordinary world changed");
+        if (wrapped.findBiomeHorizontal(1,2,3,112,forbidden,random,sampler) != wrapped.answer
+                || wrapped.calls != 1) throw new AssertionError("Ordinary wrapped search intercepted");
         var other = new BiomeSource();
         Object[] expected = {-53,17,96,112,forbidden,random,sampler};
         var answer = hook.invoke(mixin, other, -53,17,96,112,forbidden,random,sampler);
@@ -83,7 +115,7 @@ public class RingRelocationTest {
             throw new AssertionError("Non-Terrain-Diffusion null result changed");
         if (terrain.findBiomeHorizontal(-53,17,96,112,forbidden,random,sampler) != terrain.answer
                 || terrain.calls != 1) throw new AssertionError("Ordinary lookup intercepted");
-        System.out.println("RingRelocationTest: PASS (512 ring calls, zero terrain queries; other sources forwarded)");
+        System.out.println("RingRelocationTest: PASS (512 direct calls; wrapped/nested terrain skipped; ordinary sources and searches forwarded)");
     }
 }
 """
@@ -101,7 +133,7 @@ def main():
         parser.error("JDK required; supply --java-home")
     with tempfile.TemporaryDirectory(prefix="ring-relocation-") as directory:
         target = Path(directory)
-        sources = [str(SOURCE)]
+        sources = [str(SOURCE), str(ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/RingBiomeSourcePolicy.java")]
         for name, body in STUBS.items():
             package, _, cls = name.rpartition(".")
             path = target / (name.replace(".", "/") + ".java")

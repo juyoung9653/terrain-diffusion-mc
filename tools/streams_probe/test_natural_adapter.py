@@ -63,7 +63,8 @@ def bytecode_layout(jar: Path, version: str) -> None:
     engine = run([str(JAVAP), "-p", "-s", "-c", "-classpath", str(jar), "dev.streamsreflowing.core.RiverEngine"], True)
     lake = run([str(JAVAP), "-p", "-s", "-classpath", str(jar), "dev.streamsreflowing.core.river.Lake"], True)
     require("engine(net.minecraft.world.level.WorldGenLevel);" in worldgen, "StreamsWorldgen.engine(WorldGenLevel) missing")
-    require("StreamsConfig.defaults:(IDIII)" in worldgen, "engine no longer calls StreamsConfig.defaults(IDIII)")
+    defaults = "StreamsConfig.defaults:(IDIIIIIZ)" if version == "2.15.2" else "StreamsConfig.defaults:(IDIII)"
+    require(defaults in worldgen, "engine no longer calls " + defaults)
     # 2.13.x maps most private names to 'a'; check the stable public build entrypoint
     # and the private assembly shape which receives config plus the segment list.
     normalized_tracer = " ".join(tracer.split())
@@ -75,7 +76,7 @@ def bytecode_layout(jar: Path, version: str) -> None:
             "Worldgen.engine FileNetworkStore(path, seed, config) constructor call missing")
     require("assemble(dev.streamsreflowing.core.plate.PlateKey, java.util.List<dev.streamsreflowing.core.river.RiverSegment>, java.util.List<dev.streamsreflowing.core.river.Lake>, dev.streamsreflowing.core.config.StreamsConfig);" in normalized_tracer,
             "NetworkTracer base assemble signature missing")
-    if version in {"2.13.5", "2.13.8"}:
+    if version in {"2.13.5", "2.13.8", "2.15.2"}:
         require("assemble(dev.streamsreflowing.core.plate.PlateKey, java.util.List<dev.streamsreflowing.core.river.RiverSegment>, java.util.List<dev.streamsreflowing.core.river.Lake>, java.util.List<dev.streamsreflowing.core.api.Sink>, dev.streamsreflowing.core.Relief, dev.streamsreflowing.core.config.StreamsConfig);" in normalized_tracer,
                 "NetworkTracer sinks/relief assemble signature missing")
     require("java.util.List<dev.streamsreflowing.core.river.NetworkTracer$Pt>, dev.streamsreflowing.core.config.StreamsConfig, java.util.List<dev.streamsreflowing.core.river.RiverSegment>" in tracer,
@@ -87,9 +88,10 @@ def bytecode_layout(jar: Path, version: str) -> None:
     normalized_carver = " ".join(carver.split())
     place = carver.split("public boolean place(", 1)[1].split("\n  private ", 1)[0]
     writes = re.findall(r"(?m)^\s*(\d+): invokeinterface .*WorldGenLevel\.setBlock:", place)
-    dry_air_offsets = {"2.13.1": "6982", "2.13.5": "7198", "2.13.8": "7843"}
-    require(len(writes) > 6 and writes[6] == dry_air_offsets[version],
-            "RiverCarverFeature dry-bank AIR write ordinal 6 moved; re-audit its branch before applying v6 retention")
+    dry_air_offsets = {"2.13.1": "6982", "2.13.5": "7198", "2.13.8": "7843", "2.15.2": "8960"}
+    dry_ordinal = 7 if version == "2.15.2" else 6
+    require(len(writes) > dry_ordinal and writes[dry_ordinal] == dry_air_offsets[version],
+            "RiverCarverFeature dry-bank AIR write moved; re-audit its branch before applying v6 retention")
     normalized_blacklist = " ".join(blacklist.split())
     normalized_column = " ".join(column.split())
     normalized_engine = " ".join(engine.split())
@@ -205,7 +207,7 @@ def main() -> None:
     for version, jar in jars.items():
         try:
             bytecode_layout(jar, version)
-            if version in {"2.13.5", "2.13.8"}:
+            if version in {"2.13.5", "2.13.8", "2.15.2"}:
                 compatibility = audit_jar(JAVA_HOME, jar, version)
                 require(compatibility["passed"], "Streams compatibility audit failed: " + "; ".join(compatibility["failures"]))
             output = run([str(JAVA), "-ea", "-cp", str(OUT) + ";" + str(jar),

@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.compat.streams;
 
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.WorldGenLevel;
@@ -24,7 +24,8 @@ public final class StreamsTerrainPolicy {
     public static boolean useDemandDrivenGeneration(ServerLevel level) {
         return level != null
                 && TerrainDiffusionConfig.streamsLazyPrefetch()
-                && level.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource;
+                && TerrainDiffusionBiomeSources.isTerrainDiffusion(
+                        level.getChunkSource().getGenerator().getBiomeSource());
     }
 
     public static void recordSkippedOriginWarmup() {

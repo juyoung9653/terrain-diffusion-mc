@@ -228,6 +228,14 @@ biome so Minecraft retains the original ring position. It submits no coarse or
 exact terrain work for relocation. Merely bounding each search to a few tiles was
 insufficient: many distant structure candidates still required minutes of AI work.
 
+Lithostitched 1.8.1 wraps the source in `InjectorBiomeSource`. The ring-only policy
+also checks its public `rootDelegate()` accessor: a wrapped Terrain Diffusion
+source skips relocation, while wrapped ordinary sources retain normal searches.
+Do not replace the wrapper for biome generation or use a global world flag here.
+An unavailable accessor falls back to normal relocation with a warning. Skipping
+relocation can change structure positions or biome-valid candidate counts; it does
+not bypass the subsequent structure biome-validity checks.
+
 Actual terrain, surface and cave biome generation remain unchanged. A structure's
 separate biome-validity rules still apply. Other worlds retain their normal ring
 search. Ordinary biome searches, including `/locate biome`, remain available and
@@ -299,7 +307,7 @@ false: a dry chunk can own the shore beside a lake in its neighbor. Skipping tha
 case reproduced a straight cut at a 16-block boundary. Only generated dry bottom
 slabs may be cleared as cover; structure protection and higher cliffs are retained.
 
-V10 retains V9 river routing and water levels. Streams 2.13.8's direct grass
+V10 retains V9 river routing and channel water levels. Streams 2.13.8's direct grass
 recap and TD containment caps use the original land climate, not a river biome
 overlay. Dry river-biome fringe cells and arid gravel shores also receive the
 appropriate mineral surface. A cave can remove support beneath the original soil:
@@ -312,6 +320,39 @@ mineral surfaces inherit sand or gravel. Unsupported caps use non-falling rock
 slabs, preserving their half and fluid properties; manual, wet and cave slabs are
 excluded. Validate final block states as well as bank code: native slab decoration
 can change a surface height after its material changes.
+
+On Streams 2.13.8, V10 also resolves nested natural lake masks to the lowest
+waterline in their containment group when assembling both fresh and cached graphs.
+One saved lake had a 1,543-cell mask at Y106 entirely inside a 1,764-cell mask at
+Y107, producing raised source-water shelves around its edge. Masks, dry islands
+and list order are preserved; separate, partially overlapping, differently gridded
+and excavated lakes are excluded. V9 and older profiles retain their lake levels.
+The slab guard now permits native waterlogged ocean slabs in V10 while retaining
+the plan-defined river-mouth and bank exclusions and inland-water protection.
+Generated bottom slabs in V10 require a connected terrain step, so decorations
+and isolated one-block sand bumps/pits do not seed scattered slab patches.
+Submerged tall ocean steps can receive waterlogged slabs in source water at the exposed seabed;
+dry cliffs, inland water and covered underwater caves retain their exclusions.
+Terralith 2.6.2 omits `deep_warm_ocean` from its Overworld tag, so a conditional
+NeoForge modifier attaches Terrain Slabs 3.1.2's existing feature to that biome.
+Use the separate `terrain_slabs_ocean` placed feature with constant count 1:
+sharing the native placement creates a `Feature order cycle found` error with
+Apotheosis 8.9.0: its six dungeon features follow native slabs in TD boreal forest
+but precede the extra ocean slab pass. Minimal fixtures without Apotheosis miss it.
+An ID-only alias is insufficient because Minecraft compares placed-feature values.
+The native `--terrain-slab-audit` Streams suite checks controlled contours and
+actual loaded biome features, requires the old cycle to reproduce when Apotheosis
+is loaded, checks the modified biome graph and generates a fresh FULL chunk.
+It also requires exactly one slab pass in all ten loaded ocean biomes.
+It does not establish visual acceptance.
+
+Landmarks 1.2.0's nine placed features use conditional NeoForge overrides with
+rarity-filter denominators multiplied by three. Expected placement attempts are
+one third of their original frequency, with other placement filters preserved.
+The same native audit checks all nine loaded values and optional-mod absence.
+These fixes affect new chunks; they do not rewrite existing saved blocks. Use the
+river planner regressions and the native `RiverScreenshotAudit` to check lake
+selectors, final source-water heights and actual Terrain Slabs admission/placement.
 
 New TD Overworlds on Streams 2.13.8 select its native exact host-height sampler
 without running its two generic terrain calibration passes. Those passes can
@@ -336,7 +377,16 @@ Quitting can therefore briefly wait for an in-progress calculation instead of
 interrupting native inference. Streams may log cancellation warnings for background
 prefetch abandoned during shutdown.
 
-Terrain queries reuse complete classified tiles by default. An experimental 16x16
+New worlds save `fast_ground_sampling=true` in
+`data/terrain_diffusion_world_settings.dat`. Height-only requests can then skip
+biome/ecology classification and decode just the required elevation support. The
+original full reference bounds still determine interpolation. Ground-only tiles
+have a separate cache and never satisfy a request for biome or ecology data.
+Existing settings without this field retain the complete classified-tile path;
+the saved choice is reused when reopening a world. This avoids changing the
+inference request order in existing saves. Decoder inference remains scalar.
+
+Biome queries reuse complete classified tiles by default. An experimental 16x16
 sampling path (`-Dtd.inference.legacySampling=false`) preserves numeric results but
 can repeatedly reconstruct large reference planes when Streams interleaves regions;
 it is unsuitable as the production default. Foreground requests can overtake queued
@@ -420,6 +470,41 @@ Runtime probes with Streams 2.13.8 require NeoForge 21.1.173 or later (the
 isolated ecology probe uses 21.1.249). The normal 21.1.80 compile target can build
 successfully while that mod combination refuses to start; inspect the server
 receipts and logs rather than relying on Gradle's successful task exit alone.
+
+Streams 2.15.2 has separate audited bank-material and dry-bank hooks. It keeps
+the native ring selection, patterns, biome memo, depth fill and random draws;
+TD applies its existing shore and surface policies at the new call sites.
+Configuration copies preserve `terrainFit`, `lakeSampleSpacing`, `legacyShaping`
+and `adaptiveGridRead`. Exact TD terrain sampling remains tied to the saved
+world marker. The 2.13.8 hooks remain available, and unknown versions are not
+automatically admitted by these version gates.
+
+For a 2.15.2 update, run `tools/streams_probe/audit_streams_compat.py --jar
+2.15.2=path/to/Streams.jar --output-dir build/streams-audit`, then the startup,
+sampler-priority and natural-adapter checks against that JAR. Prepare a fresh
+fixture with `tools/streams_probe/prepare.py --streams-version 2.15.2` and use
+`tools/streams_probe/run_suite.py NAME --gradle-user-home .gradle --topology-audit`.
+The suite requires a fresh passing topology receipt when that option is selected.
+Keep cold and restart evidence separately: saved chunks and river graphs make a
+restart a different workload. Streams 2.15.2 imports its old common TOML into
+`config/streamsreflowing.properties`; the old TOML becomes `.imported`.
+Its stall dump distinguishes sampler threads waiting on TD inference from CPU
+work. A large sampler pool does not imply parallel GPU inference.
+Capture provider counters before shutdown: the river lifecycle reduces the tile
+cache from its planning target to the normal target, so final eviction counts
+can describe cleanup rather than repeated generation. The probe's `--inference-metrics`
+option records ONNX timing and provider counters before cleanup; the suite requires
+a metrics receipt when this option is requested. On this Windows/JDK 21 host, JFR
+dumps at the non-ASCII workspace path were empty even in a standalone JVM, so use
+the built-in timing counters rather than treating an empty recording as evidence.
+
+Model window overlap-add decodes coordinates once per contiguous row instead of
+once per float. It preserves row-major addition order, including overlapping
+source/destination arrays. `python tools/test_float_tensor.py` compares the
+production implementation with scalar coordinate enumeration across offsets,
+empty regions, dimensions and aliases. Add `--benchmark` for the isolated tensor
+operation; those times are not chunk-generation times. Compare native cold runs
+separately, preserving the same fixture inputs and requested checks.
 
 Ecological soil and tree groves use world-seeded, warped 128-model-pixel fields
 (256 blocks at scale two). Soil combines this with cached physical elevation,
@@ -829,6 +914,54 @@ tall plant. Other Lush versions fail closed. Installations without Greeneries
 retain the previous TD suppression, while Lush's rocks, mushrooms, non-TD
 biomes, providers and placement counts remain unchanged. This scoped adapter
 does not assert vegetation-density parity between different biome types.
+
+Hybrid Aquatic `1.7.4` with Lithostitched `1.8.1` wraps the biome source.
+TD identity/settings checks recognize that audited wrapper while biome queries
+still use its actual injected result. This keeps the ecology/Lush and shoreline
+policies active; exact-source fast locate and preview optimizations remain
+restricted to their original source type.
+On new worlds, the marine adapter supplies continentalness from raw TD seabed
+height to Hybrid Aquatic's native carver and biome predicates. The native trench
+band occupies pre-carve depths 48–64 blocks; matching-only vanilla aliases allow
+Terralith marine biomes to participate. Native marine generation is retained.
+This does not reproduce vanilla climate distribution or guarantee every cave
+biome. The per-world `data/terrain_diffusion_hybrid_aquatic.properties` marker
+persists admission and seed before generation; initialized worlds without it
+are not retrofitted. Invalid markers or disabling biomes for an enrolled world
+abort startup to avoid silently changing future terrain. Validate marker and
+sampling logic with `tools/hybrid_aquatic/test_world_profile.py`, `test_profile.py`
+and `test_density.py`; native generation requires the opt-in Streams probe's
+`hybridAquaticAudit`, `hybridMarineAudit` and `lushDensityAudit` checks in a fresh
+fixture containing Hybrid Aquatic, Lush, Greeneries and their dependencies.
+The fresh seed-12345 integration fixture generated ecology land, shallow ocean
+and `hybrid_aquatic:warm_trench` chunks successfully. At the trench sample the
+pre-carve boundary was Y=9 and the carved ocean-floor boundary was Y=-38;
+shallow/land density boundaries remained unchanged. The native Lush audit passed
+all nineteen ecology registrations and soil/fluid placement checks. These are
+bounded server-side generation checks, not a visual or full-client performance
+benchmark. Candidate selection must use signed raw coarse elevation: the broad
+ecology climate field clamps negative ocean elevation and cannot rank sea depth.
+
+Hybrid Aquatic's `bull_kelp`, `delesseria` and `sargassum` originally evaluate
+`noise_based_count` once at the chunk origin, producing rectangular density
+steps. The optional adapter replaces that count with 48 candidate attempts and
+thins candidates using a seed/species-specific continuous world-coordinate
+probability field. It runs only in natural-biome TD Overworlds and only for the
+original registered four-modifier chain (120/80/0 noise count, in-square,
+OCEAN_FLOOR, biome). Changed datapack chains and other features retain their own
+rules. Native biome, water, support and stem-growth checks remain in place;
+saved chunks are not rewritten, and density parity with the original is not
+claimed. Run `tools/hybrid_aquatic/test_kelp_policy.py`, then
+`tools/memory_probe/run_compat_probe.py <fresh-fixture-name> --kelp` for the
+combined native marine/Lush checks and virtual-ocean native kelp placement audit.
+The latter validates all three registered features, fixed candidate counts,
+nested scope restoration, dry rejection and excluded-biome rejection; it does
+not replace visual acceptance in a client. Fresh fixtures prepared with
+`tools/structure_placement/prepare_fixture.py --family streams-probe` must retain
+`data/terrain_diffusion_hybrid_aquatic.properties` along with `level.dat`:
+omitting the admission marker from an initialized world correctly disables the
+marine adapter and invalidates the fixture.
+
 `_WG` heightmaps stop updating after CARVERS, so neighbor decoration can exist
 above the ground when the later ecology surface pass converts it to sand. That
 conversion explicitly clears only grass/ferns and a matching double-plant upper
@@ -1009,6 +1142,11 @@ python tools/structure_placement/run_fast_tests.py --jobs 4 --only placement vil
 python tools/structure_placement/run_fast_tests.py --only preflight --streams-jar "path/to/Streams.jar"
 ```
 
+If a restricted Windows session rejects temporary-file creation or atomic moves,
+use a dedicated writable directory under `build` for Java's `java.io.tmpdir`
+or Python's `tempfile.tempdir`, then rerun the failed checks. A partial PASS
+before an `AccessDeniedException` is not a successful suite.
+
 The audited task list also includes `basic-villages` and `moss`. Each check runs in
 its existing isolated output directory; logs and a new ordered `report.json` are
 written under `build/structure-placement/fast-tests`. Default concurrency is four
@@ -1033,6 +1171,15 @@ These are focused pure checks, not complete coverage of game integration. Change
 to generator/mixin ordering or native placement still need the relevant server
 probe. River/ecology changes use their existing focused harnesses; they are not
 covered by this structure-only task list.
+
+For structure-generation stalls with `ImmutableCollections$SetN.probe` under
+`PlacementGeometry.Occupied`, retain the defensive unmodifiable `HashSet` storage.
+The voxel record hash clusters dense coordinates in JDK 21's `Set.copyOf` table;
+copying a 32-cubed volume reproduced the expensive probing. Collision footprints
+are cached by piece identity only within one generated start's pair scan (including
+unknown/null footprints), and must be discarded before movement or another layout
+attempt. Check `placement component` plus a fresh density/support probe; compare
+accepted starts and input manifests before interpreting timings.
 
 Basic-village asset generation streams the pinned source JAR checksum, copies
 fixed-width numeric NBT lists in bulk, and writes generated files only when their

@@ -77,14 +77,28 @@ public final class PlacementGeometry {
         public Voxel offset(int dx,int dy,int dz) { return new Voxel(x+dx,y+dy,z+dz); }
     }
     public record Occupied(java.util.Set<Voxel> blocks) {
-        public Occupied { blocks=java.util.Set.copyOf(blocks); }
+        public Occupied {
+            // Dense coordinate hashes form long linear-probe clusters in Set.copyOf's SetN table.
+            var copy=new java.util.HashSet<Voxel>(java.util.Objects.requireNonNull(blocks));
+            if (copy.contains(null)) throw new NullPointerException("blocks contains null");
+            blocks=copy.isEmpty() ? java.util.Set.of() : java.util.Collections.unmodifiableSet(copy);
+        }
         public Occupied at(int rotation,int x,int y,int z) {
+            if (blocks.isEmpty()) return this;
             var world=new java.util.HashSet<Voxel>();
             for (Voxel block:blocks) world.add(block.rotate(rotation).offset(x,y,z));
             return new Occupied(world);
         }
         public boolean overlaps(Occupied other) {
-            return blocks.stream().anyMatch(other.blocks::contains);
+            java.util.Objects.requireNonNull(other);
+            var smaller=blocks;
+            var larger=other.blocks;
+            if (smaller.size()>larger.size()) {
+                smaller=other.blocks;
+                larger=blocks;
+            }
+            for (Voxel block:smaller) if (larger.contains(block)) return true;
+            return false;
         }
     }
     /** Unknown replacement states retain occupancy; only native no-write final states are ignored. */

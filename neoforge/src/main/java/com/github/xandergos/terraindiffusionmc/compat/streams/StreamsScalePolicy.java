@@ -1,6 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.compat.streams;
 
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.WorldGenLevel;
@@ -21,8 +21,8 @@ public final class StreamsScalePolicy {
         }
         ServerLevel serverLevel = level.getLevel();
         return serverLevel != null
-                && serverLevel.getChunkSource().getGenerator().getBiomeSource()
-                instanceof TerrainDiffusionBiomeSource;
+                && TerrainDiffusionBiomeSources.isTerrainDiffusion(
+                        serverLevel.getChunkSource().getGenerator().getBiomeSource());
     }
 
     public static int activeScale(WorldGenLevel level) {

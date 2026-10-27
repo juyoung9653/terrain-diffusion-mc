@@ -1,18 +1,19 @@
-"""Audit the installed Streams 2.13.8 demand-to-sampler priority contract."""
+"""Audit the native Streams demand-to-sampler priority contract."""
 from __future__ import annotations
 
 import argparse
 import json
 import re
 from pathlib import Path
-from audit_streams_compat import ROOT, DEFAULT_JARS, javap, method_body
+from audit_streams_compat import ROOT, DEFAULT_JARS, javap, method_body, find_java_home
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--java-home", type=Path, default=Path("C:/Program Files/Java/jdk-21"))
-    parser.add_argument("--jar", type=Path, default=DEFAULT_JARS["2.13.8"])
+    parser.add_argument("--java-home", type=Path)
+    parser.add_argument("--jar", type=Path, default=DEFAULT_JARS["2.15.2"])
     args = parser.parse_args()
+    args.java_home = find_java_home(args.java_home)
     output = ROOT / "build/streams-sampling-audit"
     output.mkdir(parents=True, exist_ok=True)
     classes = {}
@@ -45,10 +46,10 @@ def main() -> None:
     registration = json.loads((ROOT / "neoforge/src/main/resources/terrain-diffusion-mc.neoforge.mixins.json").read_text())
     assert {"StreamsDemandPriorityMixin", "StreamsSamplerPriorityMixin"} <= set(registration["mixins"])
     plugin = (ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsStructureShieldMixinPlugin.java").read_text()
-    gate_block = plugin.split("if (BANK_MATERIAL_2138_MIXIN.equals(mixinClassName)", 1)[1].split("\n        }", 1)[0]
+    gate_block = plugin.split('if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.StreamsLakeLevelsMixin")', 1)[1].split("\n        }", 1)[0]
     assert "StreamsDemandPriorityMixin" in gate_block and "StreamsSamplerPriorityMixin" in gate_block
-    assert "hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2138)" in gate_block
-    print("PASS Streams 2.13.8 demand marker, urgent submission branch, both task constructors, priority field, run descriptors and exact-version gates")
+    assert "hasStreamsVersion(StreamsStructureShieldMixinPlugin::hasModernHooks)" in gate_block
+    print(f"PASS {args.jar.name}: demand marker, urgent submission branch, task constructors, priority field, run descriptors and version gate")
 
 
 if __name__ == "__main__":

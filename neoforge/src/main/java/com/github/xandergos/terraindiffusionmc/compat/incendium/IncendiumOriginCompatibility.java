@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.compat.incendium;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
@@ -70,7 +70,8 @@ public final class IncendiumOriginCompatibility {
         if (!Boolean.parseBoolean(System.getProperty("td.incendium.deferOrigin", "true"))
                 || source.getEntity() != null || !source.getLevel().dimension().equals(Level.OVERWORLD)
                 || TerrainDiffusionLifecycle.isPreviewServer(server)
-                || !(server.overworld().getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource)) {
+                || !TerrainDiffusionBiomeSources.isTerrainDiffusion(
+                        server.overworld().getChunkSource().getGenerator().getBiomeSource())) {
             return entries;
         }
         ServerLevel level = server.overworld();

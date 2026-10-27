@@ -1,0 +1,9 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.github.xandergos.terraindiffusionmc.mixin.memory",
+  "compatibilityLevel": "JAVA_21",
+  "plugin": "com.github.xandergos.terraindiffusionmc.compat.memory.VoxyMemoryMixinPlugin",
+  "client": ["VoxyWorldEngineMemoryMixin", "VoxyWorldSectionMemoryMixin"],
+  "injectors": {"defaultRequire": 1}
+}

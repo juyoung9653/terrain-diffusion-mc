@@ -24,7 +24,8 @@ OPTIONAL_CONTROLS = ("village-census-only.txt", "require-ecology-scale1.txt",
                      "verify-well-support.txt")
 METADATA = ("level.dat", "data/terrain_diffusion_world_settings.dat",
             "data/terrain_diffusion_natural_rivers.dat",
-            "data/terrain_diffusion_streams_exact_v1.txt")
+            "data/terrain_diffusion_streams_exact_v1.txt",
+            "data/terrain_diffusion_hybrid_aquatic.properties")
 MANIFEST = "input-manifest.json"
 NAME = re.compile(r"[A-Za-z0-9_-]+\Z")
 
@@ -175,17 +176,19 @@ def _check_target(target: Path, expected: set[str]) -> None:
 
 
 def prepare(source: Path, target: Path, *, center: str | None = None,
-            radius: int | None = None, root: Path = ROOT) -> dict[str, object]:
+            radius: int | None = None, family_name: str = "structure-density", root: Path = ROOT) -> dict[str, object]:
     started = time.monotonic()
     root = Path(os.path.abspath(root))
     source = Path(os.path.abspath(source))
     target = Path(os.path.abspath(target))
     build = root / "build"
-    family = build / "structure-density"
+    if family_name not in ("structure-density", "streams-probe"):
+        raise ValueError("unsupported fixture family")
+    family = build / family_name
     if not source.is_relative_to(build) or source == build:
         raise ValueError(f"source must be a dedicated workspace fixture under {build}")
     if target.parent != family or not NAME.fullmatch(target.name):
-        raise ValueError(f"target must be a direct build/structure-density/<safe-name> child: {target}")
+        raise ValueError(f"target must be a direct build/{family_name}/<safe-name> child: {target}")
     if source.is_relative_to(target) or target.is_relative_to(source):
         raise ValueError("source and target overlap")
     _real_components(source, root)
@@ -204,17 +207,18 @@ def prepare(source: Path, target: Path, *, center: str | None = None,
             "density-center.txt": (center or "0,0").encode("ascii") + b"\n",
             "density-radius.txt": str(radius or 96).encode("ascii") + b"\n",
         }
-        for name in ("density-center.txt", "density-radius.txt"):
+        if family_name == "streams-probe": generated = {}
+        for name in (() if family_name == "streams-probe" else ("density-center.txt", "density-radius.txt")):
             path = source / name
             _real_components(path, source)
             if path.exists() and not path.is_file():
                 raise ValueError(f"source control is not a file: {path}")
-        if center is None and (source / "density-center.txt").is_file():
+        if family_name != "streams-probe" and center is None and (source / "density-center.txt").is_file():
             generated["density-center.txt"] = (source / "density-center.txt").read_bytes()
-        if radius is None and (source / "density-radius.txt").is_file():
+        if family_name != "streams-probe" and radius is None and (source / "density-radius.txt").is_file():
             generated["density-radius.txt"] = (source / "density-radius.txt").read_bytes()
-        effective_center = generated["density-center.txt"].decode("ascii").strip()
-        effective_radius = generated["density-radius.txt"].decode("ascii").strip()
+        effective_center = generated.get("density-center.txt", "0,0".encode()).decode("ascii").strip()
+        effective_radius = generated.get("density-radius.txt", "1".encode()).decode("ascii").strip()
         if not re.fullmatch(r"-?\d+,-?\d+", effective_center):
             raise ValueError("source density center must be X,Z integers")
         if not effective_radius.isdecimal() or int(effective_radius) < 1:
@@ -268,9 +272,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--target", required=True, type=Path)
     parser.add_argument("--center", help="density center X,Z (default source control or 0,0)")
     parser.add_argument("--radius", type=int, help="density radius (default source control or 96)")
+    parser.add_argument("--family", choices=("structure-density", "streams-probe"), default="structure-density")
     args = parser.parse_args(argv)
     try:
-        print(json.dumps(prepare(args.source, args.target, center=args.center, radius=args.radius)))
+        print(json.dumps(prepare(args.source, args.target, center=args.center, radius=args.radius, family_name=args.family)))
         return 0
     except (ValueError, OSError, RuntimeError) as exc:
         parser.error(str(exc))

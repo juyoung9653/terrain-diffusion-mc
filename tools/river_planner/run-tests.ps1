@@ -9,6 +9,7 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\RiverPreviewCache.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverBankShape.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverBankMargin.java') `
+  (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalLakeLevels.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverBankSurface.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\ecology\FeatureEcologyMath.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\pipeline\EcologyClassifier.java') `
@@ -33,6 +34,7 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
   (Join-Path $PSScriptRoot 'StreamsBankLakeMaskTest.java') `
   (Join-Path $PSScriptRoot 'StreamsNaturalConfigTest.java') `
   (Join-Path $PSScriptRoot 'NaturalLakeShoreTest.java') `
+  (Join-Path $PSScriptRoot 'NaturalLakeLevelsTest.java') `
   (Join-Path $PSScriptRoot 'TerrainSlabRiverPolicyTest.java') `
   (Join-Path $PSScriptRoot 'TerrainSlabSurfacePolicyTest.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverConfluenceWidths.java') `
@@ -47,4 +49,9 @@ foreach ($testName in @('DrainagePlannerTest', 'RiverGeometryTest', 'RiverPrevie
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 & (Join-Path $JavaHome 'bin\java.exe') -ea -cp "$out;$root\common\src\main\resources" TerrainSlabSurfacePolicyTest
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Push-Location $root
+try {
+  & (Join-Path $JavaHome 'bin\java.exe') -ea -cp $out NaturalLakeLevelsTest
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+} finally { Pop-Location }
 exit 0

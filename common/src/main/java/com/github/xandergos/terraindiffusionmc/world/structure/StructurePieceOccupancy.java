@@ -95,14 +95,23 @@ public final class StructurePieceOccupancy {
         var footprint=template(element,manager);
         return footprint==null || footprint.needsSupport();
     }
-    /** Native terrain-matching paths deliberately share attachment envelopes with buildings. */
-    public static boolean conflicts(StructurePiece first,StructurePiece second,boolean envelopesConflict) {
-        if (!envelopesConflict) return false;
-        if (nativePath(first) || nativePath(second) || nativeFeature(first) || nativeFeature(second)) return false;
-        var a=occupied(first);
-        var b=occupied(second);
-        if (a==null || b==null) return true;
-        return a.conflicts(b);
+    /** Scoped to one generated start's pair scan, before terrain planning can move its pieces. */
+    public static final class CollisionContext {
+        private final Map<StructurePiece,Boolean> writes=new IdentityHashMap<>();
+        private final ComponentGeometry.FootprintCache<StructurePiece> footprints=
+                new ComponentGeometry.FootprintCache<>(StructurePieceOccupancy::occupied);
+        public boolean hasBlocks(StructurePiece piece) {
+            return writes.computeIfAbsent(piece,StructurePieceOccupancy::hasBlocks);
+        }
+        /** Native terrain-matching paths deliberately share attachment envelopes with buildings. */
+        public boolean conflicts(StructurePiece first,StructurePiece second,boolean envelopesConflict) {
+            if (!envelopesConflict) return false;
+            if (nativePath(first) || nativePath(second) || nativeFeature(first) || nativeFeature(second)) return false;
+            var a=footprints.get(first);
+            var b=footprints.get(second);
+            if (a==null || b==null) return true;
+            return a.conflicts(b);
+        }
     }
     private static boolean nativeFeature(StructurePiece piece) {
         return piece.getClass()==PoolElementStructurePiece.class

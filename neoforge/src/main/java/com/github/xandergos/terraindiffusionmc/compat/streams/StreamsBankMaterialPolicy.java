@@ -6,6 +6,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMath;
 import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
@@ -41,10 +42,9 @@ public final class StreamsBankMaterialPolicy {
                                                             int zone, boolean pointBar, BlockState proposed) {
         boolean sand = proposed.is(Blocks.SAND);
         boolean coherentPointBarCandidate = pointBar && zone == 0 && proposed.is(Blocks.GRAVEL);
-        if ((!sand && !coherentPointBarCandidate)
-                || !(level.getLevel().getChunkSource().getGenerator().getBiomeSource()
-                instanceof TerrainDiffusionBiomeSource source)
-                || !source.naturalBiomes()) {
+        TerrainDiffusionBiomeSource source = TerrainDiffusionBiomeSources.find(
+                level.getLevel().getChunkSource().getGenerator().getBiomeSource());
+        if ((!sand && !coherentPointBarCandidate) || source == null || !source.naturalBiomes()) {
             return proposed;
         }
 
@@ -293,8 +293,9 @@ public final class StreamsBankMaterialPolicy {
     }
 
     private static short terrainBiome(WorldGenLevel level, int blockX, int blockZ) {
-        if (!(level.getLevel().getChunkSource().getGenerator().getBiomeSource()
-                instanceof TerrainDiffusionBiomeSource source) || !source.naturalBiomes()) return 0;
+        TerrainDiffusionBiomeSource source = TerrainDiffusionBiomeSources.find(
+                level.getLevel().getChunkSource().getGenerator().getBiomeSource());
+        if (source == null || !source.naturalBiomes()) return 0;
         int size = TerrainDiffusionConfig.tileSize();
         int tileX = Math.floorDiv(blockX, size) * size;
         int tileZ = Math.floorDiv(blockZ, size) * size;

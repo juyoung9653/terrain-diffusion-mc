@@ -6,10 +6,12 @@ import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankMargi
 public final class TerrainSlabRiverPolicy {
     private TerrainSlabRiverPolicy() { }
 
-    public static boolean protect(int version, boolean water, boolean corridor, boolean channel,
+    public static boolean protect(int version, boolean water, boolean ocean, boolean corridor, boolean channel,
                                   double distance, double width, int y, int bed, int surface, int x, int z) {
         if (version < 9) return false;
-        if (water) return true;
+        // V10 restores native ocean-floor smoothing, but river mouths must still
+        // pass the plan-defined containment guard below. Inland water stays protected.
+        if (water && (version < 10 || !ocean)) return true;
         if (!corridor || !Double.isFinite(distance) || !Double.isFinite(width) || width <= 0) return false;
         if ((long) y < (long) bed - 1 || (long) y > (long) surface + 3) return false;
         // A dry neighbour can still be awaiting its river carve. Exclude the same

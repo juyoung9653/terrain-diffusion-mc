@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.config.StructurePlacementConfig;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.level.dimension.LevelStem;
@@ -17,7 +17,7 @@ public abstract class StructurePlacementWorldMixin {
     private void terrainDiffusion$pinStructureRules(CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer) (Object) this;
         LevelStem overworld = server.registryAccess().registryOrThrow(Registries.LEVEL_STEM).get(LevelStem.OVERWORLD);
-        if (overworld != null && overworld.generator().getBiomeSource() instanceof TerrainDiffusionBiomeSource) {
+        if (overworld != null && TerrainDiffusionBiomeSources.isTerrainDiffusion(overworld.generator().getBiomeSource())) {
             StructurePlacementConfig.bindWorld(server.registryAccess().registryOrThrow(Registries.STRUCTURE),
                     server.getWorldPath(LevelResource.ROOT));
             var registry = server.registryAccess().registryOrThrow(Registries.STRUCTURE);

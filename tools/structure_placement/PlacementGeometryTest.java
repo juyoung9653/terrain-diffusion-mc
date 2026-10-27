@@ -15,6 +15,56 @@ public final class PlacementGeometryTest {
         for (Candidate candidate:raw) if (raw.stream().noneMatch(other -> other.defeats(candidate))) result.add(candidate);
         return result;
     }
+    private static Set<PlacementGeometry.Voxel> frozenAt(Set<PlacementGeometry.Voxel> blocks,
+                                                          int rotation,int x,int y,int z) {
+        var world=new HashSet<PlacementGeometry.Voxel>();
+        for (var block:blocks) world.add(block.rotate(rotation).offset(x,y,z));
+        return Set.copyOf(world);
+    }
+    private static void occupiedSetContract() {
+        var source=new HashSet<PlacementGeometry.Voxel>();
+        source.add(new PlacementGeometry.Voxel(1,2,3));
+        source.add(new PlacementGeometry.Voxel(-4,5,-6));
+        var occupied=new PlacementGeometry.Occupied(source);
+        source.clear();
+        check(occupied.blocks().equals(Set.of(new PlacementGeometry.Voxel(1,2,3),
+                new PlacementGeometry.Voxel(-4,5,-6))),"occupied defensively copies input set");
+        boolean immutable=false;
+        try { occupied.blocks().clear(); } catch (UnsupportedOperationException expected) { immutable=true; }
+        check(immutable,"occupied blocks reject clear");
+        var iterator=occupied.blocks().iterator();
+        iterator.next();
+        immutable=false;
+        try { iterator.remove(); } catch (UnsupportedOperationException expected) { immutable=true; }
+        check(immutable,"occupied blocks iterator stays immutable");
+        boolean rejectedNull=false;
+        try { new PlacementGeometry.Occupied((Set<PlacementGeometry.Voxel>)null); }
+        catch (NullPointerException expected) { rejectedNull=true; }
+        check(rejectedNull,"occupied rejects null set");
+        source.add(null);
+        rejectedNull=false;
+        try { new PlacementGeometry.Occupied(source); } catch (NullPointerException expected) { rejectedNull=true; }
+        check(rejectedNull,"occupied rejects null voxel");
+
+        var dense=new HashSet<PlacementGeometry.Voxel>();
+        for (int x=0;x<32;x++) for (int y=0;y<32;y++) for (int z=0;z<32;z++)
+            dense.add(new PlacementGeometry.Voxel(x,y,z));
+        var actual=new PlacementGeometry.Occupied(dense);
+        check(actual.blocks().equals(Set.copyOf(dense)) && actual.blocks().hashCode()==Set.copyOf(dense).hashCode(),
+                "dense occupied keeps old set value and hash semantics");
+        int[][] offsets={{-1_000_000_000,-64,1_000_000_000},
+                {Integer.MAX_VALUE-31,Integer.MIN_VALUE+31,Integer.MIN_VALUE+31}};
+        for (int rotation=0;rotation<4;rotation++) for (int[] offset:offsets) {
+            var expected=frozenAt(dense,rotation,offset[0],offset[1],offset[2]);
+            var transformed=actual.at(rotation,offset[0],offset[1],offset[2]);
+            check(transformed.blocks().equals(expected) && transformed.blocks().hashCode()==expected.hashCode(),
+                    "dense transform matches frozen Set.copyOf reference for rotations and extreme coordinates");
+            var shifted=frozenAt(dense,rotation,offset[0]+32,offset[1],offset[2]);
+            boolean reference=expected.stream().anyMatch(shifted::contains);
+            check(transformed.overlaps(new PlacementGeometry.Occupied(shifted))==reference,
+                    "dense overlap matches frozen reference");
+        }
+    }
     private static void acceptedStartSafety() {
         Rect left=new Rect(0,0,9,9),right=new Rect(110,0,119,9);
         var index=new PlacementGeometry.AcceptedIndex<String,String>();
@@ -87,6 +137,7 @@ public final class PlacementGeometryTest {
         check(!reverseOversized.accept("huge","huge",left,huge,100),"oversized query checks every existing accepted entry");
     }
     public static void main(String[] args) {
+        occupiedSetContract();
         check(PlacementGeometry.layoutSeed(77,"test:a",-8,3,0)==77,"first layout retains native seed");
         Set<Long> layouts=new HashSet<>();
         for (int attempt=1;attempt<9;attempt++) for (String id:List.of("test:a","test:b"))

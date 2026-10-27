@@ -27,6 +27,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -277,7 +278,13 @@ public final class RiverPreviewService {
 
     private static final class Ground implements RiverGeometry.GroundSampler {
         private final int tileSize = TerrainDiffusionConfig.tileSize();
-        private final Map<Long, LocalTerrainProvider.HeightmapData> tiles = new ConcurrentHashMap<>();
+        // Retain a full row even when a smaller configured tile size is used.
+        private final int maxGroundTiles = Math.max(64, 8192 / tileSize + 2);
+        private final Map<Long, LocalTerrainProvider.HeightmapData> tiles = new LinkedHashMap<>(16, .75f, true) {
+            @Override protected boolean removeEldestEntry(Map.Entry<Long, LocalTerrainProvider.HeightmapData> eldest) {
+                return size() > maxGroundTiles;
+            }
+        };
         private final int originX, originZ, side;
         private final short[] frozen;
         Ground() { originX = 0; originZ = 0; side = 0; frozen = null; }
@@ -302,8 +309,15 @@ public final class RiverPreviewService {
             }
             int tx = Math.floorDiv(x, tileSize), tz = Math.floorDiv(z, tileSize);
             long key = ((long) tx << 32) ^ (tz & 0xffffffffL);
-            var tile = tiles.computeIfAbsent(key, ignored -> LocalTerrainProvider.getInstance().fetchHeightmap(
-                    tz * tileSize, tx * tileSize, tz * tileSize + tileSize, tx * tileSize + tileSize));
+            LocalTerrainProvider.HeightmapData tile;
+            synchronized (tiles) {
+                tile = tiles.get(key);
+                if (tile == null) {
+                    tile = LocalTerrainProvider.getInstance().fetchGroundHeightmap(
+                            tz * tileSize, tx * tileSize, tz * tileSize + tileSize, tx * tileSize + tileSize);
+                    tiles.put(key, tile);
+                }
+            }
             return HeightConverter.convertToMinecraftHeight(tile.heightmap[Math.floorMod(z, tileSize)][Math.floorMod(x, tileSize)]) - 1;
         }
     }

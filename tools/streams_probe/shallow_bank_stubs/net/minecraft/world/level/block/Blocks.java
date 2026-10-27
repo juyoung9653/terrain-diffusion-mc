@@ -1,0 +1,2 @@
+package net.minecraft.world.level.block;
+public final class Blocks { public static final Object GRASS_BLOCK=new Object(), DIRT=new Object(), COARSE_DIRT=new Object(), ROOTED_DIRT=new Object(), PODZOL=new Object(), MUD=new Object(); private Blocks(){} }

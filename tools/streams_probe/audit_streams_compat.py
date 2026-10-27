@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import hashlib
 import json
 import os
 import re
@@ -17,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_JARS = {
     "2.13.5": ROOT / "build/river-v9-validation/delivery/client/mods/StreamsReflowing-1.21.1-neoforge-2.13.5.jar.disabled",
     "2.13.8": Path(os.environ.get("APPDATA", "")) / "PrismLauncher/instances/1.21.1 neoforge rpg/minecraft/mods/StreamsReflowing-1.21.1-neoforge-2.13.8.jar",
+    "2.15.2": Path(os.environ.get("APPDATA", "")) / "PrismLauncher/instances/1.21.1 neoforge rpg/minecraft/mods/StreamsReflowing-1.21.1-neoforge-2.15.2.jar",
 }
 CARVER = "dev.streamsreflowing.worldgen.RiverCarverFeature"
 
@@ -92,28 +94,28 @@ def audit_jar(java_home: Path, jar: Path, version: str) -> dict[str, object]:
     normalized = {name: " ".join(value.split()) for name, value in text.items()}
     writes = re.findall(r"(?m)^\s*(\d+): invokeinterface .*WorldGenLevel\.setBlock:", place)
     grade_calls = re.findall(r"Method a:\(IILjava/lang/String;II\)I", place)
-    expected_grade_calls = {"2.13.5": 12, "2.13.8": 13}.get(version)
+    expected_grade_calls = {"2.13.5": 12, "2.13.8": 13, "2.15.2": 13}.get(version)
+    dry_ordinal = 7 if version == "2.15.2" else 6
+    water_ordinal = dry_ordinal + 1
     require(expected_grade_calls is not None, f"unsupported audited version {version}", failures)
     if expected_grade_calls is not None:
         require(len(grade_calls) == expected_grade_calls,
                 f"grade-call count is {len(grade_calls)}, expected {expected_grade_calls}", failures)
-    require(len(writes) > 7, "place has fewer than eight WorldGenLevel.setBlock calls", failures)
-    if len(writes) > 7:
-        air_window = "\n".join(place.splitlines()[max(0, place.splitlines().index(next(line for line in place.splitlines() if re.match(rf"\s*{writes[6]}: invokeinterface .*WorldGenLevel\.setBlock:", line))) - 22):])
-        # ordinal 6 must use the local initialized from Blocks.AIR; ordinal 7
-        # follows it and uses the stream-water-state local.
+    require(len(writes) > water_ordinal, "place has too few WorldGenLevel.setBlock calls", failures)
+    if len(writes) > water_ordinal:
+        # The version-specific dry write must use AIR; its next write uses water.
         require(re.search(r"Blocks\.AIR.*?astore\s+(\d+)", place, re.S) is not None,
                 "place no longer initializes a local AIR block state", failures)
         air_match = re.search(r"Blocks\.AIR.*?astore\s+(\d+)", place, re.S)
         water_match = re.search(r"streamWaterState:.*?astore\s+(\d+)", place, re.S)
         lines = place.splitlines()
         hit_lines = [i for i, line in enumerate(lines) if "WorldGenLevel.setBlock:" in line]
-        sixth = "\n".join(lines[max(0, hit_lines[6] - 18):hit_lines[6] + 1])
-        seventh = "\n".join(lines[max(0, hit_lines[7] - 18):hit_lines[7] + 1])
+        sixth = "\n".join(lines[max(0, hit_lines[dry_ordinal] - 18):hit_lines[dry_ordinal] + 1])
+        seventh = "\n".join(lines[max(0, hit_lines[water_ordinal] - 18):hit_lines[water_ordinal] + 1])
         require(air_match is not None and re.search(rf"aload\s+{air_match.group(1)}\s*\n.*?setBlock:", sixth, re.S) is not None,
-                "setBlock ordinal 6 is no longer the direct AIR write", failures)
+                f"setBlock ordinal {dry_ordinal} is no longer the dry-bank AIR write", failures)
         require(water_match is not None and re.search(rf"aload\s+{water_match.group(1)}\s*\n.*?setBlock:", seventh, re.S) is not None,
-                "setBlock ordinal 7 is no longer the adjacent stream-water write", failures)
+                f"setBlock ordinal {water_ordinal} is no longer the adjacent stream-water write", failures)
     require("a(int, int, java.lang.String, int, int); descriptor: (IILjava/lang/String;II)I" in normalized["carver"],
             "pool-grade hook descriptor changed", failures)
     require("junction pool (neighbour at r=" in text["carverVerbose"],
@@ -130,13 +132,16 @@ def audit_jar(java_home: Path, jar: Path, version: str) -> dict[str, object]:
         extra_lines = place.splitlines()
         extra_index = next(i for i, line in enumerate(extra_lines) if "8167: invokestatic" in line)
         extra_snippet = "\n".join(extra_lines[extra_index - 9:extra_index + 2])
-    require(carver.count("BankStyle.zoneBlock") == 1, "RiverCarverFeature BankStyle.zoneBlock occurrence changed", failures)
+    if version == "2.15.2":
+        audit_2152_bank(carver, text["bankStyle"], writes, failures)
+    else:
+        require(carver.count("BankStyle.zoneBlock") == 1, "RiverCarverFeature BankStyle.zoneBlock occurrence changed", failures)
     for signature, description in (
         ("a(net.minecraft.world.level.WorldGenLevel, net.minecraft.world.level.ChunkPos); descriptor: (Lnet/minecraft/world/level/WorldGenLevel;Lnet/minecraft/world/level/ChunkPos;)[I", "bank protection-array helper"),
         ("a(int[], int, int, int); descriptor: ([IIII)Z", "bank protection predicate helper"),
     ):
         require(signature in normalized["carver"], f"{description} reflection layout changed", failures)
-    require("zoneBlock(int, double, boolean); descriptor: (IDZ)Lnet/minecraft/world/level/block/state/BlockState;" in normalized["bankStyle"],
+    require(version == "2.15.2" or "zoneBlock(int, double, boolean); descriptor: (IDZ)Lnet/minecraft/world/level/block/state/BlockState;" in normalized["bankStyle"],
             "BankStyle.zoneBlock descriptor changed", failures)
     bank_helpers = {
         "2.13.5": {
@@ -196,17 +201,59 @@ def audit_jar(java_home: Path, jar: Path, version: str) -> dict[str, object]:
     require(networking["register"] in normalized["network"], "StreamFlowNet.register descriptor changed", failures)
     for key in ("payloadConstructor", "payloadType"):
         require(networking[key] in normalized["payload"], f"FlowGridPayload {key} descriptor changed", failures)
-    return {"version": version, "jar": str(jar), "passed": not failures, "failures": failures,
-            "gradeCalls": len(grade_calls), "setBlockOffsets": writes, "dryAirOrdinal": 6,
-            "waterOrdinal": 7, "zoneBlockCalls": carver.count("BankStyle.zoneBlock"),
+    return {"version": version, "jar": str(jar), "sha256": hashlib.sha256(jar.read_bytes()).hexdigest(), "passed": not failures, "failures": failures,
+            "gradeCalls": len(grade_calls), "setBlockOffsets": writes, "dryAirOrdinal": dry_ordinal,
+            "waterOrdinal": water_ordinal, "zoneBlockCalls": carver.count("BankStyle.zoneBlock"),
             "bankHelperDescriptor": bank_helper["descriptor"] if bank_helper else None,
             "networking": networking,
             "evidence": {"poolHookReason": "junction pool (neighbour at r=\\u0001 side=\\u0001)",
-                         "dryAirOffset": writes[6] if len(writes) > 6 else None,
-                         "waterOffset": writes[7] if len(writes) > 7 else None,
+                         "dryAirOffset": writes[dry_ordinal] if len(writes) > dry_ordinal else None,
+                         "waterOffset": writes[water_ordinal] if len(writes) > water_ordinal else None,
                          "extra2138GradeOffset": "8167" if version == "2.13.8" else None,
                          "extra2138Reason": extra_reason,
                          "extra2138Snippet": extra_snippet}}
+
+
+def audit_2152_bank(carver: str, bank_style: str, writes: list[str], failures: list[str]) -> None:
+    """Pin reviewed ring semantics, branch positions and our selected hook sites."""
+    mixins = ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin"
+    source = (mixins / "StreamsBankMaterial2152Mixin.java").read_text(encoding="utf-8")
+    descriptor = re.search(r'method = "a([^"\n]+)"', source).group(1)
+    blocks = re.split(r"\n  (?=(?:private|public|protected|static) )", carver)
+    bodies = [block for block in blocks if "descriptor: " + descriptor + "\n" in block]
+    require(len(bodies) == 1, "2.15.2 ring bank helper descriptor changed", failures)
+    body = bodies[0] if bodies else ""
+    code = " ".join(body.split())
+    require(body.count("BankRing.pick:") == 1 and "723: invokevirtual" in code,
+            "2.15.2 single native ring selection changed", failures)
+    require("BankRing.pick:(JIIIDDLdev/streamsreflowing/worldgen/bank/BankRing$Metrics;I)Lnet/minecraft/world/level/block/state/BlockState;" in body,
+            "2.15.2 ring pick contract changed", failures)
+    require("726: astore 48" in code and "1179: ifnull 1590" in code,
+            "2.15.2 null material must skip top and depth", failures)
+    require("1213: invokestatic" in code and "1329: invokeinterface" in code,
+            "2.15.2 separate top/depth writes moved", failures)
+    require("1231: aload 56" in code and "1236: aload 48" in code and "1238: astore 59" in code,
+            "2.15.2 depth material locals changed", failures)
+    require("index = 22" in source and "iload 22" in code and "BankRing$Metrics." in body,
+            "2.15.2 point-bar decision capture changed", failures)
+    instructions = re.sub(r"#\d+(?:,\s*\d+)?\s*//[^\n]*", "", body)
+    instructions = " ".join(instructions.split())
+    for sequence in (
+        "610: iload 22 612: invokestatic 615: goto 621 618: getstatic 621: astore 44",
+        "661: invokevirtual 664: istore 45 666: aload 32 668: invokevirtual 671: iload 45 673: invokeinterface 678: checkcast 681: astore 46",
+        "705: aload 46 707: lload 33 709: iload 5 711: iload 24 713: iload 6 715: dload 38 717: dload 42 719: aload 44 721: iload 45 723: invokevirtual 726: astore 48",
+    ):
+        require(sequence in instructions, "2.15.2 point-bar/ring selection dataflow changed", failures)
+    require("ringIndexAt(int, double, double, double, boolean, double, double);" in bank_style,
+            "2.15.2 native ring selector missing", failures)
+    require(writes[6:9] == ["8900", "8960", "8992"],
+            "2.15.2 log/dry-bank/water write branches moved", failures)
+    require(writes[12:16] == ["13011", "13093", "13109", "13133"],
+            "2.15.2 recap/vegetation writes moved", failures)
+    for ordinal in (12, 13, 14, 15):
+        require(f"ordinal = {ordinal}" in source, f"2.15.2 missing recap hook {ordinal}", failures)
+    shallow = (mixins / "StreamsShallowBanks2152Mixin.java").read_text(encoding="utf-8")
+    require("ordinal = 7" in shallow, "2.15.2 dry-bank hook must exclude log removal", failures)
 
 
 def find_java_home(requested: Path | None) -> Path:
@@ -237,9 +284,9 @@ def main() -> None:
     results = [audit_jar(java_home, jar, version) for version, jar in jars.items()]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "result.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
-    lines = ["# Streams 2.13.8 compatibility audit", "", "JDK 21 `javap` audit; no game process was launched.", ""]
+    lines = ["# Streams compatibility audit", "", "JDK `javap` audit; no game process was launched.", ""]
     for result in results:
-        lines.extend([f"## {result['version']}", "", f"- passed: `{result['passed']}`", f"- pool-grade calls: `{result['gradeCalls']}`", f"- dry AIR ordinal 6 / water ordinal 7 offsets: `{result['evidence']['dryAirOffset']}` / `{result['evidence']['waterOffset']}`", f"- RiverCarverFeature BankStyle.zoneBlock calls: `{result['zoneBlockCalls']}`", f"- pool hook reason: `{result['evidence']['poolHookReason']}`", f"- extra 2.13.8 reason: `{result['evidence']['extra2138Reason']}`", ""])
+        lines.extend([f"## {result['version']}", "", f"- passed: `{result['passed']}`", f"- pool-grade calls: `{result['gradeCalls']}`", f"- dry AIR ordinal {result['dryAirOrdinal']} / water ordinal {result['waterOrdinal']} offsets: `{result['evidence']['dryAirOffset']}` / `{result['evidence']['waterOffset']}`", f"- RiverCarverFeature BankStyle.zoneBlock calls: `{result['zoneBlockCalls']}`", f"- pool hook reason: `{result['evidence']['poolHookReason']}`", f"- extra 2.13.8 reason: `{result['evidence']['extra2138Reason']}`", ""])
         if result["evidence"]["extra2138Snippet"]:
             lines.extend(["The extra call is preserved: it passes `Math.max(current, proposed)`, so `poolGrade` returns the native proposal before its junction-pool reason filter.", "", "```text", result["evidence"]["extra2138Snippet"], "```", ""])
     (args.output_dir / "summary.md").write_text("\n".join(lines), encoding="utf-8")

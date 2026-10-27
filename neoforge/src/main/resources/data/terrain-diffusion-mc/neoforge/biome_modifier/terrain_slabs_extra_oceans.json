@@ -1,0 +1,16 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "terrain_slabs"
+    },
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "terralith"
+    }
+  ],
+  "type": "neoforge:add_features",
+  "biomes": "#terrain-diffusion-mc:terrain_slabs_extra_oceans",
+  "features": "terrain-diffusion-mc:terrain_slabs_ocean",
+  "step": "underground_structures"
+}

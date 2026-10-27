@@ -1,0 +1,9 @@
+{
+  "replace": false,
+  "values": [
+    {
+      "id": "terralith:deep_warm_ocean",
+      "required": false
+    }
+  ]
+}

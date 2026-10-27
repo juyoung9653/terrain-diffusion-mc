@@ -2,6 +2,7 @@ package com.github.xandergos.terraindiffusionmc.compat.lush;
 
 import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.ecology.GreeneriesSoilPolicy;
 import com.github.xandergos.terraindiffusionmc.world.ecology.NaturalEcology;
 import com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMath;
@@ -52,8 +53,9 @@ public final class LushVegetationPlacementScope {
     }
 
     private static boolean isNaturalTerrainDiffusion(WorldGenLevel level) {
-        return level.getLevel().getChunkSource().getGenerator().getBiomeSource()
-                instanceof TerrainDiffusionBiomeSource source && source.naturalBiomes();
+        TerrainDiffusionBiomeSource source = TerrainDiffusionBiomeSources.find(
+                level.getLevel().getChunkSource().getGenerator().getBiomeSource());
+        return source != null && source.naturalBiomes();
     }
 
     private static boolean isEcologyBiome(WorldGenLevel level, BlockPos origin) {

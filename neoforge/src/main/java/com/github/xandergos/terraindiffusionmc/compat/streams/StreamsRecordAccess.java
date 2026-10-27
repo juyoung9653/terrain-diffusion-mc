@@ -51,6 +51,16 @@ public final class StreamsRecordAccess {
                     + "terminal source upstreamSlope fluidFlowDirX fluidFlowDirZ distToOutlet curvature lateral distToJunction flatRun speed";
             default -> throw new IllegalStateException("Unsupported Streams record: " + type.getName());
         };
+        if (type.getName().equals("dev.streamsreflowing.core.config.StreamsConfig")) {
+            try {
+                type.getMethod("terrainFit");
+                // Audited 2.15.2 constructor order. Retain native fit, lake and adaptive settings.
+                fields = fields.replace("valleySnapRadius ",
+                        "valleySnapRadius terrainFit lakeSampleSpacing legacyShaping adaptiveGridRead ");
+            } catch (NoSuchMethodException legacyLayout) {
+                // Audited 2.13.x constructor; the full signature is still checked above.
+            }
+        }
         return fields.split(" ");
     }
 

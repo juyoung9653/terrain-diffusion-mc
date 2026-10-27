@@ -1,0 +1,2 @@
+package com.github.xandergos.terraindiffusionmc.world.river;
+public final class WorldNaturalRiverState { public static int version(Object level) { return ((Number) level).intValue(); } private WorldNaturalRiverState(){} }

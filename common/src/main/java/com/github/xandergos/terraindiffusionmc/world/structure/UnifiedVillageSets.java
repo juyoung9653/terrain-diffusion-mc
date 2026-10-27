@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.world.structure;
 
 import com.github.xandergos.terraindiffusionmc.config.StructurePlacementConfig;
-import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -22,7 +22,7 @@ public final class UnifiedVillageSets {
 
     public static List<Holder<StructureSet>> rewrite(BiomeSource source,List<Holder<StructureSet>> nativeSets) {
         // Alias sets exist to expose original template holders; they must never add a native population.
-        if (!(source instanceof TerrainDiffusionBiomeSource)) return withoutAliases(nativeSets);
+        if (!TerrainDiffusionBiomeSources.isTerrainDiffusion(source)) return withoutAliases(nativeSets);
         if (nativeSets.isEmpty()) return nativeSets;
         Structure member=nativeSets.stream().flatMap(set -> set.value().structures().stream())
                 .map(entry -> entry.structure().value()).findFirst().orElse(null);

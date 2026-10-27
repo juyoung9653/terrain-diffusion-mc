@@ -5,6 +5,28 @@ Streams Reflowing 2.13.1 and the current Terrain Diffusion source tree. Normal
 builds do not include the diagnostic Java directory. Do not package a release
 with `probe.init.gradle` enabled.
 
+For Terrain Slabs contour and Landmarks placement checks, run
+`python tools/streams_probe/run_suite.py --gradle-user-home .gradle --terrain-slab-audit NAME`
+on a fresh V10 fixture prepared with `--terralith --streams-version 2.15.2`.
+Include Terrain Slabs 3.1.2 and its Architectury 13 dependency, copy the Terrain
+Slabs configuration, and record those additions in the fixture input manifest.
+Add Landmarks 1.2.0 to validate all nine loaded rarity filters; a fixture without
+Landmarks instead checks that the optional overrides are absent. Include Apotheosis
+8.9.0 with Placebo 9.9.4 and Apothic Attributes 2.11.0 to reproduce the reported
+deep-ocean/boreal feature-order cycle; copy matching configurations and record the
+additional inputs. Without Apotheosis the reduced fixture misses that collision.
+The audit requires
+exactly one ocean slab alias on `terralith:deep_warm_ocean`, tests an opposed-order
+negative control, and sorts the full modified
+Overworld and active biome sets. The alias uses constant count 1 to differ by
+value from the native placement without changing origin, frequency or RNG state.
+It requires one slab pass in each of the ten ocean biomes and reports whether
+replacing the alias with the native placement reproduces the deep-ocean/boreal
+cycle. Reproduction is mandatory when Apotheosis is loaded.
+It invokes native admission and generation against controlled terrain and also
+generates chunk (0, -33) to FULL, requiring a fresh successful receipt.
+It is not a full-modpack visual test or a real-world frequency census.
+
 ## Native Streams integration
 
 ### Reusing the tested setup in a modpack
@@ -1077,6 +1099,43 @@ can hit dry bars even when a continuous adjacent water lane exists.
 
 ## Chunk performance checks
 
+Streams bank and raster adapters cache reflective method metadata, never engine,
+world, lake or plan results. Shallow-bank protection rejects non-soil writes before
+querying the 26-column water envelope. Preserve the complete maximum-water fold:
+an early exit can change the existing integer-boundary behavior. Focused checks:
+`python -B tools/streams_probe/test_shallow_banks.py --benchmark` and
+`python -B tools/streams_probe/test_river_raster.py`. These use small API stubs;
+native topology and tick receipts are still required after adapter changes.
+
+`MacroBiomeContext` reuses regional anchor geometry and derived climate samples
+within one build. Samples remain lazy because unselected neighboring anchors can
+fall outside the field halo. Preserve neighbor traversal, strict tie order and
+floating-point expressions. `python -B tools/test_macro_context.py --benchmark`
+compares all context fields bit-for-bit against the frozen previous algorithm
+at scales 1–6, including negative boundaries and an exact anchor tie. Its warmed
+256×256 timings measure only that calculation, not chunk throughput.
+
+The latent stage already batches up to four windows per request. The pinned coarse
+and decoder model input metadata declares dynamic batch dimensions, but their
+current Java callers use batch size one. Use
+`python -B tools/inference_bench/run_cuda_batch_bench.py --models decoder --warmup 3 --runs 7`
+for CUDA feasibility measurements. Production decoder inputs are **256x256**;
+coarse/base inputs are 64x64. A decoder benchmark at 64x64 is not representative.
+On the local RTX 5060 Laptop, the production-size decoder measured 55.72 ms/sample
+at N=1 versus 57.86–58.28 ms/sample at N=2/4/8. Fixed N=8 also wastes work on sparse
+tail requests. Decoder batching was rejected; its experimental runtime changes
+were removed. CUDA results differ between batch shapes, so metadata alone proves
+neither a speedup nor numeric parity. Resident models (`offload_models=false`)
+were already enabled in the local October 22 performance fixture.
+
+The benchmark records actual input/output metadata, complete-call medians, and
+bitwise differences against scalar calls. Keep CUDA/probe/CPU benchmarks exclusive.
+Its isolated single-model timings exclude Minecraft, other resident models and shaders.
+See ONNX Runtime's [CUDA provider documentation](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html)
+and [I/O binding guidance](https://onnxruntime.ai/docs/performance/tune-performance/iobinding.html):
+CUDA graphs and device-bound outputs require additional runtime integration; adding
+provider flags alone does not remove transfers from this Java pipeline.
+
 Streams 2.13.8 demanded builds can execute on `streamsreflowing-prefetch`:
 the thread name alone does not identify speculative work. Preserve the captured
 `LowResGrid$PrioritizedTask` priority (0 urgent, 1 background) across its worker
@@ -1098,11 +1157,58 @@ The opt-in init script forwards `-PtdInference.*` and `-PtdIncendium.*` to
 `-PtdProbe.performanceAudit=true` with `-PtdProbe.performanceParity=true` and
 `-PtdProbe.performanceScales=1,2,3,4,5,6` for native sampling parity; check the
 TerrainPerformanceAudit for fixture coordinates and emitted receipts.
-Full-tile derivation is the production default. Explicitly pass
+Full-tile biome derivation is the production default. New saved world settings
+enable `fast_ground_sampling`, separating height-only requests from classification.
+The original macro/padded reference dimensions remain authoritative;
+`ExactLaplacianCrop` restricts residual support, preserves resize and blur operation
+order, and currently still reads the full low-frequency field. It does not imply
+that all latent/base inference is eliminated. Keep ground entries/pending work
+separate from complete biome/ecology entries, and invalidate weak hints on clear,
+eviction or complete-tile replacement. Old settings missing the field use the
+previous complete path. The probe-only `--fast-ground true|false` override permits
+matched fresh-fixture comparisons without changing the saved choice.
+
+`python -B tools/test_laplacian_crop.py` checks raw float bits against the full
+Laplacian path. `python -B tools/test_terrain_sampling.py` checks scale 1–6 height
+parity, cache lifetime/coalescing and complete-tile promotion using a deterministic
+pipeline fixture. `--terrain-parity` additionally requests native preview/full
+parity at scales 1–6; its extra workload must not enter a speed comparison.
+`--cpu-profile` adds a 100 ms CPU-delta weighted Java stack sampler after the
+preview audit. Inspect its fresh `terrain_cpu_profile` receipt; sampled weights
+are estimates, and profiling overhead also invalidates timing comparisons.
+
+Explicitly pass
 `-PtdInference.legacySampling=false` to exercise experimental partial sampling.
 The latter passed sparse parity but regressed dense Streams startup: repeated
 large reference reconstruction dominated watchdog stacks. The cache regression
 test must revisit interleaved regions, not only eight nearby sample points. `-PtdInference.metrics=true` enables ONNX session/run counters.
+
+Matched October 22 CUDA/Streams runs (scale 2, seed 6187795302574383407,
+eight external mods including C2ME) measured 105.074 s for the original probe
+and 68.727 / 67.710 s for the final optimized source, about 35% less elapsed time.
+The final pair has identical source hashes; all three match 61 fixture input
+hashes, fresh river/chunk caches, start coordinates and selected chunk order.
+This times route discovery, chunk generation and topology/tick checks, excludes
+server/model startup, and is not four-chunk throughput or a full-modpack result.
+The original baseline has one run and no complete source snapshot. Sampled TD
+height/biome columns matched; native `surfaceY` differed, so this is not full
+block equivalence. See `build/chunk-speed-oct22/validation-speed2.json` and the
+retained fixtures for receipts, start/end counters and field-by-field differences.
+
+The October 22 CPU stack profile exposed repeated `tile_size` parsing and
+`InferenceExecutor.Scope.requireOpen` monitor acquisition in density sampling.
+Configuration is immutable after static initialization, so tile size is resolved
+once. Lifecycle flags are volatile for cached reads; task admission, closure and
+queue mutation remain under the same lock. Validate config defaults/overrides with
+`python -B tools/test_config_tile_size.py` and cancellation/draining with
+`python -B tools/test_terrain_sampling.py`. CPU sample weights are not elapsed-time
+savings; repeat the matched native probe after changing these paths.
+
+The probe's `inference_metrics_start` / `inference_metrics` values are cumulative
+snapshots, with per-model/batch timings in `onnxByModel`, while `complete`
+reports elapsed time from the probe start. Use matching start/end deltas before
+using those counters to calculate a phase percentage or an upper bound on speedup;
+do not add overlapping provider/executor/ONNX durations.
 
 Native inference must retain the original full reference query bounds: shrinking
 those bounds can change Laplacian floating-point results and round a height to a

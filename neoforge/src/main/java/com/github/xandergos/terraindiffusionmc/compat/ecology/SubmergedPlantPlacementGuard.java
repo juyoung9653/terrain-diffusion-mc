@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.compat.ecology;
 
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.ecology.SubmergedPlantPolicy;
 import java.util.concurrent.atomic.LongAdder;
 import net.minecraft.core.BlockPos;
@@ -28,8 +29,9 @@ public final class SubmergedPlantPlacementGuard {
     private SubmergedPlantPlacementGuard() { }
 
     public static boolean allowsPlacement(WorldGenLevel level, BlockPos pos) {
-        if (!(level.getLevel().getChunkSource().getGenerator().getBiomeSource()
-                instanceof TerrainDiffusionBiomeSource source) || !source.naturalBiomes()) {
+        TerrainDiffusionBiomeSource source = TerrainDiffusionBiomeSources.find(
+                level.getLevel().getChunkSource().getGenerator().getBiomeSource());
+        if (source == null || !source.naturalBiomes()) {
             NON_NATURAL_TERRAIN.increment();
             return true;
         }

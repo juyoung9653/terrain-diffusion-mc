@@ -95,6 +95,23 @@ public final class ComponentGeometry {
                 x+Math.max(a.x(),b.x()),z+Math.max(a.z(),b.z()));
     }
 
+    /** One assembly's immutable world-space footprints, including conservative unknowns.
+     * Discard before pieces move or another layout attempt begins. Not shared across workers. */
+    public static final class FootprintCache<K> {
+        private final java.util.IdentityHashMap<K,Footprint> values=new java.util.IdentityHashMap<>();
+        private final java.util.function.Function<K,Footprint> factory;
+        public FootprintCache(java.util.function.Function<K,Footprint> factory) {
+            this.factory=java.util.Objects.requireNonNull(factory);
+        }
+        public Footprint get(K piece) {
+            Footprint found=values.get(piece);
+            if (found!=null || values.containsKey(piece)) return found;
+            Footprint computed=factory.apply(piece);
+            values.put(piece,computed);
+            return computed;
+        }
+    }
+
     public record Footprint(PlacementGeometry.Occupied solid,PlacementGeometry.Occupied air) {
         public Footprint(Set<PlacementGeometry.Voxel> solid,Set<PlacementGeometry.Voxel> air) {
             this(new PlacementGeometry.Occupied(solid),new PlacementGeometry.Occupied(air));

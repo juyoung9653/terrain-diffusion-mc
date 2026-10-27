@@ -2,6 +2,7 @@ package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.compat.terrainslabs.TerrainSlabRiverGuard;
 import com.github.xandergos.terraindiffusionmc.compat.terrainslabs.TerrainSlabSurface;
+import com.github.xandergos.terraindiffusionmc.compat.terrainslabs.TerrainSlabContour;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.core.BlockPos;
@@ -18,6 +19,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Pseudo
 @Mixin(targets = "net.countered.terrainslabs.generation.SlabFeature", remap = false)
 public abstract class TerrainSlabRiverFeatureMixin {
+    @Inject(method = "validSurroundingBottom", at = @At("RETURN"), cancellable = true, require = 1)
+    private void terrainDiffusion$oceanRiser(WorldGenLevel level, BlockPos pos, boolean neighbourCanBeSlab,
+                                           CallbackInfoReturnable<Boolean> result) {
+        if (!result.getReturnValueZ() && TerrainSlabContour.allowsOceanRiser(level, pos))
+            result.setReturnValue(true);
+    }
+
     @WrapOperation(method = "setBlockState(Lnet/minecraft/world/level/LevelAccessor;Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;)V",
             at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/LevelAccessor;setBlock(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Z"),
             require = 1, remap = false)
@@ -30,7 +38,8 @@ public abstract class TerrainSlabRiverFeatureMixin {
     private void terrainDiffusion$protectBottomSlab(WorldGenLevel level, BlockPos pos,
                                                     boolean isMaxY, boolean neighbourCanBeSlab,
                                                     CallbackInfoReturnable<Boolean> result) {
-        if (result.getReturnValueZ() && TerrainSlabRiverGuard.protects(level, pos)) result.setReturnValue(false);
+        if (result.getReturnValueZ() && (TerrainSlabRiverGuard.protects(level, pos)
+                || !TerrainSlabContour.allowsBottom(level, pos, neighbourCanBeSlab))) result.setReturnValue(false);
     }
 
     @Inject(method = "shouldPlaceTopSlab", at = @At("RETURN"), cancellable = true, require = 1)

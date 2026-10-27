@@ -26,13 +26,16 @@
     "StreamsDemandPriorityMixin",
     "StreamsSamplerPriorityMixin",
     "StreamsNaturalNetworkMixin",
+    "StreamsLakeLevelsMixin",
     "StreamsRiverBanksMixin",
     "StreamsShallowBanksMixin",
+    "StreamsShallowBanks2152Mixin",
     "StreamsRiverRasterMixin",
     "StreamsNaturalLifecycleMixin",
     "StreamsPlayerPrefetchMixin",
     "StreamsBankMaterialMixin",
-    "StreamsBankMaterial2138Mixin"
+    "StreamsBankMaterial2138Mixin",
+    "StreamsBankMaterial2152Mixin"
   ],
   "client": ["ChunkPacketFailureCaptureMixin"],
   "injectors": {

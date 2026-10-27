@@ -5,6 +5,16 @@ import java.lang.reflect.Method;
 /** V9 lake safety sampled in world coordinates; never consults or loads Minecraft chunks. */
 final class StreamsBankLakeMask {
     private static final int HALO = 8;
+    // The dry-bank hook calls nearColumn per block; only the method is reusable.
+    private static final ClassValue<Method> LAKE_AT = new ClassValue<>() {
+        @Override protected Method computeValue(Class<?> type) {
+            try {
+                return type.getMethod("lakeAt", int.class, int.class);
+            } catch (ReflectiveOperationException failure) {
+                throw new IllegalStateException("Unsupported Streams lake lookup", failure);
+            }
+        }
+    };
     private final int minX, minZ;
     private final boolean[][] lakes = new boolean[32][32];
     private boolean anyLake;
@@ -19,7 +29,7 @@ final class StreamsBankLakeMask {
         // beyond their centre bounds, so expand by that plus our read-only halo.
         if (!(Boolean) engine.getClass().getMethod("lakeNearChunk", int.class, int.class, int.class)
                 .invoke(engine, minX, minZ, HALO + (spacing + 1) / 2)) return;
-        Method lakeAt = engine.getClass().getMethod("lakeAt", int.class, int.class);
+        Method lakeAt = LAKE_AT.get(engine.getClass());
         for (int x = 0; x < lakes.length; x++) for (int z = 0; z < lakes[x].length; z++) {
             lakes[x][z] = lakeAt.invoke(engine, this.minX + x, this.minZ + z) != null;
             anyLake |= lakes[x][z];
@@ -72,7 +82,7 @@ final class StreamsBankLakeMask {
 
     /** Small on-demand buffer for the native dry-write hook, which has no chunk-scoped pass. */
     static boolean nearColumn(Object engine, int x, int z, int radius) throws ReflectiveOperationException {
-        Method lakeAt = engine.getClass().getMethod("lakeAt", int.class, int.class);
+        Method lakeAt = LAKE_AT.get(engine.getClass());
         for (int dx = -radius; dx <= radius; dx++) for (int dz = -radius; dz <= radius; dz++) {
             if (dx * dx + dz * dz <= radius * radius && lakeAt.invoke(engine, x + dx, z + dz) != null)
                 return true;

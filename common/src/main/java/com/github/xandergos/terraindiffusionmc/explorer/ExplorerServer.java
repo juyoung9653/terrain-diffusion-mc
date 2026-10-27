@@ -319,7 +319,7 @@ public final class ExplorerServer {
             Map<String, String> q = parseQuery(ex.getRequestURI());
             int ci         = getInt(q, "ci", 0);
             int cj         = getInt(q, "cj", 0);
-            int detailSize = getInt(q, "detail_size", 1024);
+            int detailSize = boundedDetailSize(q);
             int panI       = getInt(q, "pan_i", 0);
             int panJ       = getInt(q, "pan_j", 0);
             String mode    = q.getOrDefault("mode", "relief");
@@ -381,7 +381,7 @@ public final class ExplorerServer {
             Map<String, String> q = parseQuery(ex.getRequestURI());
             int ci         = getInt(q, "ci", 0);
             int cj         = getInt(q, "cj", 0);
-            int detailSize = getInt(q, "detail_size", 1024);
+            int detailSize = boundedDetailSize(q);
             int panI       = getInt(q, "pan_i", 0);
             int panJ       = getInt(q, "pan_j", 0);
 
@@ -574,6 +574,13 @@ public final class ExplorerServer {
         String v = q.get(key);
         if (v == null) return def;
         try { return Integer.parseInt(v); } catch (NumberFormatException e) { return def; }
+    }
+
+    /** Matches the fixed 1024px detail plane served by the bundled explorer UI. */
+    private static int boundedDetailSize(Map<String, String> q) {
+        int size = getInt(q, "detail_size", 1024);
+        if (size < 1 || size > 1024) throw new IllegalArgumentException("detail_size must be 1..1024");
+        return size;
     }
 
     private static Float getFloat(Map<String, String> q, String key) {

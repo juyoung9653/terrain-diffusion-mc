@@ -498,6 +498,53 @@ public final class WorldPipeline implements AutoCloseable {
         return new float[][]{elevFlat, climate};
     }
 
+    /**
+     * Evaluate only an elevation crop, keeping the full query's Laplacian coordinates.
+     * A smaller independent query is not equivalent: resize rounding depends on its bounds.
+     */
+    public float[] getElevationCrop(int i1, int j1, int i2, int j2,
+                                    int cropI1, int cropJ1, int cropI2, int cropJ2) {
+        if (cropI1 < i1 || cropJ1 < j1 || cropI2 > i2 || cropJ2 > j2
+                || cropI2 <= cropI1 || cropJ2 <= cropJ1)
+            throw new IllegalArgumentException("Elevation crop must fit its reference query");
+        int lc = LATENT_COMPRESSION;
+        float sigma = 5.0f;
+        int ks = ((int) (sigma * 2) / 2) * 2 + 1;
+        int padHr = (ks / 2 + 1) * lc;
+        int pi1 = Math.floorDiv(i1 - padHr, lc) * lc;
+        int pj1 = Math.floorDiv(j1 - padHr, lc) * lc;
+        int pi2 = -Math.floorDiv(-(i2 + padHr), lc) * lc;
+        int pj2 = -Math.floorDiv(-(j2 + padHr), lc) * lc;
+        int pH = pi2 - pi1, pW = pj2 - pj1;
+        float[] result = ExactLaplacianCrop.decode(pH, pW, pH / lc, pW / lc,
+                cropI1 - pi1, cropJ1 - pj1, cropI2 - cropI1, cropJ2 - cropJ1, sigma,
+                (r, c, h, w) -> unweightElevation(residual.getSlice(
+                        new int[]{0, pi1 + r, pj1 + c}, new int[]{2, pi1 + r + h, pj1 + c + w}),
+                        h, w, 0, 1, RESIDUAL_STD, RESIDUAL_MEAN),
+                (r, c, h, w) -> unweightElevation(latents.getSlice(
+                        new int[]{0, pi1 / lc + r, pj1 / lc + c},
+                        new int[]{6, pi1 / lc + r + h, pj1 / lc + c + w}),
+                        h, w, 4, 5, LOWFREQ_STD, LOWFREQ_MEAN));
+        for (int k = 0; k < result.length; k++) {
+            float value = result[k];
+            result[k] = (float) (Math.signum(value) * value * value);
+        }
+        return result;
+    }
+
+    private static float[][] unweightElevation(FloatTensor tensor, int h, int w,
+                                               int channel, int weightChannel, float std, float mean) {
+        float[][] result = new float[h][w];
+        int plane = h * w;
+        for (int r = 0; r < h; r++) for (int c = 0; c < w; c++) {
+            int index = r * w + c;
+            float weight = tensor.data[weightChannel * plane + index];
+            float value = weight > 1e-6f ? tensor.data[channel * plane + index] / weight : 0f;
+            result[r][c] = value * std + mean;
+        }
+        return result;
+    }
+
     // =========================================================================
     // Elevation
     // =========================================================================

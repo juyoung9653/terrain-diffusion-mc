@@ -14,6 +14,8 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
@@ -144,13 +146,12 @@ public final class FastLocateCommand {
                     source.sendFailure(Component.literal("[td-locate] Missing structure or empty/missing tag: " + id)); return 0;
                 }
                 Set<Holder<Biome>> biomes = new HashSet<>();
-                int unsupported = 0;
                 for (var holder : holders) {
                     boolean supported = false;
                     for (var placement : state.getPlacementsForStructure(holder)) {
                         if (placement instanceof RandomSpreadStructurePlacement random) {
                             placements.add(new PlacementTarget(holder, random)); supported = true;
-                        } else unsupported++;
+                        }
                     }
                     if (supported) holder.value().biomes().forEach(biomes::add);
                 }
@@ -158,8 +159,6 @@ public final class FastLocateCommand {
                     source.sendFailure(Component.literal("[td-locate] No supported random-spread placements in this dimension: " + id
                             + ". Use /locate structure " + id)); return 0;
                 }
-                if (unsupported > 0) tell(source, "[td-locate] Skipping " + unsupported
-                        + " unsupported ring/custom placements in " + id + "; use /locate for those.");
                 accepted = Set.copyOf(biomes);
             } else {
                 var registry = source.registryAccess().registryOrThrow(Registries.BIOME);
@@ -175,8 +174,6 @@ public final class FastLocateCommand {
             Job job = new Job(source, level, biomeSource, LocalTerrainProvider.getInstance(), origin,
                     radius, seconds, id, accepted, structures, List.copyOf(placements), state);
             synchronized (JOBS) { JOBS.put(server, job); }
-            tell(source, "[td-locate] START " + id + " · 반경 " + radius
-                    + " · 후보 우선 탐색 후 실제 검증 (가장 가까운 결과 보장 없음), 탐색 예산 " + seconds + "초 (진행 중인 계산 정리는 더 걸릴 수 있음)");
             Thread thread = new Thread(job::run, "td-fast-locate");
             thread.setDaemon(true);
             thread.start();
@@ -190,6 +187,19 @@ public final class FastLocateCommand {
 
     private static void tell(CommandSourceStack source, String text) {
         source.sendSuccess(() -> Component.literal(text), false);
+    }
+
+    private static void found(CommandSourceStack source, Match match, String requested, String counts) {
+        BlockPos pos = match.position();
+        String coordinates = "[" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + "]";
+        String teleport = "/tp @s " + pos.getX() + " " + pos.getY() + " " + pos.getZ();
+        source.sendSuccess(() -> Component.literal("[td-locate] FOUND " + match.matchedId()
+                        + " (" + requested + ") ")
+                .append(Component.literal(coordinates)
+                        .withStyle(style -> style.withColor(ChatFormatting.GREEN).withUnderlined(true).withClickEvent(
+                                new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, teleport))))
+                .append(Component.literal(" · " + match.semantics()
+                        + " · 가장 가까운 결과 보장 없음 · " + counts)), false);
     }
 
     private record PlacementTarget(Holder<Structure> structure, RandomSpreadStructurePlacement placement) { }
@@ -348,9 +358,7 @@ public final class FastLocateCommand {
                 main(() -> {
                     if (match == null || !budget.live()) tell(source, "[td-locate] EXHAUSTED 탐색 예산/후보 내에서 검증된 결과를 찾지 못했습니다. 존재하지 않는다는 뜻은 아닙니다. " + counts());
                     else {
-                        BlockPos pos = match.position();
-                        tell(source, "[td-locate] FOUND " + match.matchedId() + " (" + id + ") [" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ()
-                                + "] · " + match.semantics() + " · 가장 가까운 결과 보장 없음 · " + counts());
+                        found(source, match, id, counts());
                     }
                     return null;
                 });
@@ -404,7 +412,6 @@ public final class FastLocateCommand {
                     }
                 }
                 sector++;
-                if (sector % 5 == 0) main(() -> { tell(source, "[td-locate] PROGRESS " + phase + " · " + counts()); return null; });
             }
             return ranked(candidates, center, !searchingStructures ? tileSize : 16);
         }
@@ -429,7 +436,6 @@ public final class FastLocateCommand {
                         }
                     }
                 }
-                if (budget.tiles() % 8 == 0) main(() -> { tell(source, "[td-locate] PROGRESS " + phase + " · " + counts()); return null; });
                 return null;
             });
         }
@@ -495,7 +501,6 @@ public final class FastLocateCommand {
                     return null;
                 });
                 if (match != null) return match;
-                if (budget.starts() % 4 == 0) main(() -> { tell(source, "[td-locate] PROGRESS " + phase + " · " + counts()); return null; });
             }
             return null;
         }

@@ -11,6 +11,7 @@ public final class WorldScaleManager {
     public static final int MAX_SCALE = 6;
 
     private static volatile int currentScale = DEFAULT_SCALE;
+    private static volatile boolean fastGroundSampling;
 
     private WorldScaleManager() {
     }
@@ -32,6 +33,7 @@ public final class WorldScaleManager {
         }
 
         currentScale = clampScale(worldScaleSettingsState.getScale());
+        fastGroundSampling = worldScaleSettingsState.isFastGroundSampling();
     }
 
     /**
@@ -41,6 +43,12 @@ public final class WorldScaleManager {
         Integer preview = com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.previewScale();
         if (preview != null) return preview;
         return currentScale;
+    }
+
+    public static boolean isFastGroundSampling() {
+        String override = Boolean.getBoolean("td.streamsProbe")
+                ? System.getProperty("td.inference.fastGround") : null;
+        return override == null ? fastGroundSampling : Boolean.parseBoolean(override);
     }
 
     /**

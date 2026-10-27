@@ -1,0 +1,2 @@
+package com.github.xandergos.terraindiffusionmc.compat.streams;
+public final class StreamsNaturalRiverAdapter { public static int version(Object config) { return ((Number) config).intValue(); } private StreamsNaturalRiverAdapter(){} }

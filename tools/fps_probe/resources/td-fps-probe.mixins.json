@@ -1,0 +1,6 @@
+{
+  "required": true,
+  "package": "com.terrain.fpsprobe.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": ["RenderSystemFlipMixin"]
+}

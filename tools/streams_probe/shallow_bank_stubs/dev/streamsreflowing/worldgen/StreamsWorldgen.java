@@ -1,0 +1,3 @@
+package dev.streamsreflowing.worldgen;
+import dev.streamsreflowing.core.RiverEngine; import net.minecraft.world.level.WorldGenLevel;
+public final class StreamsWorldgen { private static final ThreadLocal<RiverEngine> CURRENT = new ThreadLocal<>(); public static RiverEngine engine(WorldGenLevel level){return CURRENT.get();} public static void setEngine(RiverEngine engine){CURRENT.set(engine);} private StreamsWorldgen(){} }

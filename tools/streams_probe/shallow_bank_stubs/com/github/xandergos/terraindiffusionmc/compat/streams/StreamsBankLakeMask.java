@@ -1,0 +1,2 @@
+package com.github.xandergos.terraindiffusionmc.compat.streams;
+public final class StreamsBankLakeMask { public static boolean nearColumn(Object engine,int x,int z,int radius) { return ((ShallowBankLakeProbe) engine).nearMask(x,z,radius); } public interface ShallowBankLakeProbe { boolean nearMask(int x,int z,int radius); } private StreamsBankLakeMask(){} }

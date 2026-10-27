@@ -54,6 +54,16 @@ public final class LaplacianUtils {
     public static float[][] bilinearResize(float[][] src, int dstH, int dstW) {
         int srcH = src.length, srcW = src[0].length;
         float[][] dst = new float[dstH][dstW];
+        int[] c0s = new int[dstW], c1s = new int[dstW];
+        float[] wcs = new float[dstW];
+        for (int c = 0; c < dstW; c++) {
+            float srcC = ((c + 0.5f) * srcW / dstW) - 0.5f;
+            int c0 = (int) Math.floor(srcC);
+            int c1 = c0 + 1;
+            wcs[c] = srcC - c0;
+            c0s[c] = Math.max(0, Math.min(srcW - 1, c0));
+            c1s[c] = Math.max(0, Math.min(srcW - 1, c1));
+        }
         for (int r = 0; r < dstH; r++) {
             float srcR = ((r + 0.5f) * srcH / dstH) - 0.5f;
             int r0 = (int) Math.floor(srcR);
@@ -62,12 +72,8 @@ public final class LaplacianUtils {
             r0 = Math.max(0, Math.min(srcH - 1, r0));
             r1 = Math.max(0, Math.min(srcH - 1, r1));
             for (int c = 0; c < dstW; c++) {
-                float srcC = ((c + 0.5f) * srcW / dstW) - 0.5f;
-                int c0 = (int) Math.floor(srcC);
-                int c1 = c0 + 1;
-                float wc = srcC - c0;
-                c0 = Math.max(0, Math.min(srcW - 1, c0));
-                c1 = Math.max(0, Math.min(srcW - 1, c1));
+                int c0 = c0s[c], c1 = c1s[c];
+                float wc = wcs[c];
                 dst[r][c] = (1 - wr) * (1 - wc) * src[r0][c0]
                         + (1 - wr) * wc * src[r0][c1]
                         + wr * (1 - wc) * src[r1][c0]
