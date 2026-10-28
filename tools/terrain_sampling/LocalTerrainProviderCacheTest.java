@@ -21,6 +21,12 @@ public final class LocalTerrainProviderCacheTest {
         System.setProperty("td.inference.legacySampling", "false");
         var provider = LocalTerrainProvider.getInstance();
         try {
+            if (!Boolean.getBoolean("td.inference.requestTelemetry")) {
+                provider.withRequestOrigin(LocalTerrainProvider.RequestOrigin.STRUCTURE, () -> {
+                    check(!provider.performanceSnapshot().requestTelemetry().enabled(), "telemetry is opt-in");
+                    return null;
+                });
+            }
             cacheOnlyWeatherRead(provider);
             rechecksCompletedAfterOptimisticMiss(provider);
             concurrentMissesJoin(provider);
@@ -36,9 +42,11 @@ public final class LocalTerrainProviderCacheTest {
             invalidationDoesNotPublishOrRemoveReplacement(provider);
             previewIsolation(provider);
             groundOnlyProfileParity(provider);
+            fastGroundCursorParity(provider);
+            if (Boolean.getBoolean("td.inference.requestTelemetry")) requestTelemetry(provider);
             providerLifecycle(provider);
             System.out.println("PASS recent tile: bounds/scale, clear, eviction, amortized recency, exact hit metrics, full-tile coalescing/invalidation, preview isolation, seed changes, closed provider, same-seed reopen");
-            System.out.println("PASS LocalTerrainProviderCacheTest: completed race, pending coalescing, generation invalidation, 512-entry bound, native-reference reuse/upgrade/byte bounds/invalidation, request-shape-dependent scales1..6 exact height/biome/ecology parity, fast ground profile lifecycle, queued ground promotion");
+            System.out.println("PASS LocalTerrainProviderCacheTest: completed race, pending coalescing, generation invalidation, 512-entry bound, native-reference reuse/upgrade/byte bounds/invalidation, request-shape-dependent scales1..6 exact height/biome/ecology parity, fast ground profile/cursor lifecycle, queued ground promotion");
         } finally { LocalTerrainProvider.shutdownAll(); }
     }
 
@@ -134,6 +142,9 @@ public final class LocalTerrainProviderCacheTest {
                 : provider.performanceSnapshot().partialTiles())==1,"only replacement published");
         long misses=provider.performanceSnapshot().misses();provider.fetchGroundHeightmap(0,0,16,16);
         check(provider.performanceSnapshot().misses()==misses,"replacement remains cached");
+        if (Boolean.getBoolean("td.inference.requestTelemetry") && LocalTerrainProvider.legacySampling())
+            check(provider.performanceSnapshot().requestTelemetry().fullCompleted().count() == 1,
+                    "cancelled pre-clear full task is not reported as completed telemetry");
     }
 
     private static void boundedPartialCache(LocalTerrainProvider provider) {
@@ -318,6 +329,197 @@ public final class LocalTerrainProviderCacheTest {
         LocalTerrainProvider.init(91);
     }
 
+    /** The sampler cursor must preserve the fast-ground result, including its own nested scope. */
+    private static void fastGroundCursorParity(LocalTerrainProvider provider) throws Exception {
+        System.setProperty("td.inference.legacySampling", "true");
+        WorldScaleManager.fastGroundSampling = true;
+        WorldScaleManager.scale = 1;
+        LocalTerrainProvider.init(123);
+        LocalTerrainProvider.clearCache();
+        provider.withSamplingBinding(() -> {
+            int[][] points = {{-257, -257}, {-256, -1}, {-1, -256}, {-1, -1},
+                    {0, 0}, {255, 255}, {256, 256}};
+            for (int[] point : points) {
+                int x = point[0], z = point[1];
+                int sx = Math.floorDiv(x, 256) * 256, sz = Math.floorDiv(z, 256) * 256;
+                var tile = provider.fetchGroundHeightmap(sz, sx, sz + 256, sx + 256);
+                check(LocalTerrainProvider.scopedGroundHeight(x, z) == tile.heightmap[z - sz][x - sx],
+                        "fast cursor exact at signed tile boundary");
+            }
+            for (int scale = 2; scale <= 6; scale++) {
+                WorldScaleManager.scale = scale;
+                var tile = provider.fetchGroundHeightmap(-256, -256, 0, 0);
+                check(LocalTerrainProvider.scopedGroundHeight(-1, -1) == tile.heightmap[255][255],
+                        "fast cursor exact after scale change=" + scale);
+            }
+            WorldScaleManager.scale = 1;
+            LocalTerrainProvider.scopedGroundHeight(0, 0);
+            long before = WorldPipeline.cropCalls.get();
+            LocalTerrainProvider.clearCache();
+            LocalTerrainProvider.scopedGroundHeight(0, 0);
+            check(WorldPipeline.cropCalls.get() == before + 1, "fast cursor clear discards scoped entry");
+
+            LocalTerrainProvider.scopedGroundHeight(0, 0);
+            before = WorldPipeline.cropCalls.get();
+            try {
+                provider.withSamplingBinding(() -> {
+                    LocalTerrainProvider.scopedGroundHeight(256, 0);
+                    throw new IllegalStateException("expected nested sampler failure");
+                });
+                throw new AssertionError("nested sampler failure swallowed");
+            } catch (IllegalStateException expected) { }
+            long hitsBeforeRestore = provider.performanceSnapshot().hits();
+            LocalTerrainProvider.scopedGroundHeight(0, 0);
+            check(WorldPipeline.cropCalls.get() == before + 1,
+                    "nested fast cursor restoration retains outer tile after failure");
+            check(provider.performanceSnapshot().hits() == hitsBeforeRestore,
+                    "restored outer cursor bypasses the provider cache lookup");
+            return null;
+        });
+        check(LocalTerrainProvider.scopedGroundHeight(0, 0) == Integer.MIN_VALUE,
+                "fast cursor removed after outer scope");
+        WorldScaleManager.fastGroundSampling = false;
+        WorldScaleManager.scale = 1;
+        LocalTerrainProvider.init(91);
+    }
+
+    private static void requestTelemetry(LocalTerrainProvider provider) throws Exception {
+        System.setProperty("td.inference.legacySampling", "true");
+        WorldScaleManager.fastGroundSampling = true;
+        WorldScaleManager.scale = 1;
+        LocalTerrainProvider.init(1234);
+        LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
+        provider.withRequestOrigin(LocalTerrainProvider.RequestOrigin.STRUCTURE,
+                () -> provider.fetchGroundHeightmap(0, 0, 16, 16));
+        var afterGround = provider.performanceSnapshot().requestTelemetry();
+        check(afterGround.enabled() && afterGround.groundCompleted().count() == 1,
+                "telemetry records successful fast-ground completion");
+        check(afterGround.origins().stream().filter(row -> row.origin() == LocalTerrainProvider.RequestOrigin.STRUCTURE)
+                .findFirst().orElseThrow().ground().count() == 1, "telemetry captures admission origin");
+        provider.fetchHeightmap(0, 0, 256, 256);
+        var upgrade = provider.performanceSnapshot().requestTelemetry();
+        check(upgrade.fullCompleted().count() == 1 && upgrade.groundToFullUpgrade().count() == 1,
+                "ground-to-full remains a separately classified capability upgrade");
+        LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
+        for (int tile = 0; tile < 70; tile++) provider.fetchGroundHeightmap(0, tile * 256, 16, tile * 256 + 16);
+        provider.fetchGroundHeightmap(0, 0, 16, 16);
+        var repeated = provider.performanceSnapshot().requestTelemetry();
+        check(repeated.sameKindRepeat().count() >= 1 && repeated.sameKindRepeat().computedWindows() >= 0,
+                "telemetry records repeated completed same-kind work and its actual pipeline work");
+        check(repeated.historyTrackedKeys() <= 4096 && repeated.historyComplete(), "telemetry history remains bounded and covered");
+        LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
+        try {
+            provider.withRequestOrigin(LocalTerrainProvider.RequestOrigin.STREAMS_DEMAND, () -> {
+                provider.withRequestOrigin(LocalTerrainProvider.RequestOrigin.STRUCTURE,
+                        () -> provider.fetchGroundHeightmap(0, 256, 16, 272));
+                throw new IllegalStateException("expected origin restoration");
+            });
+        } catch (IllegalStateException expected) { }
+        provider.fetchGroundHeightmap(0, 512, 16, 528);
+        var restored = provider.performanceSnapshot().requestTelemetry();
+        check(restored.origins().stream().filter(row -> row.origin() == LocalTerrainProvider.RequestOrigin.STRUCTURE)
+                .findFirst().orElseThrow().ground().count() == 1, "nested origin is retained for its admission: " + restored.origins());
+        check(restored.origins().stream().filter(row -> row.origin() == LocalTerrainProvider.RequestOrigin.UNSCOPED)
+                .findFirst().orElseThrow().ground().count() == 1, "origin scope restores after failure");
+        LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
+        WorldPipeline.entered = new CountDownLatch(1); WorldPipeline.release = new CountDownLatch(1);
+        try {
+            for (int pair = 0; pair < 2; pair++) {
+                int x = 768;
+                var ground = CompletableFuture.supplyAsync(() -> provider.fetchGroundHeightmap(0, x, 16, x + 16));
+                check(WorldPipeline.entered.await(5, TimeUnit.SECONDS), "overlap ground entered fixture");
+                var full = CompletableFuture.supplyAsync(() -> provider.fetchHeightmap(0, x, 256, x + 256));
+                long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                while (provider.performanceSnapshot().misses() < 2 + pair * 2 && System.nanoTime() < deadline) Thread.onSpinWait();
+                check(provider.performanceSnapshot().misses() == 2 + pair * 2, "same-key full admitted while ground active");
+                WorldPipeline.release.countDown();
+                ground.get(5, TimeUnit.SECONDS); full.get(5, TimeUnit.SECONDS);
+                if (pair == 0) {
+                    removeFullTile(provider, 0, x, 256, x + 256, 1);
+                    WorldPipeline.entered = new CountDownLatch(1); WorldPipeline.release = new CountDownLatch(1);
+                }
+            }
+            var overlap = provider.performanceSnapshot().requestTelemetry();
+            check(overlap.bothCompletedOverlap().count() == 2,
+                    "two active same-key ground/full pairs record independently");
+            check(overlap.bothCompletedOverlap().computedWindows()
+                            == overlap.groundCompleted().computedWindows() + overlap.fullCompleted().computedWindows()
+                            && overlap.bothCompletedOverlap().executionNanos()
+                            == overlap.groundCompleted().executionNanos() + overlap.fullCompleted().executionNanos(),
+                    "overlap work totals include both completed tasks");
+        } finally {
+            WorldPipeline.release.countDown(); WorldPipeline.entered = null; WorldPipeline.release = null;
+        }
+        LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
+        WorldPipeline.entered = new CountDownLatch(1); WorldPipeline.release = new CountDownLatch(1);
+        try {
+            var ground = CompletableFuture.supplyAsync(() -> provider.fetchGroundHeightmap(0, 1280, 16, 1296));
+            check(WorldPipeline.entered.await(5, TimeUnit.SECONDS), "failed-pair ground entered fixture");
+            var failedFull = CompletableFuture.supplyAsync(() -> provider.fetchHeightmap(0, 1280, 256, 1536));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (provider.performanceSnapshot().misses() < 2 && System.nanoTime() < deadline) Thread.onSpinWait();
+            check(provider.performanceSnapshot().misses() == 2, "failed full admitted against active ground");
+            WorldPipeline.failClimate = true; WorldPipeline.release.countDown();
+            ground.get(5, TimeUnit.SECONDS);
+            try { failedFull.join(); throw new AssertionError("fixture full failure escaped"); }
+            catch (java.util.concurrent.CompletionException expected) { }
+            WorldPipeline.failClimate = false;
+            provider.fetchHeightmap(0, 1280, 256, 1536);
+            check(provider.performanceSnapshot().requestTelemetry().bothCompletedOverlap().count() == 0,
+                    "failed paired full cannot arm a later retry as an overlap");
+        } finally {
+            WorldPipeline.failClimate = false; WorldPipeline.release.countDown();
+            WorldPipeline.entered = null; WorldPipeline.release = null;
+        }
+        LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
+        provider.fetchGroundHeightmap(0, 1536, 16, 1552);
+        insertGroundPending(provider, 0, 1536, 256, 1792, 1);
+        provider.fetchHeightmap(0, 1536, 256, 1792);
+        var publicationRace = provider.performanceSnapshot().requestTelemetry();
+        check(publicationRace.bothCompletedOverlap().count() == 1,
+                "full admitted during ground publication window inherits completed ground work");
+        LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
+        WorldPipeline.entered = new CountDownLatch(1); WorldPipeline.release = new CountDownLatch(1);
+        try {
+            var blocker = CompletableFuture.supplyAsync(() -> provider.fetchHeightmap(-256, -256, 0, 0));
+            check(WorldPipeline.entered.await(5, TimeUnit.SECONDS), "reset fixture blocker entered");
+            var queuedGround = CompletableFuture.supplyAsync(() -> {
+                try { return provider.withPriority(InferenceExecutor.Priority.BACKGROUND,
+                        () -> provider.fetchGroundHeightmap(0, 1536, 16, 1552)); }
+                catch (Exception failure) { throw new java.util.concurrent.CompletionException(failure); }
+            });
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (provider.performanceSnapshot().misses() < 2 && System.nanoTime() < deadline) Thread.onSpinWait();
+            var full = CompletableFuture.supplyAsync(() -> provider.fetchHeightmap(0, 1536, 256, 1792));
+            while (provider.performanceSnapshot().misses() < 3 && System.nanoTime() < deadline) Thread.onSpinWait();
+            provider.resetPerformanceMetrics();
+            WorldPipeline.release.countDown();
+            blocker.get(5, TimeUnit.SECONDS); full.get(5, TimeUnit.SECONDS); queuedGround.get(5, TimeUnit.SECONDS);
+            check(provider.performanceSnapshot().requestTelemetry().queuedGroundReusedFull() == 0,
+                    "pre-reset queued ground cannot increment the new telemetry epoch");
+        } finally {
+            WorldPipeline.release.countDown(); WorldPipeline.entered = null; WorldPipeline.release = null;
+        }
+        LocalTerrainProvider.clearCache();
+        var ledgerField = LocalTerrainProvider.class.getDeclaredField("requestTelemetry");
+        ledgerField.setAccessible(true);
+        Object ledger = ledgerField.get(provider);
+        Class<?> keyType = Class.forName(LocalTerrainProvider.class.getName() + "$CacheKey");
+        Constructor<?> keyConstructor = keyType.getDeclaredConstructor(int.class, int.class, int.class, int.class, int.class);
+        keyConstructor.setAccessible(true);
+        Class<?> kindType = Class.forName(LocalTerrainProvider.class.getName() + "$WorkKind");
+        Method admit = ledger.getClass().getDeclaredMethod("admit", keyType, long.class, kindType, boolean.class, boolean.class);
+        admit.setAccessible(true);
+        @SuppressWarnings({"unchecked", "rawtypes"}) Object groundKind = Enum.valueOf((Class) kindType, "GROUND");
+        for (int i = 0; i <= 4096; i++)
+            admit.invoke(ledger, keyConstructor.newInstance(i, 0, i + 1, 1, 1), 1L, groundKind, false, false);
+        var bounded = provider.performanceSnapshot().requestTelemetry();
+        check(bounded.historyTrackedKeys() == 4096 && bounded.historyDrops() >= 1 && !bounded.historyComplete(),
+                "telemetry history reports bounded coverage after ledger drops");
+        WorldScaleManager.fastGroundSampling = false;
+        LocalTerrainProvider.init(91);
+    }
+
     /** A queued low-priority ground request must recheck after a full tile wins the lane. */
     private static void queuedBackgroundGroundYieldsToForegroundFull(LocalTerrainProvider provider) throws Exception {
         LocalTerrainProvider.clearCache(); provider.resetPerformanceMetrics();
@@ -344,6 +546,16 @@ public final class LocalTerrainProviderCacheTest {
             check(WorldPipeline.calls.get() == calls + 2 && WorldPipeline.cropCalls.get() == crops,
                     "ground recheck performs no additional pipeline crop work");
             check(provider.performanceSnapshot().groundTiles() == 0, "ground recheck leaves no duplicate ground cache entry");
+            if (Boolean.getBoolean("td.inference.requestTelemetry")) {
+                var telemetry = provider.performanceSnapshot().requestTelemetry();
+                check(telemetry.groundCompleted().count() == 0 && telemetry.bothCompletedOverlap().count() == 0
+                                && telemetry.queuedGroundReusedFull() == 1,
+                        "overtaken queued ground is not reported as a completed overlap");
+                removeFullTile(provider, 0, 0, 256, 256, 1);
+                provider.fetchGroundHeightmap(0, 0, 16, 16);
+                check(provider.performanceSnapshot().requestTelemetry().bothCompletedOverlap().count() == 0,
+                        "unrelated ground after suppressed pair cannot complete the old pair");
+            }
         } finally {
             WorldPipeline.release.countDown();
             WorldPipeline.entered = null; WorldPipeline.release = null;
@@ -353,6 +565,34 @@ public final class LocalTerrainProviderCacheTest {
     private static void expectClosed(Runnable action) {
         try { action.run(); throw new AssertionError("closed provider returned cached data"); }
         catch (java.util.concurrent.CancellationException expected) { }
+    }
+
+    /** Removes one retained result without advancing generation, for stale-pair telemetry tests. */
+    @SuppressWarnings("unchecked")
+    private static void removeFullTile(LocalTerrainProvider provider, int i1, int j1, int i2, int j2, int scale)
+            throws Exception {
+        var cacheField = LocalTerrainProvider.class.getDeclaredField("CACHE");
+        cacheField.setAccessible(true);
+        var cache = (java.util.Map<Object, Object>) cacheField.get(provider);
+        Class<?> keyType = Class.forName(LocalTerrainProvider.class.getName() + "$CacheKey");
+        Constructor<?> constructor = keyType.getDeclaredConstructor(int.class, int.class, int.class, int.class, int.class);
+        constructor.setAccessible(true);
+        Object entry = cache.remove(constructor.newInstance(i1, j1, i2, j2, scale));
+        check(entry != null, "fixture removes completed full tile");
+        var valid = entry.getClass().getDeclaredField("valid"); valid.setAccessible(true); valid.setBoolean(entry, false);
+    }
+
+    /** Simulates the narrow post-publication/pre-finally visibility window of a ground task. */
+    @SuppressWarnings("unchecked")
+    private static void insertGroundPending(LocalTerrainProvider provider, int i1, int j1, int i2, int j2, int scale)
+            throws Exception {
+        var pendingField = LocalTerrainProvider.class.getDeclaredField("GROUND_PENDING");
+        pendingField.setAccessible(true);
+        var pending = (java.util.Map<Object, java.util.concurrent.FutureTask<?>>) pendingField.get(provider);
+        Class<?> keyType = Class.forName(LocalTerrainProvider.class.getName() + "$CacheKey");
+        Constructor<?> constructor = keyType.getDeclaredConstructor(int.class, int.class, int.class, int.class, int.class);
+        constructor.setAccessible(true);
+        pending.put(constructor.newInstance(i1, j1, i2, j2, scale), new java.util.concurrent.FutureTask<>(() -> null));
     }
 
     private static volatile long benchmarkSink;

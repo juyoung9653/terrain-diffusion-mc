@@ -24,6 +24,10 @@ public final class OnnxModel implements AutoCloseable {
         }
     }
 
+    OnnxModel(Path path, String name, boolean preoptimizedGpuGraph) {
+        this(path, name);
+    }
+
     @Override
     public void close() {
     }

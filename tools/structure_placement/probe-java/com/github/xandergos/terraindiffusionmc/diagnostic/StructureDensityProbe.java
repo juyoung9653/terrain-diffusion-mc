@@ -3,6 +3,7 @@ package com.github.xandergos.terraindiffusionmc.diagnostic;
 import com.github.xandergos.terraindiffusionmc.config.StructurePlacementConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.world.AsyncStructureLocate;
+import com.github.xandergos.terraindiffusionmc.world.structure.StructureHeightCache;
 import com.github.xandergos.terraindiffusionmc.world.structure.StructurePlacementRuntime;
 import com.github.xandergos.terraindiffusionmc.world.structure.StructureTerrain;
 import com.github.xandergos.terraindiffusionmc.world.structure.UnifiedVillageSets;
@@ -25,6 +26,7 @@ import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import java.nio.file.Files;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.lang.management.ManagementFactory;
 import net.minecraft.server.level.TicketType;
 import net.minecraft.server.level.ChunkLevel;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -33,6 +35,10 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 @EventBusSubscriber(modid="terrain_diffusion_mc", bus=EventBusSubscriber.Bus.GAME)
 public final class StructureDensityProbe {
     private static final TicketType<ChunkPos> CENSUS_TICKET=TicketType.create("td-census",Comparator.comparingLong(ChunkPos::toLong));
+    private record HeightCase(String name,StructurePlacementConfig.Policy policy) { }
+    private record HeightCaseResult(String name,StructureTerrain.Plan plan,List<Map<String,String>> rejected) { }
+    private record HeightSequence(String name,List<HeightCaseResult> cases,
+                                  StructureHeightCache.Snapshot cache,long wallNanos,long cpuNanos) { }
     @SubscribeEvent public static void load(LevelEvent.Load event) {
         if (Boolean.getBoolean("td.densityProbe") && event.getLevel() instanceof net.minecraft.server.level.ServerLevel level)
             level.getGameRules().getRule(GameRules.RULE_SPAWN_CHUNK_RADIUS).set(0,level.getServer());
@@ -398,8 +404,19 @@ public final class StructureDensityProbe {
         var registry=level.registryAccess().registryOrThrow(Registries.STRUCTURE);
         var config=StructurePlacementConfig.snapshotFor(registry);
         String id=registry.getKey(start.getStructure()).toString();
-        var plan=StructureTerrain.plan(start,config.resolve(id),level.getChunkSource().getGenerator(),level.getChunkSource().randomState(),level);
+        var policy=config.resolve(id);
+        var generator=level.getChunkSource().getGenerator();
+        var random=level.getChunkSource().randomState();
+        // The audit worker has no inherited sampling cursor. Compare independent
+        // planning passes so the scoped fast path must retain every accepted
+        // height, water, cave/material and rejection result.
+        var plan=StructureTerrain.plan(start,policy,generator,random,level);
+        var boundPlan=LocalTerrainProvider.getInstance().withSamplingBinding(() ->
+                StructureTerrain.plan(start,policy,generator,random,level));
+        if(!Objects.equals(plan,boundPlan))
+            throw new AssertionError("Sampling-bound terrain plan changed: "+id);
         if(plan==null) throw new AssertionError("Accepted terrain plan cannot be reconstructed");
+        var heightCacheAudit=reportHeightCacheAudit(start,policy,generator,random,level);
         Map<Long,net.minecraft.world.level.chunk.ChunkAccess> chunks=new HashMap<>();
         int checked=0,loaded=0;
         for(var entry:plan.columns().entrySet()) {
@@ -452,6 +469,115 @@ public final class StructureDensityProbe {
             }
             if(wellFloorBlocks==0) throw new AssertionError("No native well floor blocks verified");
         }
-        return Map.of("id",id,"pieces",start.getPieces().size(),"carvedColumns",checked,"loadedColumns",loaded,"featureSupport",featureSupport,"wellFloorBlocks",wellFloorBlocks);
+        return Map.of("id",id,"pieces",start.getPieces().size(),"carvedColumns",checked,"loadedColumns",loaded,
+                "featureSupport",featureSupport,"wellFloorBlocks",wellFloorBlocks,"samplingPlanParity",1,
+                "heightCacheAudit",heightCacheAudit);
+    }
+
+    /** Same-JVM parity/call-count evidence for the scoped raw-height cache, not a throughput benchmark. */
+    private static Map<String,Object> reportHeightCacheAudit(StructureStart start,StructurePlacementConfig.Policy policy,
+                                                net.minecraft.world.level.chunk.ChunkGenerator generator,
+                                                net.minecraft.world.level.levelgen.RandomState random,
+                                                net.minecraft.world.level.LevelHeightAccessor height) throws Exception {
+        List<HeightCase> cases=List.of(
+                new HeightCase("original-a",policy),
+                new HeightCase("original-b",policy),
+                new HeightCase("cut-fill-zero",withTerrainPolicy(policy,0,0,policy.maxTerrainSamples())),
+                new HeightCase("cut-fill-expanded",withTerrainPolicy(policy,policy.maxCutBlocks()+2,
+                        policy.maxFillBlocks()+2,policy.maxTerrainSamples())),
+                new HeightCase("sample-budget-one",withTerrainPolicy(policy,policy.maxCutBlocks(),
+                        policy.maxFillBlocks(),1)));
+        // Warm the native path symmetrically before collecting counterbalanced timings.
+        heightSequence("warm-baseline",cases,start,generator,random,height,new StructureHeightCache(0));
+        heightSequence("warm-shared",cases,start,generator,random,height,new StructureHeightCache());
+        var inferenceBefore=inferenceCounters();
+        var baselineFirst=heightSequence("baseline-first",cases,start,generator,random,height,new StructureHeightCache(0));
+        var sharedFirst=heightSequence("shared-after-baseline",cases,start,generator,random,height,new StructureHeightCache());
+        var sharedSecond=heightSequence("shared-first",cases,start,generator,random,height,new StructureHeightCache());
+        var baselineSecond=heightSequence("baseline-after-shared",cases,start,generator,random,height,new StructureHeightCache(0));
+        assertHeightParity(baselineFirst,sharedFirst);
+        assertHeightParity(baselineSecond,sharedSecond);
+        assertHeightParity(baselineFirst,baselineSecond);
+        boolean accepted=baselineFirst.cases().stream().anyMatch(result -> result.plan()!=null);
+        boolean rejected=baselineFirst.cases().stream().anyMatch(result -> result.plan()==null);
+        if(!accepted || !rejected) throw new AssertionError("Height-cache audit needs accepted and rejected plans");
+        if(sharedFirst.cache().hits()<=0 || sharedSecond.cache().hits()<=0)
+            throw new AssertionError("Shared height cache produced no cross-plan hits");
+        if(sharedFirst.cache().nativeHeightCalls()>=baselineFirst.cache().nativeHeightCalls()
+                || sharedSecond.cache().nativeHeightCalls()>=baselineSecond.cache().nativeHeightCalls())
+            throw new AssertionError("Shared height cache did not reduce native height calls");
+        var inferenceAfter=inferenceCounters();
+        Map<String,Object> inference=heightInferenceDelta(inferenceBefore,inferenceAfter);
+        boolean contaminated=Boolean.TRUE.equals(inference.get("contaminated"));
+        Map<String,Object> audit=Map.of("scope","same-JVM synthetic plan-cache parity; not throughput estimate",
+                "baselineFirst",heightSequenceReport(baselineFirst),"sharedFirst",heightSequenceReport(sharedFirst),
+                "sharedSecond",heightSequenceReport(sharedSecond),"baselineSecond",heightSequenceReport(baselineSecond),
+                "inference",inference,"benchmarkContaminated",contaminated,
+                "cases",baselineFirst.cases().stream().map(StructureDensityProbe::heightCaseReport).toList());
+        return audit;
+    }
+
+    private static StructurePlacementConfig.Policy withTerrainPolicy(StructurePlacementConfig.Policy base,
+                                                                       int cut,int fill,int samples) {
+        return new StructurePlacementConfig.Policy(base.minGapBlocks(),base.reservationRadiusBlocks(),
+                base.maxCandidateOffsetBlocks(),cut,fill,base.blendRadiusBlocks(),samples,
+                base.maxCandidateAttempts(),base.spacingMultiplier(),base.surfaceMode());
+    }
+
+    private static HeightSequence heightSequence(String name,List<HeightCase> cases,StructureStart start,
+                                                  net.minecraft.world.level.chunk.ChunkGenerator generator,
+                                                  net.minecraft.world.level.levelgen.RandomState random,
+                                                  net.minecraft.world.level.LevelHeightAccessor height,
+                                                  StructureHeightCache cache) throws Exception {
+        long wall=System.nanoTime(),cpu=currentThreadCpuNanos();
+        var provider=LocalTerrainProvider.getInstance();
+        List<HeightCaseResult> results=new ArrayList<>();
+        for(var current:cases) {
+            List<Map<String,String>> rejected=new ArrayList<>();
+            StructureTerrain.Plan plan=provider.withSamplingBinding(() -> StructureTerrain.plan(start,current.policy(),
+                    generator,random,height,new HashMap<>(),cache,(reason,detail) ->
+                            rejected.add(Map.of("reason",reason,"detail",detail))));
+            results.add(new HeightCaseResult(current.name(),plan,List.copyOf(rejected)));
+        }
+        long endedCpu=currentThreadCpuNanos();
+        return new HeightSequence(name,List.copyOf(results),cache.snapshot(),System.nanoTime()-wall,
+                cpu<0 || endedCpu<0 ? -1 : endedCpu-cpu);
+    }
+
+    private static void assertHeightParity(HeightSequence baseline,HeightSequence shared) {
+        if(baseline.cases().size()!=shared.cases().size()) throw new AssertionError("Height-cache case count changed");
+        for(int index=0;index<baseline.cases().size();index++) {
+            var before=baseline.cases().get(index); var after=shared.cases().get(index);
+            if(!before.name().equals(after.name()) || !Objects.equals(before.plan(),after.plan())
+                    || !before.rejected().equals(after.rejected()))
+                throw new AssertionError("Height-cache parity changed: "+before.name());
+        }
+    }
+
+    private static long currentThreadCpuNanos() {
+        var bean=ManagementFactory.getThreadMXBean();
+        return bean.isCurrentThreadCpuTimeSupported() && bean.isThreadCpuTimeEnabled()
+                ? bean.getCurrentThreadCpuTime() : -1;
+    }
+
+    private static Map<String,Object> heightSequenceReport(HeightSequence sequence) {
+        return Map.of("wallSeconds",DensityProbeTelemetry.seconds(sequence.wallNanos()),
+                "threadCpuAvailable",sequence.cpuNanos()>=0,
+                "threadCpuSeconds",sequence.cpuNanos()<0 ? -1.0 : DensityProbeTelemetry.seconds(sequence.cpuNanos()),
+                "hits",sequence.cache().hits(),"misses",sequence.cache().misses(),
+                "nativeHeightCalls",sequence.cache().nativeHeightCalls(),"capDrops",sequence.cache().capDrops(),
+                "entries",sequence.cache().entries(),"capacity",sequence.cache().capacity());
+    }
+
+    private static Map<String,Object> heightCaseReport(HeightCaseResult result) {
+        return Map.of("name",result.name(),"accepted",result.plan()!=null,"rejections",result.rejected());
+    }
+
+    private static Map<String,Object> heightInferenceDelta(DensityProbeTelemetry.InferenceCounters before,
+                                                             DensityProbeTelemetry.InferenceCounters after) {
+        if(before==null || after==null) return Map.of("available",false,"contaminated",true);
+        long submitted=after.submitted()-before.submitted(),completed=after.completed()-before.completed();
+        return Map.of("available",true,"submittedDelta",submitted,"completedDelta",completed,
+                "contaminated",submitted!=0 || completed!=0);
     }
 }

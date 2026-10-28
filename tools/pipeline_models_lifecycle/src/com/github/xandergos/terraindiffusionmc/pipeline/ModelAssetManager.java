@@ -29,6 +29,11 @@ public final class ModelAssetManager {
         return Path.of(fileName);
     }
 
+    public static Path resolveDecoderAssetPath() {
+        return resolveAssetPath("decoder_model.onnx");
+    }
+    public static boolean decoderUsesPreoptimizedGpuGraph() { return false; }
+
     static void failWith(Throwable value) {
         failure = value;
     }

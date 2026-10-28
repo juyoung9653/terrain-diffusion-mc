@@ -40,6 +40,7 @@ class Check:
 CHECKS = (
     Check("placement", "run_tests.py", "Placement geometry"),
     Check("village", "run_village_tests.py", "Village distribution geometry"),
+    Check("height-cache", "run_height_cache_tests.py", "Bounded native structure-height sharing"),
     Check("component", "run_component_tests.py", "Component geometry and original NBT"),
     Check("basic-villages", "test_basic_villages.py", "Checked-in village assets"),
     Check("config", "test_config.py", "Config behavior with cached Gson", "gson"),

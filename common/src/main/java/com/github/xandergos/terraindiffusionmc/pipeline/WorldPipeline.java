@@ -73,6 +73,8 @@ public final class WorldPipeline implements AutoCloseable {
 
     private final MemoryTileStore tileStore;
     private final long cacheLimitBytes = 100L * 1024 * 1024;
+    // Decoder outputs are 512 KiB each; retain 512 windows across interleaved ground/full requests.
+    private final long decoderCacheLimitBytes = 256L * 1024 * 1024;
 
     final InfiniteTensor coarse;
     final InfiniteTensor latents;
@@ -101,7 +103,8 @@ public final class WorldPipeline implements AutoCloseable {
         ModelAssetManager.ensureAssetsReady();
         this.coarseModel = new OnnxModel(ModelAssetManager.resolveAssetPath("coarse_model.onnx"), "coarse");
         this.baseModel = new OnnxModel(ModelAssetManager.resolveAssetPath("base_model.onnx"), "base");
-        this.decoderModel = new OnnxModel(ModelAssetManager.resolveAssetPath("decoder_model.onnx"), "decoder");
+        this.decoderModel = new OnnxModel(ModelAssetManager.resolveDecoderAssetPath(), "decoder",
+                ModelAssetManager.decoderUsesPreoptimizedGpuGraph());
         this.ownModels = true;
         this.syntheticMapFactory = new SyntheticMapFactory(this.seed);
         this.tileStore = new MemoryTileStore();
@@ -382,7 +385,7 @@ public final class WorldPipeline implements AutoCloseable {
 
         return tileStore.getOrCreate("init_residual_map", new Integer[]{2, null, null},
                 (wi, args) -> decoderTile(wi, args.get(0), t, ww),
-                outWin, new InfiniteTensor[]{latents}, new TensorWindow[]{inpWin}, cacheLimitBytes);
+                outWin, new InfiniteTensor[]{latents}, new TensorWindow[]{inpWin}, decoderCacheLimitBytes);
     }
 
     private FloatTensor decoderTile(int[] wi, FloatTensor latentSlice, float t, float[] ww) {
@@ -439,6 +442,16 @@ public final class WorldPipeline implements AutoCloseable {
     /** Returns the total count of newly computed tensor windows since startup. */
     public long getTotalComputedWindowCount() {
         return tileStore.getTotalComputedWindowCount();
+    }
+
+    /**
+     * Opt-in, bounded per-stage tensor-window recompute evidence.  Stage IDs are
+     * {@code base_coarse_map}, {@code init_latent_map}, {@code step_latent_map_0},
+     * and {@code init_residual_map}. It is empty unless
+     * {@code td.inference.requestTelemetry=true} was set before creation.
+     */
+    public java.util.Map<String, java.util.Map<String, Long>> windowTelemetry() {
+        return tileStore.windowTelemetry();
     }
 
     /**

@@ -110,12 +110,26 @@ public final class OnnxModel implements AutoCloseable {
     }
 
     public OnnxModel(Path modelFilePath, String name) {
+        this(modelFilePath, name, false);
+    }
+
+    /** FP16 derivatives must go directly to GPU optimization: CPU optimization promotes Conv back to FP32. */
+    public OnnxModel(Path modelFilePath, String name, boolean preoptimizedGpuGraph) {
         this.name = name;
         try {
             long start = System.currentTimeMillis();
             this.env = OrtEnvironment.getEnvironment(OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR);
             byte[] sourceModelBytes = Files.readAllBytes(modelFilePath);
-            OptimizedModelLoadResult initialOptimizedModelLoadResult = optimizeModelAtRuntime(sourceModelBytes, false);
+            OptimizedModelLoadResult initialOptimizedModelLoadResult;
+            if (preoptimizedGpuGraph) {
+                if (!"gpu".equals(TerrainDiffusionConfig.inferenceDevice())) {
+                    throw new IllegalArgumentException("Preoptimized GPU graph requires inference.device=gpu");
+                }
+                LOG.info("Using preoptimized GPU graph for '{}'; skipping CPU graph optimization", name);
+                initialOptimizedModelLoadResult = new OptimizedModelLoadResult(sourceModelBytes, null, false);
+            } else {
+                initialOptimizedModelLoadResult = optimizeModelAtRuntime(sourceModelBytes, false);
+            }
             byte[] loadedModelBytes;
             try {
                 initializeModelSession(initialOptimizedModelLoadResult.modelBytes, start);

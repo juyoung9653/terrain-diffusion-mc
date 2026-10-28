@@ -12,6 +12,59 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class MemoryTileStore {
 
+    /**
+     * Opt-in, bounded evidence for a window that was actually recomputed after
+     * its earlier result left the internal tensor cache.  This deliberately
+     * observes only successful cache publications, never ordinary cache hits.
+     */
+    private static final class WindowTelemetry {
+        private static final int MAX_KEYS_PER_STAGE = 8192;
+        private final Map<String, Set<List<Integer>>> history = new HashMap<>();
+        private final Map<String, long[]> totals = new HashMap<>();
+        private final Map<String, Long> historyDrops = new HashMap<>();
+        private long historyGeneration;
+
+        synchronized void published(String id, List<Integer> key) {
+            long[] counters = totals.computeIfAbsent(id, ignored -> new long[2]);
+            counters[0]++;
+            Set<List<Integer>> keys = history.computeIfAbsent(id, ignored -> new HashSet<>());
+            if (keys.contains(key)) {
+                counters[1]++;
+                return;
+            }
+            if (keys.size() < MAX_KEYS_PER_STAGE) keys.add(key);
+            else historyDrops.merge(id, 1L, Long::sum);
+        }
+
+        synchronized Map<String, Map<String, Long>> snapshot() {
+            Map<String, Map<String, Long>> result = new TreeMap<>();
+            for (Map.Entry<String, long[]> entry : totals.entrySet()) {
+                Map<String, Long> values = new LinkedHashMap<>();
+                values.put("computedWindows", entry.getValue()[0]);
+                values.put("recomputedWindows", entry.getValue()[1]);
+                values.put("trackedKeys", (long) history.get(entry.getKey()).size());
+                values.put("historyDrops", historyDrops.getOrDefault(entry.getKey(), 0L));
+                values.put("historyGeneration", historyGeneration);
+                result.put(entry.getKey(), values);
+            }
+            return result;
+        }
+
+        synchronized void clear() {
+            history.clear();
+            totals.clear();
+            historyDrops.clear();
+            historyGeneration++;
+        }
+
+        synchronized void remove(String id) {
+            history.remove(id);
+            totals.remove(id);
+            historyDrops.remove(id);
+            historyGeneration++;
+        }
+    }
+
     /** Window cache per tensor id: access-order LinkedHashMap for LRU. */
     private final Map<String, LinkedHashMap<List<Integer>, FloatTensor>> windowCaches = new HashMap<>();
 
@@ -22,6 +75,8 @@ public class MemoryTileStore {
     private final Map<String, InfiniteTensor> tensors = new HashMap<>();
     /** Monotonic count of newly computed/cached windows across all tensors. */
     private final AtomicLong totalComputedWindowCount = new AtomicLong(0L);
+    private final WindowTelemetry windowTelemetry = Boolean.getBoolean("td.inference.requestTelemetry")
+            ? new WindowTelemetry() : null;
 
     // -------------------------------------------------------------------------
     // Factory
@@ -106,11 +161,23 @@ public class MemoryTileStore {
         cache.put(key, output);
         size[0] += output.byteSize();
         totalComputedWindowCount.incrementAndGet();
+        if (windowTelemetry != null) windowTelemetry.published(id, key);
     }
 
     /** Returns how many windows have been newly computed and cached. */
     public long getTotalComputedWindowCount() {
         return totalComputedWindowCount.get();
+    }
+
+    /**
+     * Returns opt-in per-tensor publication counters suitable for diagnostic
+     * JSON.  Each stage reports {@code computedWindows}, {@code recomputedWindows},
+     * {@code trackedKeys}, per-stage {@code historyDrops}, and {@code historyGeneration}.
+     * A changed generation means a cache/seed clear occurred between snapshots.
+     * An empty map means request telemetry was disabled at store creation.
+     */
+    public Map<String, Map<String, Long>> windowTelemetry() {
+        return windowTelemetry == null ? Collections.emptyMap() : windowTelemetry.snapshot();
     }
 
     void evictIfNeeded(String id, long limitBytes) {
@@ -145,6 +212,7 @@ public class MemoryTileStore {
             e.getValue().clear();
             cacheSizes.get(e.getKey())[0] = 0L;
         }
+        if (windowTelemetry != null) windowTelemetry.clear();
     }
 
     /** Remove a single tensor and all its cached state. */
@@ -152,6 +220,7 @@ public class MemoryTileStore {
         tensors.remove(id);
         windowCaches.remove(id);
         cacheSizes.remove(id);
+        if (windowTelemetry != null) windowTelemetry.remove(id);
     }
 
     // -------------------------------------------------------------------------

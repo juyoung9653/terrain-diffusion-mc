@@ -44,6 +44,11 @@ public final class ModelAssetManager {
     private static final Path MODEL_DIRECTORY = PlatformPaths.gameDir()
             .resolve("terrain-diffusion-models");
     private static final AtomicBoolean READY = new AtomicBoolean(false);
+    private static final String FP16_DECODER_FILE = "decoder_model_fp16.onnx";
+    private static final String FP16_DECODER_SHA256 =
+            "af32fdd6955f15611c5fe4696f5a6c96dd008657b361f391db1c948739d125ee";
+    private static final long FP16_DECODER_BYTES = 56_077_790L;
+    private static volatile Path decoderAssetPath;
     private static final Gson GSON = new Gson();
     private static final Type MANIFEST_TYPE = new TypeToken<ModelAssetManifest>() {}.getType();
 
@@ -63,6 +68,7 @@ public final class ModelAssetManager {
             }
             try {
                 Files.createDirectories(MODEL_DIRECTORY);
+                Path selectedDecoder = selectDecoderAsset();
                 ModelAssetManifest manifest = loadManifest();
                 String offlineHelpUrl = buildOfflineHelpUrl(manifest);
                 boolean shouldValidatePreExistingModels = TerrainDiffusionConfig.validateModel();
@@ -74,6 +80,7 @@ public final class ModelAssetManager {
                     ensureSingleAsset(localAssetPath, assetMetadata, manifest.revision, offlineHelpUrl, shouldValidatePreExistingModels);
                 }
                 LOG.info("Terrain diffusion model assets ready");
+                decoderAssetPath = selectedDecoder;
                 READY.set(true);
             } catch (RuntimeException runtimeException) {
                 throw runtimeException;
@@ -88,6 +95,35 @@ public final class ModelAssetManager {
      */
     public static Path resolveAssetPath(String fileName) {
         return MODEL_DIRECTORY.resolve(fileName);
+    }
+
+    /** Selects a verified decoder without replacing the downloaded FP32 asset. */
+    public static Path resolveDecoderAssetPath() {
+        ensureAssetsReady();
+        return decoderAssetPath;
+    }
+
+    public static boolean decoderUsesPreoptimizedGpuGraph() {
+        return "fp16".equals(TerrainDiffusionConfig.decoderPrecision());
+    }
+
+    private static Path selectDecoderAsset() throws IOException {
+        String precision = TerrainDiffusionConfig.decoderPrecision();
+        if ("fp32".equals(precision)) {
+            LOG.info("Terrain diffusion decoder precision: fp32");
+            return resolveAssetPath("decoder_model.onnx");
+        }
+        Path candidate = resolveAssetPath(FP16_DECODER_FILE);
+        // This local derivative has no upstream download URL. Always verify it,
+        // even when validation of custom upstream assets has been disabled.
+        if (!Files.isRegularFile(candidate) || Files.size(candidate) != FP16_DECODER_BYTES
+                || !FP16_DECODER_SHA256.equals(sha256Hex(candidate))) {
+            throw new IllegalStateException("FP16 decoder missing or invalid: " + candidate
+                    + ". Install the verified optimized FP16 decoder (SHA-256 " + FP16_DECODER_SHA256
+                    + ") or set inference.decoder_precision=fp32. No precision fallback was applied.");
+        }
+        LOG.info("Terrain diffusion decoder precision: fp16 (verified SHA-256 {})", FP16_DECODER_SHA256);
+        return candidate;
     }
 
     private static void ensureSingleAsset(

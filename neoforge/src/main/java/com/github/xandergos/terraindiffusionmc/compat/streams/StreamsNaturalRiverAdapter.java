@@ -1,13 +1,10 @@
 package com.github.xandergos.terraindiffusionmc.compat.streams;
 
-import com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfile;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
-import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Map;
-import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -62,27 +59,7 @@ public final class StreamsNaturalRiverAdapter {
 
     private static boolean tdMarineWithin16(int x, int z,
             Map<Long, LocalTerrainProvider.HeightmapData> tiles, LocalTerrainProvider provider) {
-        int tileSize = TerrainDiffusionConfig.tileSize();
-        int shift = Integer.numberOfTrailingZeros(tileSize);
-        for (int dz = -16; dz <= 16; dz += 8) for (int dx = -16; dx <= 16; dx += 8) {
-            if (dx * dx + dz * dz > 256) continue;
-            int sampleX = x + dx, sampleZ = z + dz;
-            int tileX = sampleX >> shift, tileZ = sampleZ >> shift;
-            long key = ChunkPos.asLong(tileX, tileZ);
-            LocalTerrainProvider.HeightmapData data = tiles.get(key);
-            if (data == null && !tiles.containsKey(key)) {
-                int startX = tileX << shift, startZ = tileZ << shift;
-                data = provider.fetchHeightmap(startZ, startX,
-                        startZ + tileSize, startX + tileSize);
-                tiles.put(key, data);
-            }
-            if (data == null || data.heightmap == null || data.biomeIds == null) continue;
-            int localX = sampleX - (tileX << shift), localZ = sampleZ - (tileZ << shift);
-            if (localX >= 0 && localZ >= 0 && localX < data.width && localZ < data.height
-                    && data.heightmap[localZ][localX] < 0
-                    && EcologyShowcaseProfile.isVanillaOcean(data.biomeIds[localZ][localX])) return true;
-        }
-        return false;
+        return StreamsMarineSampling.within16(x, z, tiles, provider);
     }
 
     /** Builds the production marine predicate around one bounded TD tile cache. */

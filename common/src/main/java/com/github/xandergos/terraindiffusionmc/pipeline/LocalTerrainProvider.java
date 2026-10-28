@@ -107,6 +107,10 @@ public final class LocalTerrainProvider {
     private static final int MAX_CACHE_SIZE = 64;
     private static volatile int activeCacheSize = MAX_CACHE_SIZE;
     private static final int MAX_CACHE_SIZE_HEADROOM = 8;
+    private static final boolean REQUEST_TELEMETRY_ENABLED =
+            Boolean.getBoolean("td.inference.requestTelemetry");
+    private static final int REQUEST_TELEMETRY_HISTORY_MAX = 4096;
+    private static final int REQUEST_TELEMETRY_EXAMPLES_MAX = 16;
     private static final boolean COLD_ECOLOGY_CACHE_ENABLED =
             Boolean.parseBoolean(System.getProperty("td.inference.coldEcologyCache", "true"));
     private static final int COLD_ECOLOGY_HOT_TILES = Math.max(0,
@@ -134,22 +138,38 @@ public final class LocalTerrainProvider {
     private final LongAdder hits = new LongAdder();
     private final AtomicLong misses = new AtomicLong(), joined = new AtomicLong(), evictions = new AtomicLong();
     private final AtomicLong computedWindows = new AtomicLong(), executionNanos = new AtomicLong();
+    private final RequestTelemetryLedger requestTelemetry = REQUEST_TELEMETRY_ENABLED
+            ? new RequestTelemetryLedger() : null;
     private static final ThreadLocal<InferenceExecutor.Priority> REQUEST_PRIORITY =
             ThreadLocal.withInitial(() -> InferenceExecutor.Priority.FOREGROUND);
+    private static final ThreadLocal<RequestOrigin> REQUEST_ORIGIN = new ThreadLocal<>();
     public static final int SAMPLE_TILE_SIZE = 16;
     public static int sampleTileSize() { return legacySampling() ? TerrainDiffusionConfig.tileSize() : Math.min(SAMPLE_TILE_SIZE, TerrainDiffusionConfig.tileSize()); }
 
+    public enum RequestOrigin { UNSCOPED, STREAMS_DEMAND, STREAMS_PREFETCH, STRUCTURE }
+    public record WorkTotals(long count, long computedWindows, long executionNanos) { }
+    public record OriginTotals(RequestOrigin origin, WorkTotals full, WorkTotals ground) { }
+    /** Completion categories overlap; upgrades are reported separately. */
+    public record RequestTelemetry(int schemaVersion, boolean enabled, WorkTotals fullCompleted, WorkTotals groundCompleted,
+                                   WorkTotals groundToFullUpgrade, WorkTotals bothCompletedOverlap,
+                                   long queuedGroundReusedFull, WorkTotals sameKindRepeat, java.util.List<OriginTotals> origins,
+                                   int historyTrackedKeys, long historyDrops, boolean historyComplete,
+                                   java.util.List<String> repeatExamples, java.util.List<String> overlapExamples) { }
     public record PerformanceSnapshot(long hits, long misses, long pendingJoins, long evictions,
                                       long computedWindows, long executionNanos, int fullTiles, int partialTiles,
                                       long referenceHits, long referenceMisses, long referenceEvictions, long referenceBytes, int referenceTiles,
-                                      InferenceExecutor.Snapshot inference, int groundTiles) { }
+                                      InferenceExecutor.Snapshot inference, int groundTiles,
+                                      RequestTelemetry requestTelemetry,
+                                      Map<String, Map<String, Long>> windowTelemetry) { }
 
     /** Hit totals are exact after callers drain; a live LongAdder snapshot may lag concurrent hits. */
     public PerformanceSnapshot performanceSnapshot() {
+        Map<String, Map<String, Long>> windowTelemetry = requestTelemetry == null ? Map.of() : pipeline.windowTelemetry();
         synchronized (cacheLock) {
             return new PerformanceSnapshot(hits.sum(), misses.get(), joined.get(), evictions.get(),
                     computedWindows.get(), executionNanos.get(), CACHE.size(), partialCache.size(),
-                    referenceHits.get(), referenceMisses.get(), referenceEvictions.get(), referenceBytes, referenceCache.size(), INFERENCE_EXECUTOR.snapshot(), GROUND_CACHE.size());
+                    referenceHits.get(), referenceMisses.get(), referenceEvictions.get(), referenceBytes, referenceCache.size(), INFERENCE_EXECUTOR.snapshot(), GROUND_CACHE.size(),
+                    requestTelemetry == null ? disabledRequestTelemetry() : requestTelemetry.snapshot(), windowTelemetry);
         }
     }
 
@@ -157,7 +177,14 @@ public final class LocalTerrainProvider {
     public void resetPerformanceMetrics() {
         hits.reset(); misses.set(0); joined.set(0); evictions.set(0); computedWindows.set(0); executionNanos.set(0);
         referenceHits.set(0); referenceMisses.set(0); referenceEvictions.set(0);
+        if (requestTelemetry != null) synchronized (cacheLock) { requestTelemetry.resetCounters(); }
         INFERENCE_EXECUTOR.resetMetrics();
+    }
+
+    private static RequestTelemetry disabledRequestTelemetry() {
+        WorkTotals none = new WorkTotals(0, 0, 0);
+        return new RequestTelemetry(2, false, none, none, none, none, 0, none,
+                java.util.List.of(), 0, 0, true, java.util.List.of(), java.util.List.of());
     }
 
     private InferenceExecutor.Priority requestPriority() {
@@ -170,6 +197,157 @@ public final class LocalTerrainProvider {
         InferenceExecutor.Priority previous = REQUEST_PRIORITY.get();
         REQUEST_PRIORITY.set(priority);
         try { return action.call(); } finally { REQUEST_PRIORITY.set(previous); }
+    }
+
+    /** Tags task admission only; cached density reads retain their normal fast path. */
+    public <T> T withRequestOrigin(RequestOrigin origin, Callable<T> action) throws Exception {
+        if (!REQUEST_TELEMETRY_ENABLED) return action.call();
+        RequestOrigin previous = REQUEST_ORIGIN.get();
+        REQUEST_ORIGIN.set(origin);
+        try { return action.call(); }
+        finally {
+            if (previous == null) REQUEST_ORIGIN.remove();
+            else REQUEST_ORIGIN.set(previous);
+        }
+    }
+
+    private static RequestOrigin requestOrigin() {
+        RequestOrigin origin = REQUEST_ORIGIN.get();
+        return origin == null ? RequestOrigin.UNSCOPED : origin;
+    }
+
+    private enum WorkKind { FULL, GROUND }
+    private static final class RequestAdmission {
+        final CacheKey key; final long generation, telemetryEpoch; final WorkKind kind; final RequestOrigin origin;
+        final boolean groundToFullUpgrade, sameKindRepeat;
+        OverlapPair overlap;
+        boolean published;
+        long publishedWindows, publishedNanos;
+        RequestAdmission(CacheKey key, long generation, long telemetryEpoch, WorkKind kind, RequestOrigin origin,
+                         boolean groundToFullUpgrade, boolean sameKindRepeat) {
+            this.key = key; this.generation = generation; this.telemetryEpoch = telemetryEpoch; this.kind = kind;
+            this.origin = origin; this.groundToFullUpgrade = groundToFullUpgrade;
+            this.sameKindRepeat = sameKindRepeat;
+        }
+    }
+    private static final class OverlapPair {
+        final RequestAdmission ground, full; final long telemetryEpoch;
+        boolean groundPublished, fullPublished, disarmed, counted;
+        long groundWindows, groundNanos, fullWindows, fullNanos;
+        OverlapPair(RequestAdmission ground, RequestAdmission full, long telemetryEpoch) {
+            this.ground = ground; this.full = full; this.telemetryEpoch = telemetryEpoch;
+        }
+    }
+
+    /** Bounded, cache-lock-confined task history. It never runs on per-density cached reads. */
+    private final class RequestTelemetryLedger {
+        private final LinkedHashMap<CacheKey, History> history = new LinkedHashMap<>(16, .75f, true);
+        private final java.util.EnumMap<RequestOrigin, MutableTotals> fullByOrigin = new java.util.EnumMap<>(RequestOrigin.class);
+        private final java.util.EnumMap<RequestOrigin, MutableTotals> groundByOrigin = new java.util.EnumMap<>(RequestOrigin.class);
+        private final MutableTotals fullCompleted = new MutableTotals(), groundCompleted = new MutableTotals();
+        private final MutableTotals groundToFullUpgrade = new MutableTotals(), bothCompletedOverlap = new MutableTotals();
+        private final MutableTotals sameKindRepeat = new MutableTotals();
+        private final java.util.LinkedHashSet<String> repeatExamples = new java.util.LinkedHashSet<>();
+        private final java.util.LinkedHashSet<String> overlapExamples = new java.util.LinkedHashSet<>();
+        private long queuedGroundReusedFull, historyDrops, counterEpoch;
+
+        RequestAdmission admit(CacheKey key, long generation, WorkKind kind, boolean groundToFull, boolean overlap) {
+            History prior = history.get(key);
+            boolean same = prior != null && prior.generation == generation && prior.completed(kind);
+            History current = history(key, generation);
+            RequestAdmission admission = new RequestAdmission(key, generation, counterEpoch, kind, requestOrigin(),
+                    groundToFull, same);
+            if (kind == WorkKind.GROUND) current.activeGround = admission;
+            else if (overlap && current.activeGround != null && current.activeGround.telemetryEpoch == counterEpoch) {
+                OverlapPair pair = new OverlapPair(current.activeGround, admission, counterEpoch);
+                if (current.activeGround.published) {
+                    pair.groundPublished = true;
+                    pair.groundWindows = current.activeGround.publishedWindows;
+                    pair.groundNanos = current.activeGround.publishedNanos;
+                }
+                current.activeGround.overlap = pair; admission.overlap = pair; current.activeGround = null;
+            } else if (overlap) current.activeGround = null;
+            return admission;
+        }
+
+        void queuedGroundReusedFull(RequestAdmission admission) {
+            if (admission.telemetryEpoch == counterEpoch) queuedGroundReusedFull++;
+        }
+
+        void completed(RequestAdmission admission, long windows, long nanos) {
+            History current = history(admission.key, admission.generation);
+            current.complete(admission.kind);
+            admission.published = true; admission.publishedWindows = windows; admission.publishedNanos = nanos;
+            if (admission.telemetryEpoch != counterEpoch) return;
+            MutableTotals total = admission.kind == WorkKind.FULL ? fullCompleted : groundCompleted;
+            total.add(windows, nanos);
+            (admission.kind == WorkKind.FULL ? fullByOrigin : groundByOrigin)
+                    .computeIfAbsent(admission.origin, ignored -> new MutableTotals()).add(windows, nanos);
+            if (admission.groundToFullUpgrade) groundToFullUpgrade.add(windows, nanos);
+            if (admission.sameKindRepeat) { sameKindRepeat.add(windows, nanos); example(repeatExamples, admission); }
+            OverlapPair pair = admission.overlap;
+            if (pair != null && !pair.disarmed && pair.telemetryEpoch == counterEpoch) {
+                if (admission == pair.full) {
+                    pair.fullPublished = true; pair.fullWindows = windows; pair.fullNanos = nanos;
+                } else {
+                    pair.groundPublished = true; pair.groundWindows = windows; pair.groundNanos = nanos;
+                }
+                if (!pair.counted && pair.fullPublished && pair.groundPublished) {
+                    pair.counted = true;
+                    bothCompletedOverlap.add(pair.fullWindows + pair.groundWindows, pair.fullNanos + pair.groundNanos);
+                    example(overlapExamples, admission);
+                }
+            }
+        }
+
+        void abandon(RequestAdmission admission) {
+            History current = history.get(admission.key);
+            if (current != null && current.generation == admission.generation && current.activeGround == admission)
+                current.activeGround = null;
+            if (admission.overlap != null) admission.overlap.disarmed = true;
+        }
+
+        void clearGeneration() { history.clear(); }
+        void resetCounters() {
+            fullCompleted.clear(); groundCompleted.clear(); groundToFullUpgrade.clear(); bothCompletedOverlap.clear();
+            sameKindRepeat.clear(); queuedGroundReusedFull = 0;
+            fullByOrigin.clear(); groundByOrigin.clear();
+            repeatExamples.clear(); overlapExamples.clear();
+            counterEpoch++;
+        }
+        RequestTelemetry snapshot() {
+            java.util.ArrayList<OriginTotals> origins = new java.util.ArrayList<>();
+            for (RequestOrigin origin : RequestOrigin.values()) origins.add(new OriginTotals(origin,
+                    totals(fullByOrigin.get(origin)), totals(groundByOrigin.get(origin))));
+            return new RequestTelemetry(2, true, totals(fullCompleted), totals(groundCompleted), totals(groundToFullUpgrade),
+                    totals(bothCompletedOverlap), queuedGroundReusedFull, totals(sameKindRepeat),
+                    java.util.List.copyOf(origins), history.size(), historyDrops, historyDrops == 0,
+                    java.util.List.copyOf(repeatExamples), java.util.List.copyOf(overlapExamples));
+        }
+        private History history(CacheKey key, long generation) {
+            History value = history.get(key);
+            if (value != null && value.generation == generation) return value;
+            if (value != null) history.remove(key);
+            if (history.size() >= REQUEST_TELEMETRY_HISTORY_MAX) { history.remove(history.keySet().iterator().next()); historyDrops++; }
+            value = new History(generation); history.put(key, value); return value;
+        }
+        private void example(java.util.LinkedHashSet<String> examples, RequestAdmission admission) {
+            if (examples.size() < REQUEST_TELEMETRY_EXAMPLES_MAX) examples.add(admission.kind + "@" + admission.key);
+        }
+        private WorkTotals totals(MutableTotals totals) { return totals == null ? new WorkTotals(0, 0, 0) : totals.snapshot(); }
+    }
+    private static final class History {
+        final long generation; boolean fullCompleted, groundCompleted;
+        RequestAdmission activeGround;
+        History(long generation) { this.generation = generation; }
+        boolean completed(WorkKind kind) { return kind == WorkKind.FULL ? fullCompleted : groundCompleted; }
+        void complete(WorkKind kind) { if (kind == WorkKind.FULL) fullCompleted = true; else groundCompleted = true; }
+    }
+    private static final class MutableTotals {
+        long count, windows, nanos;
+        void add(long windows, long nanos) { count++; this.windows += windows; this.nanos += nanos; }
+        void clear() { count = windows = nanos = 0; }
+        WorkTotals snapshot() { return new WorkTotals(count, windows, nanos); }
     }
 
     /** Larger native river plates revisit a bounded working set across sampler threads. */
@@ -379,6 +557,7 @@ public final class LocalTerrainProvider {
         synchronized (cacheLock) {
             CACHE.values().forEach(entry -> entry.valid = false);
             cacheGeneration++;
+            if (requestTelemetry != null) requestTelemetry.clearGeneration();
             CACHE.clear();
             GROUND_CACHE.values().forEach(entry -> entry.valid = false);
             GROUND_CACHE.clear();
@@ -657,15 +836,21 @@ public final class LocalTerrainProvider {
             if (task == null) {
                 misses.incrementAndGet();
                 long generation = cacheGeneration;
+                CacheEntry priorGround = GROUND_CACHE.get(key);
+                final RequestAdmission telemetryAdmission = requestTelemetry == null ? null : requestTelemetry.admit(key, generation,
+                        WorkKind.FULL, priorGround != null && priorGround.valid, GROUND_PENDING.containsKey(key));
                 task = scope.submit(requestPriority(), () -> {
+                    boolean published = false;
                     try {
                         long started = System.nanoTime();
                         long before = pipeline.getTotalComputedWindowCount();
                         HeightmapData data = scale <= 1
                                 ? handle1x(i1, j1, i2, j2)
                                 : handleUpsampled(i1, j1, i2, j2, scale);
-                        computedWindows.addAndGet(pipeline.getTotalComputedWindowCount() - before);
-                        executionNanos.addAndGet(System.nanoTime() - started);
+                        long windows = pipeline.getTotalComputedWindowCount() - before;
+                        long elapsed = System.nanoTime() - started;
+                        computedWindows.addAndGet(windows);
+                        executionNanos.addAndGet(elapsed);
                         LOG.debug("Terrain Diffusion ({}) finished generating region {}x{} ({} newly computed windows)",
                                 OnnxModel.getResolvedInferenceProvider(), j2 - j1, i2 - i1,
                                 pipeline.getTotalComputedWindowCount() - before);
@@ -677,10 +862,15 @@ public final class LocalTerrainProvider {
                             CacheEntry ground = GROUND_CACHE.remove(key);
                             if (ground != null) ground.valid = false;
                             evictLruTo(activeCacheSize);
+                            if (telemetryAdmission != null) requestTelemetry.completed(telemetryAdmission, windows, elapsed);
+                            published = true;
                         }
                         return data;
                     } finally {
-                        synchronized (cacheLock) { if (generation == cacheGeneration) PENDING.remove(key); }
+                        synchronized (cacheLock) {
+                            if (!published && telemetryAdmission != null) requestTelemetry.abandon(telemetryAdmission);
+                            if (generation == cacheGeneration) PENDING.remove(key);
+                        }
                     }
                 });
                 PENDING.put(key, task);
@@ -702,35 +892,31 @@ public final class LocalTerrainProvider {
         }
     }
 
-    private void evictGroundLruTo(int maxSize) {
-        int total = CACHE.size() + GROUND_CACHE.size();
-        if (total <= maxSize) return;
-        GROUND_CACHE.entrySet().stream()
-                .sorted(Comparator.comparingLong(e -> e.getValue().lastAccessed.get()))
-                .limit(total - maxSize)
-                .forEach(entry -> {
-                    if (GROUND_CACHE.remove(entry.getKey(), entry.getValue())) {
-                        entry.getValue().valid = false;
-                        evictions.incrementAndGet();
-                    }
-                });
-    }
-
     private void evictLruTo(int maxSize) {
-        int headroomHalf = MAX_CACHE_SIZE_HEADROOM / 2;
-        if (CACHE.size() > maxSize + headroomHalf) {
-            CACHE.entrySet().stream()
-                .sorted(Comparator.comparingLong(e -> e.getValue().lastAccessed.get()))
-                .limit(Math.max(MAX_CACHE_SIZE_HEADROOM, CACHE.size() - maxSize))
-                .forEach(entry -> {
-                    if (CACHE.remove(entry.getKey(), entry.getValue())) {
-                        entry.getValue().valid = false;
-                        coldEcologyCache.forget(entry.getValue().data.ecology);
-                        evictions.incrementAndGet();
-                    }
-                });
+        synchronized (cacheLock) {
+            int total = CACHE.size() + GROUND_CACHE.size();
+            if (total <= maxSize + MAX_CACHE_SIZE_HEADROOM / 2) return;
+            // Both capabilities share the budget. Evicting only ground entries when
+            // full tiles occupy the budget immediately discards every new ground
+            // tile, making density-column scans recompute it for every sample.
+            // Snapshot recency before sorting: cache hits may update it outside this lock.
+            record Candidate(CacheKey key, CacheEntry entry, boolean full, long accessed) { }
+            java.util.stream.Stream.concat(
+                    CACHE.entrySet().stream().map(e -> new Candidate(e.getKey(), e.getValue(),
+                            true, e.getValue().lastAccessed.get())),
+                    GROUND_CACHE.entrySet().stream().map(e -> new Candidate(e.getKey(), e.getValue(),
+                            false, e.getValue().lastAccessed.get())))
+                    .sorted(Comparator.comparingLong(Candidate::accessed))
+                    .limit(Math.max(MAX_CACHE_SIZE_HEADROOM, total - maxSize))
+                    .forEach(candidate -> {
+                        var cache = candidate.full() ? CACHE : GROUND_CACHE;
+                        if (cache.remove(candidate.key(), candidate.entry())) {
+                            candidate.entry().valid = false;
+                            if (candidate.full()) coldEcologyCache.forget(candidate.entry().data.ecology);
+                            evictions.incrementAndGet();
+                        }
+                    });
         }
-        evictGroundLruTo(maxSize);
     }
 
     /** Exact ground only; partial entries never masquerade as complete biome/ecology tiles. */
@@ -783,7 +969,10 @@ public final class LocalTerrainProvider {
                 task = GROUND_PENDING.get(key);
                 if (task == null) {
                     misses.incrementAndGet(); long generation = cacheGeneration;
+                    final RequestAdmission telemetryAdmission = requestTelemetry == null ? null
+                            : requestTelemetry.admit(key, generation, WorkKind.GROUND, false, false);
                     task = scope.submit(requestPriority(), () -> {
+                        boolean published = false;
                         try {
                             // A foreground complete request may overtake queued ground work.
                             // Reuse its result before doing any inference or publishing a duplicate.
@@ -791,26 +980,42 @@ public final class LocalTerrainProvider {
                                 scope.requireOpen();
                                 if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
                                 CacheEntry ready = CACHE.get(key);
-                                if (ready != null && ready.valid) return ready.data;
+                                if (ready != null && ready.valid) {
+                                    if (telemetryAdmission != null) {
+                                        requestTelemetry.queuedGroundReusedFull(telemetryAdmission);
+                                        requestTelemetry.abandon(telemetryAdmission);
+                                    }
+                                    return ready.data;
+                                }
                             }
                             long started = System.nanoTime(), before = pipeline.getTotalComputedWindowCount();
                             HeightmapData data = handleGround(ri, rj, ri + tile, rj + tile, scale);
-                            computedWindows.addAndGet(pipeline.getTotalComputedWindowCount() - before);
-                            executionNanos.addAndGet(System.nanoTime() - started);
+                            long windows = pipeline.getTotalComputedWindowCount() - before;
+                            long elapsed = System.nanoTime() - started;
+                            computedWindows.addAndGet(windows);
+                            executionNanos.addAndGet(elapsed);
                             synchronized (cacheLock) {
                                 scope.requireOpen();
                                 if (generation != cacheGeneration) throw new CancellationException("Terrain cache generation changed");
                                 GROUND_CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
-                                evictGroundLruTo(activeCacheSize);
+                                evictLruTo(activeCacheSize);
+                                if (telemetryAdmission != null) requestTelemetry.completed(telemetryAdmission, windows, elapsed);
+                                published = true;
                             }
                             return data;
                         } finally {
-                            synchronized (cacheLock) { if (generation == cacheGeneration) GROUND_PENDING.remove(key); }
+                            synchronized (cacheLock) {
+                                if (!published && telemetryAdmission != null) requestTelemetry.abandon(telemetryAdmission);
+                                if (generation == cacheGeneration) GROUND_PENDING.remove(key);
+                            }
                         }
                     });
                     GROUND_PENDING.put(key, task);
                 } else { joined.incrementAndGet(); INFERENCE_EXECUTOR.promote(task, requestPriority()); }
-            } else { joined.incrementAndGet(); INFERENCE_EXECUTOR.promote(task, requestPriority()); }
+            } else {
+                joined.incrementAndGet();
+                INFERENCE_EXECUTOR.promote(task, requestPriority());
+            }
         }
         try {
             HeightmapData data = task.get();

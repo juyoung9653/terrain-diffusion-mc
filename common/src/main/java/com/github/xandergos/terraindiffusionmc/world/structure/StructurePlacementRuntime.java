@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.world.structure;
 
 import com.github.xandergos.terraindiffusionmc.config.StructurePlacementConfig;
+import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.*;
@@ -53,6 +54,14 @@ public final class StructurePlacementRuntime {
         if (DIAGNOSTICS.add(id + ":" + reason)) LogUtils.getLogger().info("TD structure policy {}: {}", id, reason);
     }
     static void count(String id,String reason) { COUNTERS.computeIfAbsent(id+" | "+reason,k -> new LongAdder()).increment(); }
+    static void recordHeightCache(StructureHeightCache.Snapshot snapshot) {
+        String prefix="terrain-diffusion-mc:height_cache | ";
+        COUNTERS.computeIfAbsent(prefix+"choices",k -> new LongAdder()).increment();
+        COUNTERS.computeIfAbsent(prefix+"hits",k -> new LongAdder()).add(snapshot.hits());
+        COUNTERS.computeIfAbsent(prefix+"misses",k -> new LongAdder()).add(snapshot.misses());
+        COUNTERS.computeIfAbsent(prefix+"native height calls",k -> new LongAdder()).add(snapshot.nativeHeightCalls());
+        COUNTERS.computeIfAbsent(prefix+"cap drops",k -> new LongAdder()).add(snapshot.capDrops());
+    }
     public static Map<String,Long> diagnostics() {
         Map<String,Long> result=new TreeMap<>();
         COUNTERS.forEach((key,value) -> result.put(key,value.sum()));
@@ -74,21 +83,26 @@ public final class StructurePlacementRuntime {
         synchronized (PLANNERS) { planner = PLANNERS.computeIfAbsent(state,s -> new StructureReservations(s,registry,config)); }
         // Preflight sees only immutable height limits, never a neighbor ChunkAccess.
         LevelHeightAccessor limits=LevelHeightAccessor.create(height.getMinBuildHeight(),height.getHeight());
-        var reservation = planner.winner(structure,owner,generatingSet,(selected,pos) -> {
-            Assembly assembled=assemble(selected,access,generator,biomes,random,templates,seed,pos,0,limits,
-                    selected.biomes()::contains,config.resolve(String.valueOf(registry.getKey(selected))),true);
-            if (assembled==null) return null;
-            var footprint=descriptor(assembled);
-            if (SavedStructureIndex.conflicts(registry,footprint.bounds(),footprint.gap())
-                    || SavedStructureIndex.overlaps(registry,footprint.influence())) {
-                count(String.valueOf(registry.getKey(selected)),"preflight saved footprint conflict");
-                return null;
+        var reservation = planner.winner(structure,owner,generatingSet,new StructureReservations.Preflight() {
+            @Override public StructureReservations.Descriptor assemble(Structure selected,ChunkPos pos) {
+                return assemble(selected,pos,null);
             }
-            return footprint;
+            @Override public StructureReservations.Descriptor assemble(Structure selected,ChunkPos pos,StructureHeightCache heights) {
+                Assembly assembled=StructurePlacementRuntime.assemble(selected,access,generator,biomes,random,templates,seed,pos,0,limits,
+                        selected.biomes()::contains,config.resolve(String.valueOf(registry.getKey(selected))),true,heights);
+                if (assembled==null) return null;
+                var footprint=descriptor(assembled);
+                if (SavedStructureIndex.conflicts(registry,footprint.bounds(),footprint.gap())
+                        || SavedStructureIndex.overlaps(registry,footprint.influence())) {
+                    count(String.valueOf(registry.getKey(selected)),"preflight saved footprint conflict");
+                    return null;
+                }
+                return footprint;
+            }
         });
         if (reservation == null) { count(id,"reservation rejected"); return StructureStart.INVALID_START; }
         Assembly assembled=assemble(structure,access,generator,biomes,random,templates,seed,owner,references,
-                height,validBiome,config.resolve(id),false);
+                height,validBiome,config.resolve(id),false,null);
         if (assembled==null) return StructureStart.INVALID_START;
         var actual=descriptor(assembled);
         if (!reservation.descriptor().conservative() && !reservation.descriptor().equals(actual)) {
@@ -124,7 +138,7 @@ public final class StructurePlacementRuntime {
     private static Assembly assemble(Structure structure, RegistryAccess access, ChunkGenerator generator,
             BiomeSource biomes, RandomState random, StructureTemplateManager templates, long seed, ChunkPos owner,
             int references, LevelHeightAccessor height, Predicate<Holder<Biome>> validBiome,
-            StructurePlacementConfig.Policy policy, boolean preflight) {
+            StructurePlacementConfig.Policy policy, boolean preflight, StructureHeightCache sharedHeights) {
         String id=String.valueOf(access.registryOrThrow(Registries.STRUCTURE).getKey(structure));
         int radius=policy.reservationRadiusBlocks();
         var footprintEnvelope=new PlacementGeometry.Rect(owner.getMiddleBlockX()-radius,owner.getMiddleBlockZ()-radius,
@@ -187,12 +201,24 @@ public final class StructurePlacementRuntime {
                     }
                 }
                 if (accepted && shaped) {
-                    StructureTerrain.Plan plan = StructureTerrain.plan(start,policy,generator,random,height,sampledHeights,(reason,detail) -> {
-                        count(id,"terrain rejected: "+reason);
-                        if (DIAGNOSTICS.add(id+":terrain:"+reason)) {
-                            LogUtils.getLogger().info("TD terrain rejection {} owner={} reason={} {}",id,owner,reason,detail);
-                        }
-                    });
+                    StructureTerrain.Plan plan;
+                    try {
+                        // Native height/base-column scans revisit one tile for many Y values.
+                        // Reuse that tile only during planning; keep native material checks intact.
+                        var provider=LocalTerrainProvider.getInstance();
+                        plan = provider.withRequestOrigin(LocalTerrainProvider.RequestOrigin.STRUCTURE, () ->
+                                provider.withSamplingBinding(() -> StructureTerrain.plan(start,policy,generator,random,height,
+                                        sampledHeights,sharedHeights,(reason,detail) -> {
+                                    count(id,"terrain rejected: "+reason);
+                                    if (DIAGNOSTICS.add(id+":terrain:"+reason)) {
+                                        LogUtils.getLogger().info("TD terrain rejection {} owner={} reason={} {}",id,owner,reason,detail);
+                                    }
+                                })));
+                    } catch (RuntimeException failure) {
+                        throw failure;
+                    } catch (Exception failure) {
+                        throw new IllegalStateException("Structure terrain sampling failed for "+id, failure);
+                    }
                     if (plan == null) { accepted=false; diagnostic(id,"terrain support, slope or sample budget rejected candidate"); }
                     else {
                         for (var column:plan.columns().entrySet()) {

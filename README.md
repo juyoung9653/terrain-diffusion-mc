@@ -1194,6 +1194,10 @@ Prepared density fixtures must be real directories directly under
 required mods/config/models, and matching world metadata. No player-save paths,
 symlinks or junctions are accepted. Use the fixture requirements in the structure
 placement section; the runner does not create worlds or infer missing settings.
+Before reusing a historical fixture, compare its current mod files with its
+successful input manifest. Preparation hashes files that still exist; it cannot
+restore removed dependencies. An emptied mod directory can copy successfully but
+fail world loading with a missing Terralith biome before the probe starts.
 
 Prepare a fresh-chunk copy from an existing **workspace diagnostic fixture**:
 
@@ -1266,6 +1270,20 @@ samples compare classifier outputs and are not a full river-block or visual audi
 Combine these options when the same fixture/area serves the checks, rather than
 launching one server per check. Separate seeds, settings and cold-cache comparisons
 still need independent fixtures.
+
+The support probe also reports `support.heightCacheAudit`: in one JVM it alternates
+uncached and shared native-height plans for an accepted village, with fresh local
+material checks and both accepting and rejecting policies. It requires exact plan
+and rejection equality, records native height calls and thread CPU time, and marks
+timings contaminated when inference runs or its counters are unavailable. This is
+a small synthetic comparison, not a full-pack chunk-throughput measurement.
+Village preflight shares only immutable ocean-floor/world-surface height pairs
+within one synchronous candidate-cell choice (at most 65,536 columns). Support
+material verdicts remain local to each assembly and policy; actual generation
+revalidates its plan. The cache must never cross worlds, choices or terrain settings.
+Run `python tools/structure_placement/run_fast_tests.py --only height-cache` for its pure checks.
+Prepare native fixtures from a complete source with populated model files to avoid
+including model downloads in repeated test startup.
 
 For comparisons, use identical source, mods, seed, resolved biome/scale settings,
 area, owner order and initial cache contents, with independent fresh chunk data.

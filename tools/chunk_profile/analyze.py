@@ -31,6 +31,76 @@ def delta(a, b):
             and isinstance(b.get(key, 0), (int, float)) and not isinstance(b.get(key, 0), bool)}
 
 
+def request_telemetry(before, after):
+    """Summarize optional request telemetry without requiring a newer TD artifact."""
+    old, new = before.get('requestTelemetry'), after.get('requestTelemetry')
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return None
+    version = new.get('schemaVersion', old.get('schemaVersion', 1))
+    if not isinstance(version, int):
+        version = 1
+    enabled = bool(new.get('enabled', False))
+    work_fields = ('fullCompleted', 'groundCompleted', 'groundToFullUpgrade',
+                   'bothCompletedOverlap', 'sameKindRepeat')
+    unsupported = []
+    if 'postEvictionRecompute' in old or 'postEvictionRecompute' in new:
+        unsupported.extend((
+            {'field': 'postEvictionRecompute', 'reason': 'causal post-eviction classification is unsafe'},
+            {'field': 'postEvictionExamples', 'reason': 'causal post-eviction classification is unsafe'},
+        ))
+    if version < 2:
+        # V1's per-key pair flags could survive key reuse, and its queued-ground
+        # count included full joins rather than only a queued-ground recheck.
+        work_fields = tuple(key for key in work_fields if key != 'bothCompletedOverlap')
+        unsupported.extend((
+            {'field': 'bothCompletedOverlap', 'reason': 'v1 stale per-key pair flags'},
+            {'field': 'queuedGroundReusedFull', 'reason': 'v1 includes full joins, not only queued-ground rechecks'},
+            {'field': 'overlapExamples', 'reason': 'v1 overlap classification is invalid'},
+        ))
+    work_deltas = {key: delta(old.get(key, {}), new.get(key, {})) for key in work_fields
+                   if isinstance(old.get(key), dict) and isinstance(new.get(key), dict)}
+    scalar_fields = ('historyTrackedKeys', 'historyDrops') if version < 2 else ('queuedGroundReusedFull', 'historyTrackedKeys', 'historyDrops')
+    scalar_deltas = {key: new[key] - old[key] for key in scalar_fields
+                     if isinstance(old.get(key), (int, float)) and isinstance(new.get(key), (int, float))}
+    def origins():
+        def indexed(items):
+            return {row.get('origin', '<unknown>'): row for row in items if isinstance(row, dict)}
+        left, right = indexed(old.get('origins', [])), indexed(new.get('origins', []))
+        return {name: {'full': delta(left.get(name, {}).get('full', {}), right.get(name, {}).get('full', {})),
+                       'ground': delta(left.get(name, {}).get('ground', {}), right.get(name, {}).get('ground', {}))}
+                for name in sorted(set(left) | set(right))}
+    example_fields = ('repeatExamples',) if version < 2 else ('repeatExamples', 'overlapExamples')
+    examples = {key: new.get(key, [])[:16] for key in example_fields
+                if isinstance(new.get(key), list)}
+    return {'schema_version': version, 'enabled': enabled, 'scalar_delta': scalar_deltas, 'work_totals_delta': work_deltas,
+            'origin_totals_delta': origins(), 'history_complete_before_after': [old.get('historyComplete'), new.get('historyComplete')],
+            'examples_after': examples, 'unsupported_fields': unsupported}
+
+
+def stage_window_telemetry(before, after):
+    """Optional exact-window counters. Stage counts are not ONNX-call counts because calls may batch windows."""
+    old, new = before.get('windowTelemetry'), after.get('windowTelemetry')
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return None
+    stages = {}
+    for stage in sorted(set(old) | set(new)):
+        left, right = old.get(stage, {}), new.get(stage, {})
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            continue
+        generations = [left.get('historyGeneration'), right.get('historyGeneration')]
+        generation_changed = all(isinstance(value, (int, float)) for value in generations) and generations[0] != generations[1]
+        delta_values = {key: right.get(key, 0) - left.get(key, 0)
+                        for key in ('computedWindows', 'recomputedWindows', 'trackedKeys')
+                        if isinstance(left.get(key), (int, float)) and isinstance(right.get(key), (int, float))}
+        drops = [left.get('historyDrops'), right.get('historyDrops')]
+        stages[stage] = {'delta': None if generation_changed else delta_values,
+                         'delta_valid': not generation_changed,
+                         'history_generation_before_after': generations,
+                         'history_drops_before_after': drops,
+                         'history_complete_before_after': [False, False] if generation_changed else [value == 0 for value in drops]}
+    return stages
+
+
 def summarize(path):
     root = json.loads((path / 'receipt.json').read_text(encoding='utf-8'))
     launch = json.loads((path / 'launch-result.json').read_text(encoding='utf-8'))
@@ -48,6 +118,8 @@ def summarize(path):
             raise ValueError('Required TD/ONNX counters unavailable')
         before, after = phase['tdBefore']['snapshot'], phase['tdAfter']['snapshot']
         td, inference = delta(before, after), delta(before['inference'], after['inference'])
+        telemetry = request_telemetry(before, after)
+        window_telemetry = stage_window_telemetry(before, after)
         onnx = delta(phase['onnxBefore']['runtimeMetrics'], phase['onnxAfter']['runtimeMetrics'])
         model_before, model_after = phase['onnxBefore']['modelRunMetrics'], phase['onnxAfter']['modelRunMetrics']
         models = {key: delta(model_before.get(key, {}), model_after.get(key, {})) for key in set(model_before)|set(model_after)}
@@ -83,6 +155,17 @@ def summarize(path):
             'average_utilized_logical_cores': phase['processCpuSeconds']/elapsed,
             'available_processors': phase['availableProcessors'],
             'td_counter_delta': td, 'inference_counter_delta': inference,
+            'request_telemetry': telemetry,
+            'stage_window_telemetry': window_telemetry,
+            'streams_native_builds': {
+                boundary.lower(): {
+                    'available': phase.get('streamsBuildTrace' + boundary, {}).get('available', False),
+                    **{key: phase.get('streamsBuildTrace' + boundary, {}).get('snapshot', {}).get(key)
+                       for key in ('enabled', 'eventCount', 'inflightCount', 'historyDrops', 'reflectionFailures')},
+                    'inflight_keys': [event.get('key') for event in
+                        phase.get('streamsBuildTrace' + boundary, {}).get('snapshot', {}).get('inflight', [])],
+                } for boundary in ('Before', 'After')
+            },
             'inference_before_active_queued': [before['inference']['active'], before['inference']['queued']],
             'inference_after_active_queued': [after['inference']['active'], after['inference']['queued']],
             'onnx_counter_delta': onnx, 'model_run_delta': models,
@@ -102,7 +185,9 @@ def summarize(path):
                    'Requested FULL chunks include dependency work in neighboring chunks; this is not sustained chunks/second.',
                    'ONNX calls are host-observed run durations, not GPU kernel-only timing. GPU telemetry includes all applications.',
                    'Cumulative task queue waits overlap. Never add them to wall time. Live endpoint tasks can straddle counter boundaries.',
+                   'Request telemetry is opt-in. Its overlap and same-kind-repeat categories are not disjoint and must not be summed. Both-kind completion can be a valid height-only to climate/biome upgrade, not duplicated neural inference. Post-eviction causal flags are not interpreted. Tensor-window stage counts are exact per stage keys, but must not be summed or equated with ONNX calls because calls can batch windows. History drops limit attribution.',
                    'Normal integrated-server and client rendering continue. CPU stack weights are diagnostic sampling estimates.',
+                   'TD inference idle does not imply Streams idle. Native builds can span the phase; extra model calls can reflect further background progress rather than extra required chunk work. Native trace RETURN precedes TD refinement, so zero native inflight alone does not prove all river work has settled.',
                    'The first shaders-on exploratory run had different readiness/probe controls; do not report it as a matched speed comparison.',
                ]}
     (path / 'analysis.json').write_text(json.dumps(summary, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')

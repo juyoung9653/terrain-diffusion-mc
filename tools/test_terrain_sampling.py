@@ -24,16 +24,19 @@ final class WorldPipeline {
     static final AtomicInteger calls = new AtomicInteger();
     static final AtomicInteger cropCalls = new AtomicInteger(), climateCalls = new AtomicInteger();
     static volatile CountDownLatch entered, release;
+    static volatile boolean failClimate;
     private long seed;
     WorldPipeline(long seed, PipelineModels models) { this.seed = seed; }
     void setSeed(long seed) { this.seed = seed; }
     long getTotalComputedWindowCount() { return calls.get(); }
+    java.util.Map<String,java.util.Map<String,Long>> windowTelemetry() { return java.util.Map.of(); }
     FloatTensor getCoarseSlice(int a,int b,int c,int d){return new FloatTensor();}
     float[][] get(int i,int j,int ei,int ej,boolean climate) {
         calls.incrementAndGet();
         if (climate) climateCalls.incrementAndGet();
         CountDownLatch signal=entered, gate=release;
         if(signal!=null){signal.countDown();try { gate.await(); } catch(InterruptedException e){throw new AssertionError(e);}}
+        if(climate && failClimate) throw new IllegalStateException("fixture climate failure");
         int h=ei-i,w=ej-j,n=h*w;
         float[] elevation=new float[n], cl=climate?new float[5*n]:null;
         for(int r=0;r<h;r++) for(int c=0;c<w;c++){
@@ -86,18 +89,23 @@ def main():
         path=generated/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text,encoding="utf-8");sources.append(path)
     for name in ("LocalTerrainProvider","InferenceExecutor","ExactTerrainSampling","EcologyData","EcologyDataCache","FastNoiseLite","LaplacianUtils",
                  "BiomeClassifier","TerralithBiomeClassifier","MacroBiomeContext","BroadEcologyClimate","EcologyClassifier",
-                 "ShoreClassifier","ShoreContext"):
+                 "ShoreClassifier","ShoreContext","EcologyShowcaseProfile"):
         sources.append(ROOT/"common/src/main/java"/PACKAGE/"pipeline"/(name+".java"))
     sources.append(ROOT/"tools/terrain_sampling/LocalTerrainProviderCacheTest.java")
     sources.append(ROOT/"tools/terrain_sampling/StreamsSamplingTest.java")
+    sources.append(ROOT/"tools/terrain_sampling/StreamsMarineSamplingTest.java")
+    sources.append(ROOT/"tools/terrain_sampling/GroundCacheAdmissionTest.java")
     sources.append(ROOT/"tools/terrain_sampling/EcologyDataCacheTest.java")
-    for name in ("StreamsInferenceBinding", "StreamsSamplerPriority"):
+    for name in ("StreamsInferenceBinding", "StreamsSamplerPriority", "StreamsMarineSampling"):
         sources.append(ROOT/"neoforge/src/main/java"/PACKAGE/"compat/streams"/(name+".java"))
     for name in ("MacroBiomeContextTest","ExactTerrainSamplingTest","InferenceExecutorTest"):
         sources.append(ROOT/"common/src/test/java"/PACKAGE/"pipeline"/(name+".java"))
     run([str(args.java_home/"bin/javac.exe"),"--release","21","-encoding","UTF-8","-d",str(target),*map(str,sources)])
-    for name in ("InferenceExecutorTest","ExactTerrainSamplingTest","MacroBiomeContextTest","EcologyDataCacheTest","LocalTerrainProviderCacheTest","StreamsSamplingTest"):
+    for name in ("InferenceExecutorTest","ExactTerrainSamplingTest","MacroBiomeContextTest","EcologyDataCacheTest","LocalTerrainProviderCacheTest","StreamsSamplingTest","StreamsMarineSamplingTest","GroundCacheAdmissionTest"):
         run([str(args.java_home/"bin/java.exe"),"-cp",os.pathsep.join((str(target),str(ROOT/"common/src/main/resources"))),"com.github.xandergos.terraindiffusionmc.pipeline."+name])
+    run([str(args.java_home/"bin/java.exe"),"-Dtd.inference.requestTelemetry=true",
+         "-cp",os.pathsep.join((str(target),str(ROOT/"common/src/main/resources"))),
+         "com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProviderCacheTest"])
     if args.benchmark:
         for enabled in ("false", "true"):
             run([str(args.java_home/"bin/java.exe"),"-Dtd.inference.recentTileCache="+enabled,

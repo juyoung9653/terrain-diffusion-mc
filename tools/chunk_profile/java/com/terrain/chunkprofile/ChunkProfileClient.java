@@ -9,7 +9,9 @@ import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
 import java.lang.reflect.Method;
 import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -24,6 +26,7 @@ import java.util.Optional;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.TitleScreen;
@@ -53,10 +56,13 @@ public final class ChunkProfileClient {
     private final int prefetch = integer("chunkprofile.prefetch", 8, 1, 32);
     private final List<Region> regions = parseRegions(System.getProperty("chunkprofile.regions", ""));
     private final long settleNanos = integer("chunkprofile.settleSeconds", 30, 0, 300) * 1_000_000_000L;
+    private final long streamsSettleNanos = integer("chunkprofile.streamsSettleSeconds", 0, 0, 900) * 1_000_000_000L;
     private final long maxSettleNanos = integer("chunkprofile.maxSettleSeconds", 300, 30, 600) * 1_000_000_000L;
     private final long timeoutSeconds = integer("chunkprofile.timeoutSeconds", 900, 30, 1800);
+    private final boolean streamsGroundMarineAudit = Boolean.getBoolean("td.streams.groundMarineAudit");
     private boolean requested, configured, finished, warningHandled, launched;
     private long readyNanos, nextReadinessCheckNanos, idleSinceNanos = -1L;
+    private long observedStreamsTraceEvents = -1L;
     private Map<String,Object> lastIdleSnapshot = Map.of();
 
     static void install() {
@@ -96,17 +102,17 @@ public final class ChunkProfileClient {
         }
         long now = System.nanoTime();
         if (!launched && now - readyNanos > maxSettleNanos) {
-            fail("td_inference_not_idle_before_maxSettleSeconds"); return;
+            fail(streamsSettleNanos > 0 ? "td_or_streams_not_quiescent_before_maxSettleSeconds" : "td_inference_not_idle_before_maxSettleSeconds"); return;
         }
         if (!launched && now - readyNanos >= settleNanos && now >= nextReadinessCheckNanos) {
             nextReadinessCheckNanos = now + 1_000_000_000L;
-            lastIdleSnapshot = inferenceReadiness();
-            boolean idle = asLong(lastIdleSnapshot.get("active")) == 0L && asLong(lastIdleSnapshot.get("queued")) == 0L;
+            lastIdleSnapshot = readinessSnapshot();
+            boolean idle = readinessIdle(lastIdleSnapshot);
             if (idle) { if (idleSinceNanos < 0L) idleSinceNanos = now; }
             else idleSinceNanos = -1L;
-            lifecycle(idle ? "awaiting_idle_confirmation" : "awaiting_td_idle", now - readyNanos, lastIdleSnapshot);
+            lifecycle(idle ? "awaiting_idle_confirmation" : streamsSettleNanos > 0 ? "awaiting_td_streams_quiescence" : "awaiting_td_idle", now - readyNanos, lastIdleSnapshot);
         }
-        if (!launched && idleSinceNanos >= 0L && now - idleSinceNanos >= 3_000_000_000L) {
+        if (!launched && idleSinceNanos >= 0L && now - idleSinceNanos >= requiredIdleNanos()) {
             launched = true;
             MinecraftServer server = mc.getSingleplayerServer();
             long readinessWait = now - readyNanos;
@@ -116,22 +122,63 @@ public final class ChunkProfileClient {
     }
 
     private void lifecycle(String status, long elapsedNanos, Map<String,Object> inference) {
-        try { atomic(output.resolveSibling("progress.json"), Map.of("status",status,"settleElapsedSeconds",seconds(elapsedNanos),"requiredIdleSeconds",3,"inference",inference,"updatedUtc",Instant.now().toString())); }
+        try { atomic(output.resolveSibling("progress.json"), Map.of("status",status,"settleElapsedSeconds",seconds(elapsedNanos),"requiredIdleSeconds",seconds(requiredIdleNanos()),"inference",inference,"updatedUtc",Instant.now().toString())); }
         catch (IOException failure) { fail("progress_write_failed:" + failure.getClass().getSimpleName()); }
     }
     private static long asLong(Object value) { return value instanceof Number number ? number.longValue() : -1L; }
+    private long requiredIdleNanos() { return Math.max(3_000_000_000L, streamsSettleNanos); }
+    private void resetStreamsTraceObservation() { observedStreamsTraceEvents = -1L; }
+    /** A trace-stable interval is observed quiescence only; it cannot prove no future native work will be submitted. */
+    private Map<String,Object> readinessSnapshot() {
+        Map<String,Object> result = new LinkedHashMap<>(inferenceReadiness());
+        if (streamsSettleNanos > 0) result.put("streamsBuildTrace", streamsBuildTrace());
+        return result;
+    }
+    private boolean readinessIdle(Map<String,Object> snapshot) {
+        if (asLong(snapshot.get("active")) != 0L || asLong(snapshot.get("queued")) != 0L) return false;
+        if (streamsSettleNanos <= 0) return true;
+        Object rawTrace = snapshot.get("streamsBuildTrace");
+        if (!(rawTrace instanceof Map<?,?> trace) || !Boolean.TRUE.equals(trace.get("available"))) return false;
+        Object rawSnapshot = trace.get("snapshot");
+        if (!(rawSnapshot instanceof Map<?,?> values) || !Boolean.TRUE.equals(values.get("enabled"))) return false;
+        long events = asLong(values.get("eventCount"));
+        if (events < 0L || asLong(values.get("inflightCount")) != 0L
+                || asLong(values.get("historyDrops")) != 0L || asLong(values.get("reflectionFailures")) != 0L
+                || traceHasErrors(values.get("events")) || traceHasErrors(values.get("inflight"))) return false;
+        boolean changed = observedStreamsTraceEvents >= 0L && observedStreamsTraceEvents != events;
+        observedStreamsTraceEvents = events;
+        return !changed;
+    }
+    private static boolean traceHasErrors(Object raw) {
+        if (!(raw instanceof Iterable<?> rows)) return true;
+        for (Object row : rows) {
+            if (!(row instanceof Map<?,?> values)) return true;
+            Object error = values.get("error");
+            if (error != null && !String.valueOf(error).isBlank()) return true;
+        }
+        return false;
+    }
 
     private void run(MinecraftServer server, long readinessWait, Map<String,Object> idleSnapshot) {
         List<Region> requested = regions.isEmpty() ? List.of(new Region(firstX, firstZ)) : regions;
         Map<String,Object> root = new LinkedHashMap<>(); List<Map<String,Object>> phases = new ArrayList<>();
         root.put("phases", phases); root.put("world", world); root.put("requestedRegions", requested.stream().map(r -> List.of(r.x,r.z)).toList());
         try {
+            if (streamsSettleNanos > 0) {
+                Map<String,Object> recheck = readinessSnapshot();
+                root.put("initialStreamsQuiescenceRevalidation", recheck);
+                if (!readinessIdle(recheck)) {
+                    root.put("status", "failed"); root.put("error", "td_or_streams_not_quiescent_at_initial_measurement_boundary");
+                    return;
+                }
+            }
             for (int index=0; index<requested.size(); index++) {
                 Region region = requested.get(index);
                 if (index > 0) {
+                    resetStreamsTraceObservation();
                     Map<String,Object> boundary = awaitIdleBoundary(index, requested.size());
                     if (!Boolean.TRUE.equals(boundary.get("idleVerified"))) {
-                        Map<String,Object> failed = new LinkedHashMap<>(); failed.put("status","failed"); failed.put("error","td_inference_not_idle_between_phases"); failed.put("boundary",boundary); phases.add(failed); break;
+                        Map<String,Object> failed = new LinkedHashMap<>(); failed.put("status","failed"); failed.put("error",streamsSettleNanos > 0 ? "td_or_streams_not_quiescent_between_phases" : "td_inference_not_idle_between_phases"); failed.put("boundary",boundary); phases.add(failed); break;
                     }
                     readinessWait = (long)(((Number)boundary.get("waitSeconds")).doubleValue() * 1_000_000_000L);
                     idleSnapshot = (Map<String,Object>)boundary.get("lastInferenceSnapshot");
@@ -141,25 +188,35 @@ public final class ChunkProfileClient {
             }
             root.put("status", phases.size()==requested.size() && phases.stream().allMatch(p -> "success".equals(p.get("status"))) ? "success" : "failed");
         } catch (Throwable failure) { root.put("status","failed"); root.put("error",failure.toString()); LOG.error("Chunk profile phases failed", failure); }
-        finally { try { atomic(output,root); atomic(output.resolveSibling("progress.json"),Map.of("status",root.get("status"),"completedPhases",phases.size(),"totalPhases",requested.size())); } catch(IOException e){LOG.error("Chunk profile root receipt write failed",e);} finished=true; Minecraft.getInstance().execute(() -> Minecraft.getInstance().stop()); }
+        finally {
+            if (streamsGroundMarineAudit) {
+                Map<String,Object> audit = streamsGroundMarineAudit();
+                root.put("streamsGroundMarineAuditFinal", audit);
+                if (!streamsGroundMarineAuditPassed(audit)) {
+                    root.put("status", "failed");
+                    root.put("streamsGroundMarineAuditError", "unavailable, zero eligible samples, or nonzero mismatches");
+                }
+            }
+            try { atomic(output,root); atomic(output.resolveSibling("progress.json"),Map.of("status",root.get("status"),"completedPhases",phases.size(),"totalPhases",requested.size())); } catch(IOException e){LOG.error("Chunk profile root receipt write failed",e);} finished=true; Minecraft.getInstance().execute(() -> Minecraft.getInstance().stop());
+        }
     }
 
-    /** A phase boundary is clean only after the shared TD inference lane remains empty for three seconds. */
+    /** A phase boundary requires TD idleness, and optionally observed native Streams quiescence. */
     private Map<String,Object> awaitIdleBoundary(int phaseIndex, int phaseCount) {
         long began = System.nanoTime(), idleSince = -1L; Map<String,Object> snapshot = Map.of();
         while (System.nanoTime()-began <= maxSettleNanos) {
-            snapshot = inferenceReadiness(); boolean idle=asLong(snapshot.get("active"))==0L&&asLong(snapshot.get("queued"))==0L;
-            long now=System.nanoTime(); if(idle){if(idleSince<0L)idleSince=now;if(now-idleSince>=3_000_000_000L)return Map.of("idleVerified",true,"waitSeconds",seconds(now-began),"lastInferenceSnapshot",snapshot);}else idleSince=-1L;
-            try { atomic(output.resolveSibling("progress.json"),Map.of("status","awaiting_phase_idle","phaseIndex",phaseIndex,"phaseCount",phaseCount,"waitSeconds",seconds(now-began),"inference",snapshot)); Thread.sleep(1_000L); }
+            snapshot = readinessSnapshot(); boolean idle=readinessIdle(snapshot);
+            long now=System.nanoTime(); if(idle){if(idleSince<0L)idleSince=now;if(now-idleSince>=requiredIdleNanos())return Map.of("idleVerified",true,"waitSeconds",seconds(now-began),"requiredIdleSeconds",seconds(requiredIdleNanos()),"lastInferenceSnapshot",snapshot);}else idleSince=-1L;
+            try { atomic(output.resolveSibling("progress.json"),Map.of("status",streamsSettleNanos > 0 ? "awaiting_phase_td_streams_quiescence" : "awaiting_phase_idle","phaseIndex",phaseIndex,"phaseCount",phaseCount,"waitSeconds",seconds(now-began),"requiredIdleSeconds",seconds(requiredIdleNanos()),"inference",snapshot)); Thread.sleep(1_000L); }
             catch (InterruptedException e) { Thread.currentThread().interrupt(); break; } catch (IOException ignored) { }
         }
-        return Map.of("idleVerified",false,"waitSeconds",seconds(System.nanoTime()-began),"lastInferenceSnapshot",snapshot);
+        return Map.of("idleVerified",false,"waitSeconds",seconds(System.nanoTime()-began),"requiredIdleSeconds",seconds(requiredIdleNanos()),"lastInferenceSnapshot",snapshot);
     }
 
     private Map<String,Object> measureRegion(MinecraftServer server, long readinessWait, Map<String,Object> idleSnapshot, Region region, int phaseIndex, int phaseCount) {
         Map<String,Object> report = new LinkedHashMap<>();
-        long started = System.nanoTime();
-        long processBefore = processCpuNanos();
+        long started = -1L;
+        long processBefore = -1L;
         CpuSampler sampler = new CpuSampler();
         List<Map<String,Object>> batches = new ArrayList<>();
         List<Map<String,Object>> rows = new ArrayList<>();
@@ -170,11 +227,21 @@ public final class ChunkProfileClient {
             List<ChunkPos> chunks = positions(region.x, region.z);
             report.put("status", "running"); report.put("startedUtc", Instant.now().toString());
             report.put("world", world); report.put("phaseIndex",phaseIndex); report.put("phaseCount",phaseCount); report.put("target", Map.of("firstChunk", List.of(region.x, region.z), "side", side, "count", chunks.size(), "prefetch", prefetch));
-            report.put("readiness", Map.of("settleSecondsRequested", seconds(settleNanos), "maxSettleSeconds",seconds(maxSettleNanos), "waitBeforeFirstTicketSeconds",seconds(readinessWait), "idleConfirmationSeconds",3,"lastInferenceSnapshot",idleSnapshot));
+            report.put("readiness", Map.of("settleSecondsRequested", seconds(settleNanos), "streamsSettleSecondsRequested", seconds(streamsSettleNanos), "maxSettleSeconds",seconds(maxSettleNanos), "waitBeforeFirstTicketSeconds",seconds(readinessWait), "idleConfirmationSeconds",seconds(requiredIdleNanos()),"lastInferenceSnapshot",idleSnapshot));
             report.put("availableProcessors", Runtime.getRuntime().availableProcessors());
-            report.put("timingScope", "baseline snapshots and loaded-chunk precheck through all FULL futures and ticket cleanup; normal integrated-server activity continues");
+            report.put("timingScope", "loaded-chunk precheck through all FULL futures and ticket cleanup; baseline and cache-key snapshots are outside this interval; normal integrated-server activity continues");
             report.put("processCpuScope", "whole JVM process CPU delta, including all mod and native work during the measurement window");
             report.put("tdBefore", tdMetrics()); report.put("onnxBefore", onnxMetrics());
+            if (streamsGroundMarineAudit) report.put("streamsGroundMarineAuditBefore", streamsGroundMarineAudit());
+            long cacheKeysBeforeStarted = System.nanoTime();
+            report.put("cacheKeysBefore", cacheKeys());
+            report.put("cacheKeysBeforeSeconds", seconds(System.nanoTime()-cacheKeysBeforeStarted));
+            long streamsTraceBeforeStarted = System.nanoTime();
+            report.put("streamsBuildTraceBefore", streamsBuildTrace());
+            report.put("streamsBuildTraceBeforeSeconds", seconds(System.nanoTime()-streamsTraceBeforeStarted));
+            // Cache-key reflection is deliberately outside the measured phase.
+            started = System.nanoTime();
+            processBefore = processCpuNanos();
             List<List<Integer>> alreadyFull = server.submit(() -> {
                 List<List<Integer>> result = new ArrayList<>();
                 for (ChunkPos p : chunks) if (level.getChunkSource().getChunkNow(p.x, p.z) != null) result.add(List.of(p.x,p.z));
@@ -214,14 +281,24 @@ public final class ChunkProfileClient {
                 }
                 atomic(output.resolveSibling("progress.json"), Map.of("status","running","phaseIndex",phaseIndex,"phaseCount",phaseCount,"completed",rows.size(),"total",chunks.size(),"lastBatch",batches.getLast()));
             }
+            report.put("terrainStructureFingerprint", terrainStructureFingerprint(rows));
             report.put("status","success");
         } catch (Throwable failure) {
             report.put("status","failed"); report.put("error",failure.toString()); LOG.error("Chunk profile failed",failure);
         } finally {
+            long ended = System.nanoTime();
+            long processAfter = processCpuNanos();
             sampler.stop();
-            report.put("elapsedSeconds",seconds(System.nanoTime()-started));
-            report.put("processCpuSeconds", processBefore < 0 ? null : seconds(Math.max(0,processCpuNanos()-processBefore)));
+            report.put("elapsedSeconds",started < 0 ? null : seconds(ended-started));
+            report.put("processCpuSeconds", processBefore < 0 || processAfter < 0 ? null : seconds(Math.max(0,processAfter-processBefore)));
             report.put("tdAfter",tdMetrics()); report.put("onnxAfter",onnxMetrics());
+            if (streamsGroundMarineAudit) report.put("streamsGroundMarineAuditAfter", streamsGroundMarineAudit());
+            long cacheKeysAfterStarted = System.nanoTime();
+            report.put("cacheKeysAfter",cacheKeys());
+            report.put("cacheKeysAfterSeconds",seconds(System.nanoTime()-cacheKeysAfterStarted));
+            long streamsTraceAfterStarted = System.nanoTime();
+            report.put("streamsBuildTraceAfter", streamsBuildTrace());
+            report.put("streamsBuildTraceAfterSeconds", seconds(System.nanoTime()-streamsTraceAfterStarted));
             report.put("cpuProfile",sampler.result());
             report.put("limitations", List.of("Thread CPU sampling has 200 ms resolution and can miss short/native work.","Aggregate queue and executor times overlap between requests; do not add them to chunk wall time.","This measures the installed cloned modpack and one fresh chunk region, not player rendering FPS."));
             return report;
@@ -246,10 +323,106 @@ public final class ChunkProfileClient {
         return result;
     }
     private static double seconds(long nanos) { return nanos / 1_000_000_000.0; }
+    /** Stable summary of the requested chunks' observed surface, biome and valid starts; it is not block equivalence. */
+    private static String terrainStructureFingerprint(List<Map<String,Object>> rows) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            for (Map<String,Object> row : rows) {
+                digest.update((String.valueOf(row.get("chunk"))+"|"+row.get("worldSurfaceY")+"|"+row.get("biome")+"|"+row.get("structures")+"\n").getBytes(StandardCharsets.UTF_8));
+            }
+            StringBuilder hex = new StringBuilder(); for (byte value : digest.digest()) hex.append(String.format("%02x", value)); return hex.toString();
+        } catch (Exception failure) { return "unavailable:" + failure.getClass().getSimpleName(); }
+    }
     private static long processCpuNanos() { try { return ManagementFactory.getOperatingSystemMXBean() instanceof com.sun.management.OperatingSystemMXBean os ? os.getProcessCpuTime() : -1L; } catch(Throwable ignored) { return -1; } }
     private void fail(String why) { Map<String,Object> r=new LinkedHashMap<>();r.put("status","failed");r.put("error",why);r.put("lastInferenceSnapshot",lastIdleSnapshot);if(readyNanos>0L)r.put("settleElapsedSeconds",seconds(System.nanoTime()-readyNanos));try{atomic(output,r);}catch(IOException ignored){}finished=true;LOG.error("Chunk profile failed: {}",why);Minecraft.getInstance().stop(); }
 
     private static Map<String,Object> tdMetrics() { return invokeRecord("com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider", "getInstance", "performanceSnapshot"); }
+    /**
+     * Read-only diagnostic snapshot of TD's outer tile caches.  The provider
+     * publishes and evicts these maps under cacheLock, so taking that same lock
+     * gives a stable key set without modifying cache recency.  Cache-hit LRU
+     * clocks are AtomicLongs updated outside that lock; their observed ordering
+     * is therefore advisory and key-set equality is the comparable signal.
+     *
+     * MemoryTileStore's access-order LinkedHashMaps have no externally shared
+     * lock: production confines them to the inference lane.  This diagnostic
+     * runs on its own worker and must not iterate them concurrently, so it
+     * deliberately reports them unavailable rather than risking a racy read.
+     */
+    @SuppressWarnings("unchecked")
+    private static Map<String,Object> cacheKeys() {
+        if (!telemetryEnabled()) {
+            return Map.of("available", false, "reason", "disabled; enable -Dtd.inference.requestTelemetry=true");
+        }
+        Map<String,Object> unavailableInternal = Map.of("available", false,
+                "reason", "MemoryTileStore windowCaches are confined to the inference lane; no safe external lock");
+        try {
+            Class<?> providerType = Class.forName("com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider");
+            Object provider = providerType.getMethod("getInstance").invoke(null);
+            Field lockField = providerType.getDeclaredField("cacheLock");
+            Field fullField = providerType.getDeclaredField("CACHE");
+            Field groundField = providerType.getDeclaredField("GROUND_CACHE");
+            Field generationField = providerType.getDeclaredField("cacheGeneration");
+            lockField.setAccessible(true); fullField.setAccessible(true); groundField.setAccessible(true); generationField.setAccessible(true);
+            Object lock = lockField.get(provider);
+            synchronized (lock) {
+                return Map.of("available", true,
+                        "keySetSynchronization", "cacheLock",
+                        "recencyAtomicSnapshot", false,
+                        "ordering", "observed CacheEntry.lastAccessed ascending; ties use key text; concurrent hit updates can reorder",
+                        "cacheGeneration", generationField.get(provider),
+                        "full", orderedOuterKeys((Map<?,?>)fullField.get(provider)),
+                        "ground", orderedOuterKeys((Map<?,?>)groundField.get(provider)),
+                        "internalWindowCaches", unavailableInternal);
+            }
+        } catch (Throwable failure) {
+            return Map.of("available", false, "error", failure.getClass().getSimpleName(),
+                    "internalWindowCaches", unavailableInternal);
+        }
+    }
+    private static List<Map<String,Object>> orderedOuterKeys(Map<?,?> cache) throws ReflectiveOperationException {
+        List<Map<String,Object>> keys = new ArrayList<>();
+        for (Map.Entry<?,?> entry : cache.entrySet()) {
+            Field lastAccessed = entry.getValue().getClass().getDeclaredField("lastAccessed");
+            lastAccessed.setAccessible(true);
+            Object clock = lastAccessed.get(entry.getValue());
+            if (!(clock instanceof AtomicLong value)) throw new ReflectiveOperationException("unexpected cache clock");
+            keys.add(new LinkedHashMap<>(Map.of("key", String.valueOf(entry.getKey()), "lastAccess", value.get())));
+        }
+        keys.sort(Comparator.<Map<String,Object>>comparingLong(row -> ((Number)row.get("lastAccess")).longValue())
+                .thenComparing(row -> String.valueOf(row.get("key"))));
+        return keys;
+    }
+    /** The production trace is optional so a diagnostic JAR remains compatible with older TD JARs. */
+    private static Map<String,Object> streamsBuildTrace() {
+        if (!telemetryEnabled()) return Map.of("available", false, "reason", "disabled; enable -Dtd.inference.requestTelemetry=true");
+        try {
+            Class<?> trace = Class.forName("com.terrain.chunkprofile.StreamsBuildTrace");
+            return Map.of("available", true, "snapshot", value(trace.getMethod("snapshot").invoke(null)));
+        } catch (Throwable failure) {
+            return Map.of("available", false, "error", failure.getClass().getSimpleName());
+        }
+    }
+    /** Read the production opt-in counter only; it must never start sampling or reset its lifetime totals. */
+    private static Map<String,Object> streamsGroundMarineAudit() {
+        try {
+            Class<?> sampling = Class.forName("com.github.xandergos.terraindiffusionmc.compat.streams.StreamsMarineSampling");
+            Object raw = sampling.getMethod("auditSnapshot").invoke(null);
+            if (!(raw instanceof Map<?,?>)) throw new IllegalStateException("auditSnapshot is not a Map");
+            return Map.of("available", true, "snapshot", value(raw));
+        } catch (Throwable failure) {
+            return Map.of("available", false, "error", failure.getClass().getSimpleName());
+        }
+    }
+    private static boolean streamsGroundMarineAuditPassed(Map<String,Object> audit) {
+        if (!Boolean.TRUE.equals(audit.get("available"))) return false;
+        Object snapshot = audit.get("snapshot");
+        if (!(snapshot instanceof Map<?,?> values)) return false;
+        Object samples = values.get("samples"), mismatches = values.get("mismatches");
+        return samples instanceof Number && mismatches instanceof Number
+                && ((Number)samples).longValue() > 0L && ((Number)mismatches).longValue() == 0L;
+    }
+    private static boolean telemetryEnabled() { return Boolean.getBoolean("td.inference.requestTelemetry"); }
     private static Map<String,Object> inferenceReadiness() {
         try { Class<?> type=Class.forName("com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider"); return (Map<String,Object>) value(type.getMethod("inferenceSnapshot").invoke(null)); }
         catch(Throwable failure) { return Map.of("active",-1L,"queued",-1L,"available",false,"error",failure.getClass().getSimpleName()); }

@@ -47,7 +47,12 @@ public final class StructureReservations {
     public record Descriptor(Structure structure, int attempt, PlacementGeometry.Rect bounds,
             PlacementGeometry.Rect influence, List<String> pieces, String terrainFingerprint, int gap, boolean surface, boolean conservative) {}
     public record Reservation(PlacementGeometry.Candidate candidate, Descriptor descriptor) {}
-    @FunctionalInterface public interface Preflight { Descriptor assemble(Structure structure, ChunkPos owner); }
+    @FunctionalInterface public interface Preflight {
+        Descriptor assemble(Structure structure, ChunkPos owner);
+        default Descriptor assemble(Structure structure, ChunkPos owner, StructureHeightCache heights) {
+            return assemble(structure,owner);
+        }
+    }
     private record Key(String set, int x, int z) {}
     private final PlacementGeometry.PreflightCache<Key,Optional<Descriptor>> preflights=new PlacementGeometry.PreflightCache<>(8192);
     private record VillageChoice(ChunkPos owner,Descriptor descriptor) {}
@@ -166,22 +171,29 @@ public final class StructureReservations {
     private VillageChoice villageChoice(SetPlan set,UnifiedVillagePlacement placement,ChunkPos owner,Preflight assembly) {
         int cellX=placement.cellX(owner),cellZ=placement.cellZ(owner);
         return villageCells.get(new Key(set.id,cellX,cellZ),() -> {
-            var basic=firstVillage(set,placement,owner,VillageDistributionGeometry.Group.BASIC,assembly);
-            var distinctive=firstVillage(set,placement,owner,VillageDistributionGeometry.Group.DISTINCTIVE,assembly);
-            String availability=basic!=null && distinctive!=null ? "both groups eligible"
-                    : basic!=null ? "basic only eligible" : distinctive!=null ? "distinctive only eligible" : "no group eligible";
-            StructurePlacementRuntime.count(VillageDistributionGeometry.SET_ID,availability);
-            var chosen=VillageDistributionGeometry.choose(state.getLevelSeed(),cellX,cellZ,
-                    placement.settings().basicSharePercent(),basic!=null,distinctive!=null);
-            if (chosen==null) return Optional.empty();
-            if (basic==null || distinctive==null) StructurePlacementRuntime.count(VillageDistributionGeometry.SET_ID,"availability fallback");
-            StructurePlacementRuntime.count(VillageDistributionGeometry.SET_ID,"selected "+chosen.name().toLowerCase(java.util.Locale.ROOT));
-            return Optional.of(chosen==VillageDistributionGeometry.Group.BASIC ? basic : distinctive);
+            // Only this synchronous choice shares raw heights. Cached descriptors and
+            // concurrent/deferred attempts never retain or share this mutable cache.
+            var heights=new StructureHeightCache();
+            try {
+                var basic=firstVillage(set,placement,owner,VillageDistributionGeometry.Group.BASIC,assembly,heights);
+                var distinctive=firstVillage(set,placement,owner,VillageDistributionGeometry.Group.DISTINCTIVE,assembly,heights);
+                String availability=basic!=null && distinctive!=null ? "both groups eligible"
+                        : basic!=null ? "basic only eligible" : distinctive!=null ? "distinctive only eligible" : "no group eligible";
+                StructurePlacementRuntime.count(VillageDistributionGeometry.SET_ID,availability);
+                var chosen=VillageDistributionGeometry.choose(state.getLevelSeed(),cellX,cellZ,
+                        placement.settings().basicSharePercent(),basic!=null,distinctive!=null);
+                if (chosen==null) return Optional.empty();
+                if (basic==null || distinctive==null) StructurePlacementRuntime.count(VillageDistributionGeometry.SET_ID,"availability fallback");
+                StructurePlacementRuntime.count(VillageDistributionGeometry.SET_ID,"selected "+chosen.name().toLowerCase(java.util.Locale.ROOT));
+                return Optional.of(chosen==VillageDistributionGeometry.Group.BASIC ? basic : distinctive);
+            } finally {
+                StructurePlacementRuntime.recordHeightCache(heights.snapshot());
+            }
         }).orElse(null);
     }
 
     private VillageChoice firstVillage(SetPlan set,UnifiedVillagePlacement placement,ChunkPos owner,
-            VillageDistributionGeometry.Group group,Preflight assembly) {
+            VillageDistributionGeometry.Group group,Preflight assembly,StructureHeightCache heights) {
         List<StructureSet.StructureSelectionEntry> members=set.set.structures().stream().filter(entry ->
                 VillageDistributionGeometry.group(String.valueOf(registry.getKey(entry.structure().value())),placement.epicLoaded())==group).toList();
         if (members.isEmpty()) return null;
@@ -199,7 +211,7 @@ public final class StructureReservations {
                     continue;
                 }
                 StructurePlacementRuntime.count(VillageDistributionGeometry.SET_ID,"member preflights");
-                Descriptor descriptor=assembly.assemble(structure,hop);
+                Descriptor descriptor=assembly.assemble(structure,hop,heights);
                 if (descriptor!=null) return new VillageChoice(hop,descriptor);
             }
         }

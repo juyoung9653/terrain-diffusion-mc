@@ -53,6 +53,15 @@ public final class StructureTerrain {
     public static Plan plan(StructureStart start, Policy policy, ChunkGenerator generator,
                             RandomState random, LevelHeightAccessor height, Map<Long,int[]> sampledHeights,
                             BiConsumer<String,String> rejected) {
+        return plan(start,policy,generator,random,height,sampledHeights,null,rejected);
+    }
+    /**
+     * {@code sampledHeights} remains local to one assembly because its third entry caches
+     * policy-dependent material support. {@code sharedHeights} may only memoize raw heights.
+     */
+    public static Plan plan(StructureStart start, Policy policy, ChunkGenerator generator,
+                            RandomState random, LevelHeightAccessor height, Map<Long,int[]> sampledHeights,
+                            StructureHeightCache sharedHeights, BiConsumer<String,String> rejected) {
         List<Pad> pads = new ArrayList<>();
         int terrainVersion = ((PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion();
         boolean rounded = terrainVersion >= 2;
@@ -86,8 +95,16 @@ public final class StructureTerrain {
                 if (columns.size() >= policy.maxTerrainSamples()) return reject(rejected,"sample budget","combined columns="+columns.size());
                 int[] sample=sampledHeights.get(key);
                 if (sample==null) {
-                    sample=new int[] {generator.getFirstOccupiedHeight(x,z,Heightmap.Types.OCEAN_FLOOR_WG,height,random),
-                            generator.getFirstOccupiedHeight(x,z,Heightmap.Types.WORLD_SURFACE_WG,height,random),0};
+                    StructureHeightCache.Heights raw=sharedHeights==null ? null : sharedHeights.get(key);
+                    if (raw==null) {
+                        if (sharedHeights!=null) sharedHeights.recordHeightCall();
+                        int oceanFloor=generator.getFirstOccupiedHeight(x,z,Heightmap.Types.OCEAN_FLOOR_WG,height,random);
+                        if (sharedHeights!=null) sharedHeights.recordHeightCall();
+                        int worldSurface=generator.getFirstOccupiedHeight(x,z,Heightmap.Types.WORLD_SURFACE_WG,height,random);
+                        raw=new StructureHeightCache.Heights(oceanFloor,worldSurface);
+                        if (sharedHeights!=null) sharedHeights.put(key,raw);
+                    }
+                    sample=new int[] {raw.oceanFloor(),raw.worldSurface(),0};
                     sampledHeights.put(key,sample);
                 }
                 int original = sample[0];

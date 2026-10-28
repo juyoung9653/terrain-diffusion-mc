@@ -47,6 +47,19 @@ public final class TerrainDiffusionConfig {
         return readBoolean("inference.offload_models", DEFAULT_OFFLOAD_MODELS);
     }
 
+    /** Explicit decoder precision; FP16 changes terrain and requires the CUDA build. */
+    public static String decoderPrecision() {
+        String precision = readString("inference.decoder_precision", "fp32");
+        if (!"fp32".equals(precision) && !"fp16".equals(precision)) {
+            throw new IllegalStateException("inference.decoder_precision must be fp32 or fp16: " + precision);
+        }
+        if ("fp16".equals(precision)
+                && (!"cuda".equals(BUILD_VARIANT) || !"gpu".equals(inferenceDevice()))) {
+            throw new IllegalStateException("FP16 decoder requires the CUDA build and inference.device=gpu");
+        }
+        return precision;
+    }
+
     /** TCP port for the local terrain explorer HTTP server. */
     public static int explorerPort() {
         return readInt("explorer.port", DEFAULT_EXPLORER_PORT);
