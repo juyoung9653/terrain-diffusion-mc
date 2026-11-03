@@ -10,6 +10,10 @@ import java.util.Set;
 
 /** Applies compatibility hooks only to audited Streams layouts. */
 public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlugin {
+    private static final Set<String> MIXINS_2162 = Set.of(
+            "StreamsStartup2162Mixin", "StreamsWorldgenScale2162Mixin",
+            "StreamsNaturalRiver2162Mixin", "StreamsNaturalNetwork2162Mixin",
+            "StreamsBankMaterial2162Mixin", "StreamsSeagrassFeature2162Mixin");
     private static final Set<String> AUDITED_MIXINS = Set.of(
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenPrefetchMixin",
@@ -36,8 +40,10 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        String simpleName = mixinClassName.substring(mixinClassName.lastIndexOf('.') + 1);
+        if (MIXINS_2162.contains(simpleName)) return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2162);
         if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.TerrainSlabRiverFeatureMixin")) {
-            return hasStreamsVersion(StreamsStructureShieldMixinPlugin::hasModernHooks)
+            return hasStreamsVersion(version -> hasModernHooks(version) || is2162(version))
                     && FMLLoader.getLoadingModList().getMods().stream().anyMatch(mod ->
                     "terrain_slabs".equals(mod.getModId()) && "3.1.2".equals(mod.getVersion().toString()));
         }
@@ -77,9 +83,12 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
             return hasStreamsVersion(StreamsStructureShieldMixinPlugin::hasModernHooks);
         }
         if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.StreamsStartupMixin")) {
-            return hasStartupAdapter();
+            return hasStreamsVersion(StreamsStructureShieldMixinPlugin::hasModernHooks);
         }
-        return !AUDITED_MIXINS.contains(mixinClassName) || hasStreamsVersion(StreamsStructureShieldMixinPlugin::isAuditedVersion);
+        // 2.16.2 keeps native bank geometry, piece shields, prefetch and scheduling.
+        // Never admit legacy private hooks through the broader world compatibility gate.
+        return !AUDITED_MIXINS.contains(mixinClassName) || hasStreamsVersion(version ->
+                isLegacyBankMaterialVersion(version) || hasModernHooks(version));
     }
 
     private static boolean hasStreamsVersion(java.util.function.Predicate<String> versionPredicate) {
@@ -90,12 +99,14 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
     }
 
     public static boolean hasStartupAdapter() {
-        return hasStreamsVersion(StreamsStructureShieldMixinPlugin::hasModernHooks);
+        return hasStreamsVersion(version -> hasModernHooks(version) || is2162(version));
     }
 
     public static boolean isAuditedVersion(String version) {
-        return isLegacyBankMaterialVersion(version) || hasModernHooks(version);
+        return isLegacyBankMaterialVersion(version) || hasModernHooks(version) || is2162(version);
     }
+
+    private static boolean is2162(String version) { return "2.16.2".equals(version); }
 
     private static boolean isLegacyBankMaterialVersion(String version) {
         return "2.13.1".equals(version) || "2.13.5".equals(version);

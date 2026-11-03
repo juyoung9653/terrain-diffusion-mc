@@ -13,13 +13,15 @@ public final class StreamsConfluenceNetwork {
     public static Object refine(Object network, Object domain, Object config) {
         if (StreamsNaturalRiverAdapter.version(config) < 7) return network;
         try {
-            var segments = (java.util.List<?>) network.getClass().getMethod("segments").invoke(network);
+            boolean modern = Streams2162NetworkAccess.applies(network);
+            var segments = modern ? Streams2162NetworkAccess.segments(network)
+                    : (java.util.List<?>) network.getClass().getMethod("segments").invoke(network);
             var input = StreamsNaturalNetwork.reaches(segments);
-            Class<?> domainType = Class.forName("dev.streamsreflowing.core.plate.PlateDomain", false,
+            Class<?> domainType = modern ? null : Class.forName("dev.streamsreflowing.core.plate.PlateDomain", false,
                     network.getClass().getClassLoader());
-            Method contains = domainType.getMethod("contains", double.class, double.class);
-            Method borderDistance = domainType.getMethod("borderDistance", double.class, double.class);
-            Method lakeNear = network.getClass().getMethod("lakeNear", int.class, int.class, int.class);
+            Method contains = modern ? null : domainType.getMethod("contains", double.class, double.class);
+            Method borderDistance = modern ? null : domainType.getMethod("borderDistance", double.class, double.class);
+            Method lakeNear = modern ? null : network.getClass().getMethod("lakeNear", int.class, int.class, int.class);
             double margin = StreamsNaturalNetwork.n(config, "borderMargin")
                     + Math.max(0, StreamsNaturalNetwork.n(config, "connectRadius"))
                     + 2 * StreamsNaturalNetwork.n(config, "gridSpacing");
@@ -31,9 +33,14 @@ public final class StreamsConfluenceNetwork {
                         double t = (double) i / steps;
                         double x = reach.x1() + (reach.x2() - reach.x1()) * t;
                         double z = reach.z1() + (reach.z2() - reach.z1()) * t;
-                        if (!(Boolean) contains.invoke(domain, x, z)
-                                || ((Number) borderDistance.invoke(domain, x, z)).doubleValue() <= margin
-                                || lakeNear.invoke(network, (int) Math.floor(x), (int) Math.floor(z), 16) != null) {
+                        boolean protectedCell = modern
+                                ? !Streams2162NetworkAccess.contains(domain, x, z)
+                                        || Streams2162NetworkAccess.borderDistance(domain, x, z) <= margin
+                                        || Streams2162NetworkAccess.lakeNear(network, (int) Math.floor(x), (int) Math.floor(z), 16) != null
+                                : !(Boolean) contains.invoke(domain, x, z)
+                                        || ((Number) borderDistance.invoke(domain, x, z)).doubleValue() <= margin
+                                        || lakeNear.invoke(network, (int) Math.floor(x), (int) Math.floor(z), 16) != null;
+                        if (protectedCell) {
                             return true;
                         }
                     }

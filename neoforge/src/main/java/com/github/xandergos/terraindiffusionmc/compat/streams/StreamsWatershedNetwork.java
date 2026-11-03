@@ -30,21 +30,26 @@ public final class StreamsWatershedNetwork {
                                 BiPredicate<Integer, Integer> marine) {
         if (marine == null) throw new NullPointerException("marine");
         try {
-            List<?> segments = (List<?>) network.getClass().getMethod("segments").invoke(network);
+            List<?> segments = Streams2162NetworkAccess.applies(network)
+                    ? Streams2162NetworkAccess.segments(network)
+                    : (List<?>) network.getClass().getMethod("segments").invoke(network);
             if (segments.isEmpty()) return network;
             List<Reach> reaches = StreamsNaturalNetwork.reaches(segments);
+            boolean modern = Streams2162NetworkAccess.applies(network);
             ClassLoader loader = network.getClass().getClassLoader();
-            var domainType = Class.forName("dev.streamsreflowing.core.plate.PlateDomain", false, loader);
-            var contains = domainType.getMethod("contains", double.class, double.class);
-            var borderDistance = domainType.getMethod("borderDistance", double.class, double.class);
-            var lakeNear = network.getClass().getMethod("lakeNear", int.class, int.class, int.class);
+            var domainType = modern ? null : Class.forName("dev.streamsreflowing.core.plate.PlateDomain", false, loader);
+            var contains = modern ? null : domainType.getMethod("contains", double.class, double.class);
+            var borderDistance = modern ? null : domainType.getMethod("borderDistance", double.class, double.class);
+            var lakeNear = modern ? null : network.getClass().getMethod("lakeNear", int.class, int.class, int.class);
             // An adjacent plate's native connector may reach inside this domain.
             double border = StreamsNaturalNetwork.n(config, "borderMargin")
                     + Math.max(0, StreamsNaturalNetwork.n(config, "connectRadius"))
                     + 2.0 * StreamsNaturalNetwork.n(config, "gridSpacing");
             int seaLevel = (int) StreamsNaturalNetwork.n(config, "seaLevel");
             double plateScale = StreamsNaturalNetwork.n(config, "plateScale");
-            Predicate<Reach> protectedReach = reach -> protectedReach(network, domain, contains, borderDistance, lakeNear, border, reach);
+            Predicate<Reach> protectedReach = reach -> modern
+                    ? protectedReach2162(network, domain, border, reach)
+                    : protectedReach(network, domain, contains, borderDistance, lakeNear, border, reach);
             Selection selection = select(reaches, protectedReach, marine, seaLevel, plateScale);
             if (selection.retainedIndices().size() == segments.size()) return network;
             List<Object> retained = new java.util.ArrayList<>(selection.retainedIndices().size());
@@ -52,6 +57,9 @@ public final class StreamsWatershedNetwork {
             LOG.info(() -> "Natural river v3 plate selection: " + segments.size() + " -> " + retained.size() + " segments, rejected " + selection.rejectedBasins() + " coastal components, pruned " + selection.prunedHeadwaters() + " headwater twigs");
             return StreamsNaturalNetwork.reassemble(network, retained, config, true);
         } catch (ReflectiveOperationException | RuntimeException failure) {
+            if (Streams2162NetworkAccess.applies(network)) {
+                throw new IllegalStateException("Streams 2.16.2 watershed adapter failed", failure);
+            }
             LOG.warning("Natural river v3 selection failed open; preserving native network: " + failure);
             return network;
         }
@@ -70,6 +78,18 @@ public final class StreamsWatershedNetwork {
             }
             return false;
         } catch (ReflectiveOperationException failure) { return true; }
+    }
+
+    private static boolean protectedReach2162(Object network, Object domain, double safeBorder, Reach reach) {
+        double[] xs = {reach.x1(), reach.x2(), (reach.x1() + reach.x2()) * .5};
+        double[] zs = {reach.z1(), reach.z2(), (reach.z1() + reach.z2()) * .5};
+        for (int i = 0; i < xs.length; i++) {
+            if (!Streams2162NetworkAccess.contains(domain, xs[i], zs[i])
+                    || Streams2162NetworkAccess.borderDistance(domain, xs[i], zs[i]) <= safeBorder
+                    || Streams2162NetworkAccess.lakeNear(network, (int) Math.round(xs[i]),
+                            (int) Math.round(zs[i]), 2) != null) return true;
+        }
+        return false;
     }
 }
 

@@ -1098,7 +1098,7 @@ public final class StreamsReflowingProbe {
                 }).get(config.timeoutSeconds, TimeUnit.SECONDS);
                 emit(receipts, json("engine_initialized", "present", engine != null));
             }
-            Method near = engine.getClass().getMethod("anyStreamsNear", double.class, double.class, double.class);
+            Method near = engineMethod(engine.getClass(), "anyStreamsNear", double.class, double.class, double.class);
             Method plan = engine.getClass().getMethod("plan", int.class, int.class);
             Method inChannel = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan", false,
                     StreamsReflowingProbe.class.getClassLoader()).getMethod("inChannel");
@@ -1162,9 +1162,9 @@ public final class StreamsReflowingProbe {
         try {
             Object engine = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen")
                     .getMethod("engineIfPresent", ServerLevel.class).invoke(null, level);
-            Object lake = engine.getClass().getMethod("lakeAt", int.class, int.class).invoke(engine, point.x, point.z);
+            Object lake = engineMethod(engine.getClass(), "lakeAt", int.class, int.class).invoke(engine, point.x, point.z);
             Object lakeY = engine.getClass().getMethod("lakeSurfaceAt", int.class, int.class).invoke(engine, point.x, point.z);
-            Object diag = engine.getClass().getMethod("planDiag", int.class, int.class).invoke(engine, point.x, point.z);
+            Object diag = engineMethod(engine.getClass(), "planDiag", int.class, int.class).invoke(engine, point.x, point.z);
             var biome = level.getChunkSource().getGenerator().getBiomeSource().getNoiseBiome(point.x >> 2,
                     point.waterY >> 2, point.z >> 2, level.getChunkSource().randomState().sampler());
             return json("native_water_endpoint", "status", "observed", "x", point.x, "z", point.z,
@@ -1183,7 +1183,7 @@ public final class StreamsReflowingProbe {
             Object engine = worldgen.getMethod("engineIfPresent", ServerLevel.class).invoke(null, level);
             if (engine == null) { audit.status="unresolved"; audit.error="engine_absent"; return audit; }
             Method platesNear = engine.getClass().getMethod("platesNear", double.class, double.class, double.class);
-            Method networkFor = null, networkAt = engine.getClass().getMethod("networkAt", int.class, int.class);
+            Method networkFor = null, networkAt = engineMethod(engine.getClass(), "networkAt", int.class, int.class);
             Map<String, MarineNode> nodes = new LinkedHashMap<>(); Map<String, List<MarineSegment>> outgoing = new LinkedHashMap<>();
             java.util.HashSet<String> networks = new java.util.HashSet<>();
             Object[] plates = (Object[]) platesNear.invoke(engine, (double) centerX, (double) centerZ, (double) radius);
@@ -1198,7 +1198,7 @@ public final class StreamsReflowingProbe {
             String cursor = source.key; java.util.HashSet<String> visited = new java.util.HashSet<>();
             Method plan = engine.getClass().getMethod("plan", int.class, int.class);
             Class<?> cp = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
-            Method inChannel=cp.getMethod("inChannel"), waterY=cp.getMethod("waterSurfaceY"), terminal=cp.getMethod("terminal");
+            Method inChannel=cp.getMethod("inChannel"), waterY=cp.getMethod("waterSurfaceY"), terminal=columnPlanMethod(cp, "terminal");
             NativePoint sourcePoint = nativePlanNear(engine, new GraphNode(source.x,source.z), "source", "marine_source");
             if (sourcePoint != null) addMarineSample(audit,sourcePoint.x,sourcePoint.waterY,sourcePoint.z,true);
             double distanceSinceSample = 32;
@@ -1247,8 +1247,8 @@ public final class StreamsReflowingProbe {
     private static void addMarineNetwork(Object network, java.util.Set<String> seen, Map<String, MarineNode> nodes,
                                          Map<String, List<MarineSegment>> outgoing, MarineConnectivityAudit audit) throws Exception {
         if (network == null) return;
-        String key=String.valueOf(network.getClass().getMethod("key").invoke(network)); if (!seen.add(key)) return;
-        for (Object segment : (List<?>) network.getClass().getMethod("segments").invoke(network)) {
+        String key=String.valueOf(networkMethod(network.getClass(), "key").invoke(network)); if (!seen.add(key)) return;
+        for (Object segment : (List<?>) networkMethod(network.getClass(), "segments").invoke(network)) {
             double x1=endpoint(segment,"x1"), z1=endpoint(segment,"z1"), x2=endpoint(segment,"x2"), z2=endpoint(segment,"z2");
             MarineNode from=marineNode(nodes,x1,z1), to=marineNode(nodes,x2,z2); from.out++; to.in++;
             double w1=endpoint(segment,"w1"), w2=endpoint(segment,"w2"); MarineSegment edge=new MarineSegment(from.key,to.key,w1,w2);
@@ -1418,7 +1418,7 @@ public final class StreamsReflowingProbe {
             Object network = engine.getClass().getMethod("networkFor", plate.getClass()).invoke(engine, plate);
             if (network == null) continue;
             out.networks++;
-            for (Object segment : (List<?>) network.getClass().getMethod("segments").invoke(network)) {
+            for (Object segment : (List<?>) networkMethod(network.getClass(), "segments").invoke(network)) {
                 double x1=endpoint(segment,"x1"), z1=endpoint(segment,"z1"), x2=endpoint(segment,"x2"), z2=endpoint(segment,"z2");
                 String segmentKey = nodeKey(x1,z1) + ">" + nodeKey(x2,z2);
                 if (!seenSegments.add(segmentKey)) continue; // overlapping plate networks expose the same native segment.
@@ -1445,8 +1445,58 @@ public final class StreamsReflowingProbe {
         return out;
     }
 
+    /** 2.16.2 keeps segment geometry in a renamed record; retain its logical endpoints. */
     private static double endpoint(Object segment, String accessor) throws Exception {
-        return ((Number) segment.getClass().getMethod(accessor).invoke(segment)).doubleValue();
+        try { return ((Number) segment.getClass().getMethod(accessor).invoke(segment)).doubleValue(); }
+        catch (NoSuchMethodException legacyAbsent) {
+            String mapped = switch (accessor) {
+                case "x1" -> "sourceGivenToAuthorizedOnly1"; case "z1" -> "licensed1";
+                case "y1" -> "allRightsReserved1"; case "w1" -> "notForAnalysis1";
+                case "x2" -> "proprietary2"; case "z2" -> "seeAiNotice2";
+                case "y2" -> "niceJohn2"; case "w2" -> "noDecompilePermission2";
+                case "sp1" -> "sourceGivenToAuthorizedOnly2"; case "sp2" -> "licensed2";
+                default -> throw legacyAbsent;
+            };
+            return ((Number) segment.getClass().getMethod(mapped).invoke(segment)).doubleValue();
+        }
+    }
+
+    private static Method networkMethod(Class<?> type, String logical) throws NoSuchMethodException {
+        try { return type.getMethod(logical); }
+        catch (NoSuchMethodException legacyAbsent) {
+            return type.getMethod(switch (logical) { case "key" -> "noDecompilePermission1";
+                case "segments" -> "sourceGivenToAuthorizedOnly1"; default -> throw legacyAbsent; });
+        }
+    }
+
+    private static Method engineMethod(Class<?> type, String logical, Class<?>... parameters) throws NoSuchMethodException {
+        try { return type.getMethod(logical, parameters); }
+        catch (NoSuchMethodException legacyAbsent) {
+            if (parameters.length == 2 && parameters[0] == int.class && parameters[1] == int.class)
+                return type.getMethod(switch (logical) { case "lakeAt" -> "niceJohn2";
+                    case "networkAt" -> "niceJohn1"; case "planDiag" -> "noDecompilePermission1"; default -> throw legacyAbsent; }, parameters);
+            if (parameters.length == 3 && parameters[0] == double.class && parameters[1] == double.class
+                    && parameters[2] == double.class && logical.equals("anyStreamsNear"))
+                return type.getMethod("proprietary1", parameters);
+            throw legacyAbsent;
+        }
+    }
+
+    private static Method columnPlanMethod(Class<?> type, String logical) throws NoSuchMethodException {
+        try { return type.getMethod(logical); }
+        catch (NoSuchMethodException legacyAbsent) {
+            return type.getMethod(switch (logical) {
+                case "bankBlend" -> "seeAiNotice1"; case "distance" -> "niceJohn1";
+                case "width" -> "noDecompilePermission1"; case "gradeY" -> "sourceGivenToAuthorizedOnly1";
+                case "slope" -> "licensed1"; case "terminal" -> "allRightsReserved1";
+                case "source" -> "notForAnalysis1"; case "upstreamSlope" -> "proprietary2";
+                case "fluidFlowDirX" -> "seeAiNotice2"; case "fluidFlowDirZ" -> "niceJohn2";
+                case "distToOutlet" -> "noDecompilePermission2"; case "curvature" -> "sourceGivenToAuthorizedOnly2";
+                case "lateral" -> "licensed2"; case "distToJunction" -> "allRightsReserved2";
+                case "flatRun" -> "notForAnalysis2"; case "speed" -> "proprietary3";
+                default -> throw legacyAbsent;
+            });
+        }
     }
     private static String nodeKey(double x, double z) { return Math.round(x * 16.0) + "," + Math.round(z * 16.0); } // 1/16-block epsilon.
     private static void addGraphNode(Map<String, GraphNode> nodes, double x, double z, boolean outgoing) {
@@ -1457,7 +1507,7 @@ public final class StreamsReflowingProbe {
         Method plan = engine.getClass().getMethod("plan", int.class, int.class);
         Class<?> cp = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
         Method inChannel = cp.getMethod("inChannel"), waterY = cp.getMethod("waterSurfaceY"), bedY = cp.getMethod("bedY");
-        Method source = cp.getMethod("source"), terminal = cp.getMethod("terminal"), flowX = cp.getMethod("fluidFlowDirX"), flowZ = cp.getMethod("fluidFlowDirZ");
+        Method source = columnPlanMethod(cp, "source"), terminal = columnPlanMethod(cp, "terminal"), flowX = columnPlanMethod(cp, "fluidFlowDirX"), flowZ = columnPlanMethod(cp, "fluidFlowDirZ");
         int cx = (int) Math.round(node.x), cz = (int) Math.round(node.z);
         for (int r = 0; r <= 16; r++) for (int dz = -r; dz <= r; dz++) for (int dx = -r; dx <= r; dx++) {
             if (Math.max(Math.abs(dx), Math.abs(dz)) != r) continue;
@@ -1703,10 +1753,10 @@ public final class StreamsReflowingProbe {
             Class<?> columnPlan = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan", false, loader);
             Method inChannel = columnPlan.getMethod("inChannel");
             Method waterSurfaceY = columnPlan.getMethod("waterSurfaceY");
-            Method width = columnPlan.getMethod("width");
-            Method distance = columnPlan.getMethod("distance");
-            Method slope = columnPlan.getMethod("slope");
-            Method bankBlend = columnPlan.getMethod("bankBlend");
+            Method width = columnPlanMethod(columnPlan, "width");
+            Method distance = columnPlanMethod(columnPlan, "distance");
+            Method slope = columnPlanMethod(columnPlan, "slope");
+            Method bankBlend = columnPlanMethod(columnPlan, "bankBlend");
             int channelColumns = 0;
             Integer minNaturalGroundMinusWater = null, maxNaturalGroundMinusWater = null;
             for (ColumnSnapshot column : receipt.columns) {

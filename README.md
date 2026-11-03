@@ -479,6 +479,43 @@ and `adaptiveGridRead`. Exact TD terrain sampling remains tied to the saved
 world marker. The 2.13.8 hooks remain available, and unknown versions are not
 automatically admitted by these version gates.
 
+Streams **2.16.2** uses a separate, exact-version adapter. It retains TD's saved
+exact terrain sampler, scale, natural river profiles 1–10, graph cache namespace,
+climate bank materials, recap vegetation and submerged-plant limits. Native record
+copies preserve all 44 config components and the new trailing ColumnPlan component.
+The old private hooks are not enabled by widening their version gates.
+
+On 2.16.2, Streams owns bank containment, mouth/lake shaping, raster repair,
+per-piece structure shields and scheduling/prefetch. The older TD dry-bank,
+pool-grade, lake-level, raster and Better Mineshaft aggregate-shield workarounds
+remain restricted to their old releases. Native reflow commands, Flow Wand and
+visual effects remain untouched. Old saved chunks are not rewritten; newly
+generated banks can differ under the updated native carver. The upstream speed
+and CPU claims are not measurements of TD's serialized GPU inference.
+
+Validate this boundary with `tools/streams_probe/audit_streams_compat.py --jar
+2.16.2=path/to/Streams.jar --output-dir build/streams-2162-review/audit`,
+`tools/streams_probe/test_2162_adapter.py --jar path/to/Streams.jar` and
+`tools/streams_probe/test_2162_gate.py`. Also run
+`tools/streams_probe/test_2162_network.py --jar path/to/Streams.jar`: segment
+getters differ from constructor field names, and the first four no-argument
+getters are bounds, not endpoints. Keep the explicit logical accessor map and
+forward/reversed endpoint regression when updating this adapter.
+Prepare a fresh 2.16.2 fixture using
+`tools/streams_probe/prepare.py --streams-version 2.16.2`; it requires the current
+`streamsreflowing.properties` rather than silently copying the obsolete TOML.
+Run the existing suite with `--gradle-user-home .gradle --topology-audit` and
+repeat the same fixture once for the saved-graph restart check. A successful
+compile or static hook audit alone does not prove in-world compatibility.
+
+The 2.16.2 integration fixture with Terralith 2.6.2, Lithostitched 1.8.1,
+NeoForge 21.1.249 and saved natural profile v10 passed fresh-world and restart
+topology checks: source, junction, terminal and flow samples had physical water
+and beds after 100 ticks. The restart snapshot matched; all five saved river
+graphs, the profile marker and topology snapshot retained their hashes. This
+bounded fixture does not establish full-modpack visual coverage or the upstream
+CPU reduction claim.
+
 For a 2.15.2 update, run `tools/streams_probe/audit_streams_compat.py --jar
 2.15.2=path/to/Streams.jar --output-dir build/streams-audit`, then the startup,
 sampler-priority and natural-adapter checks against that JAR. Prepare a fresh

@@ -6,7 +6,8 @@ public final class StructurePreflightControl {
 
     public static boolean isDeferred(RuntimeException failure) {
         // Audited Streams Reflowing 2.13.8; match the exact type without a hard dependency.
-        return failure.getClass().getName().equals(
-                "dev.streamsreflowing.worldgen.StreamsWorldgen$StructurePlatesPending");
+        String type = failure.getClass().getName();
+        return type.equals("dev.streamsreflowing.worldgen.StreamsWorldgen$StructurePlatesPending")
+                || type.equals("dev.streamsreflowing.worldgen.StreamsWorldgen$SeeAiNoticeConstant_002");
     }
 }

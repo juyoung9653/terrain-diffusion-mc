@@ -258,8 +258,8 @@ public final class StreamsBankMaterialPolicy {
                 Class<?> column = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
                 CORRIDOR = column.getMethod("inCorridor");
                 CHANNEL = column.getMethod("inChannel");
-                WIDTH = column.getMethod("width");
-                DISTANCE = column.getMethod("distance");
+                WIDTH = StreamsRecordAccess.accessor(column, "width");
+                DISTANCE = StreamsRecordAccess.accessor(column, "distance");
                 WATER = column.getMethod("waterSurfaceY");
             } catch (ReflectiveOperationException failure) {
                 throw new ExceptionInInitializerError(failure);

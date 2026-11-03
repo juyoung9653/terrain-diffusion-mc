@@ -67,18 +67,28 @@ public final class StreamsNaturalRiverAdapter {
         try {
             Class<?> sampler = Class.forName("dev.streamsreflowing.core.terrain.TerrainSampler", false,
                     network.getClass().getClassLoader());
-            java.lang.reflect.Method waterClass = sampler.getMethod("waterBiomeClass", int.class, int.class);
+            java.lang.reflect.Method waterClass = sampler.getMethod(
+                    Streams2162NetworkAccess.applies(network) ? "allRightsReserved1" : "waterBiomeClass",
+                    int.class, int.class);
             Map<Long, LocalTerrainProvider.HeightmapData> tiles = new java.util.HashMap<>();
             LocalTerrainProvider provider = provider(config);
             java.util.function.BiPredicate<Integer, Integer> marine = (x, z) -> {
                 try {
                     return ((Number) waterClass.invoke(terrain, x, z)).intValue() == 2
                             || tdMarineWithin16(x, z, tiles, provider);
-                } catch (ReflectiveOperationException failure) { return false; }
+                } catch (ReflectiveOperationException failure) {
+                    if (Streams2162NetworkAccess.applies(network)) {
+                        throw new IllegalStateException("Streams 2.16.2 marine sampling failed", failure);
+                    }
+                    return false;
+                }
             };
             Object selected = StreamsWatershedNetwork.select(network, domain, terrain, config, marine);
             return version(config) >= 4 ? StreamsHierarchyNetwork.select(selected, domain, config) : selected;
         } catch (ReflectiveOperationException | RuntimeException failure) {
+            if (Streams2162NetworkAccess.applies(network)) {
+                throw new IllegalStateException("Streams 2.16.2 natural river profile could not be applied", failure);
+            }
             LoggerFactory.getLogger("TerrainDiffusion/NaturalRivers").warn(
                     "Natural river profile v{} network adaptation failed open; preserving native network", version(config), failure);
             return network;

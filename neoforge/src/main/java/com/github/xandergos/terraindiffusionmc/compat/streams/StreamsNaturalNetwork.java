@@ -14,16 +14,22 @@ public final class StreamsNaturalNetwork {
     public static Object refine(Object network, Object terrain, Object config) {
         try {
             Class<?> type = network.getClass();
-            List<?> segments = (List<?>) type.getMethod("segments").invoke(network);
+            List<?> segments = Streams2162NetworkAccess.applies(network)
+                    ? Streams2162NetworkAccess.segments(network)
+                    : (List<?>) type.getMethod("segments").invoke(network);
             if (segments.isEmpty()) return network;
             List<Reach> input = reaches(segments);
             ClassLoader loader = type.getClassLoader();
+            boolean modern = Streams2162NetworkAccess.applies(network);
             Method height = Class.forName("dev.streamsreflowing.core.terrain.TerrainSampler", false, loader)
-                    .getMethod("groundHeight", int.class, int.class);
-            Method lakeNear = type.getMethod("lakeNear", int.class, int.class, int.class);
+                    .getMethod(modern ? "noDecompilePermission1" : "groundHeight", int.class, int.class);
+            Method lakeNear = modern ? null
+                    : type.getMethod("lakeNear", int.class, int.class, int.class);
             List<Reach> output = NaturalRiverMorphology.refine(input, (x, z) -> {
                 try {
-                    if (lakeNear.invoke(network, x, z, 2) != null) return Double.NaN;
+                    if (modern
+                            ? Streams2162NetworkAccess.lakeNear(network, x, z, 2) != null
+                            : lakeNear.invoke(network, x, z, 2) != null) return Double.NaN;
                     return ((Number) height.invoke(terrain, x, z)).doubleValue();
                 } catch (ReflectiveOperationException e) { throw new IllegalStateException("TD river terrain sampling failed", e); }
             }, (int) n(config, "seaLevel"));
@@ -52,6 +58,9 @@ public final class StreamsNaturalNetwork {
 
     static Object reassemble(Object network, List<?> segments, Object config, boolean filterSinks) {
         try {
+            if (Streams2162NetworkAccess.applies(network)) {
+                return Streams2162NetworkAccess.reassemble(network, segments, config, filterSinks);
+            }
             Class<?> type = network.getClass();
             Object key = type.getMethod("key").invoke(network);
             Object lakes = type.getMethod("lakes").invoke(network);

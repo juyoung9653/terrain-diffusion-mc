@@ -25,6 +25,7 @@ SOURCES = [
     ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/river/NaturalRiverHierarchy.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsRecordAccess.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsNaturalConfig.java",
+    ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/Streams2162NetworkAccess.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsNaturalNetwork.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsWatershedNetwork.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsHierarchyNetwork.java",

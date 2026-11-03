@@ -1,9 +1,20 @@
 # Streams Reflowing integration probe
 
 Opt-in dedicated-server diagnostic for Minecraft 1.21.1 / NeoForge 21.1.249,
-Streams Reflowing 2.13.1 and the current Terrain Diffusion source tree. Normal
+audited Streams Reflowing versions through 2.16.2 and the current Terrain Diffusion source tree. Normal
 builds do not include the diagnostic Java directory. Do not package a release
 with `probe.init.gradle` enabled.
+
+For 2.16.2, run the static hook audit, `test_2162_adapter.py`,
+`test_2162_network.py` and `test_2162_gate.py` before the native suite.
+Prepare with `--streams-version 2.16.2`; this requires the current
+`streamsreflowing.properties`. The selected FP16 decoder must be copied and
+hashed with the other model assets when `decoder_precision=fp16`; missing it
+fails during mod construction before the probe can produce a receipt.
+Use `run_suite.py NAME --gradle-user-home .gradle --topology-audit
+--inference-metrics`, retain the first-run receipt, then repeat the same fixture
+for saved-graph restart validation. Never count a successful Gradle exit with
+a missing diagnostic receipt as a pass.
 
 For Terrain Slabs contour and Landmarks placement checks, run
 `python tools/streams_probe/run_suite.py --gradle-user-home .gradle --terrain-slab-audit NAME`

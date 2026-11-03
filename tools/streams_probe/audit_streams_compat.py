@@ -73,6 +73,9 @@ def method_body(class_text: str, declaration: str) -> str:
 
 def audit_jar(java_home: Path, jar: Path, version: str) -> dict[str, object]:
     """Return raw, reviewable binary evidence for one supported Streams JAR."""
+    if version == "2.16.2":
+        from audit_2162 import audit_2162
+        return audit_2162(java_home, jar)
     classes = {
         "carver": (CARVER, ("-p", "-s", "-c")),
         "carverVerbose": (CARVER, ("-v", "-p")),
@@ -286,6 +289,11 @@ def main() -> None:
     (args.output_dir / "result.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
     lines = ["# Streams compatibility audit", "", "JDK `javap` audit; no game process was launched.", ""]
     for result in results:
+        if result["version"] == "2.16.2":
+            lines.extend(["## 2.16.2", "", f"- passed: `{result['passed']}`",
+                          "- Native bank geometry, structure piece shields and scheduling retained.",
+                          *[f"- FAILED: {failure}" for failure in result["failures"]], ""])
+            continue
         lines.extend([f"## {result['version']}", "", f"- passed: `{result['passed']}`", f"- pool-grade calls: `{result['gradeCalls']}`", f"- dry AIR ordinal {result['dryAirOrdinal']} / water ordinal {result['waterOrdinal']} offsets: `{result['evidence']['dryAirOffset']}` / `{result['evidence']['waterOffset']}`", f"- RiverCarverFeature BankStyle.zoneBlock calls: `{result['zoneBlockCalls']}`", f"- pool hook reason: `{result['evidence']['poolHookReason']}`", f"- extra 2.13.8 reason: `{result['evidence']['extra2138Reason']}`", ""])
         if result["evidence"]["extra2138Snippet"]:
             lines.extend(["The extra call is preserved: it passes `Math.max(current, proposed)`, so `poolGrade` returns the native proposal before its junction-pool reason filter.", "", "```text", result["evidence"]["extra2138Snippet"], "```", ""])

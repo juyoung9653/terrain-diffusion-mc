@@ -24,7 +24,8 @@ def main() -> None:
     parser.add_argument("--terralith", action="store_true")
     parser.add_argument("--c2me", action="store_true", help="Also include the installed NeoForge C2ME jar")
     parser.add_argument("--seed", type=int, default=12345)
-    parser.add_argument("--streams-version", default="2.13.1", choices=["2.13.1", "2.13.5", "2.13.8", "2.15.2"])
+    parser.add_argument("--streams-version", default="2.13.1",
+                        choices=["2.13.1", "2.13.5", "2.13.8", "2.15.2", "2.16.2"])
     parser.add_argument("--dry-floor", type=float)
     parser.add_argument("--disable-waterways", action="store_true", help="Same-terrain control: disable Streams rivers and lakes")
     parser.add_argument("--fixed-biome", choices=["minecraft:desert", "minecraft:savanna",
@@ -51,15 +52,23 @@ def main() -> None:
     if len(mods) != 1 + 2 * int(args.terralith) + int(args.c2me):
         parser.error("expected one Streams jar and requested Terralith/Lithostitched/C2ME jars")
     assets = source / "terrain-diffusion-models"
+    td_config = source / "config" / "terrain-diffusion-mc.properties"
+    if not td_config.is_file():
+        parser.error("missing config/terrain-diffusion-mc.properties")
     model_names = ["base_model.onnx", "coarse_model.onnx", "decoder_model.onnx",
                    "pipeline_data.json", "world_pipeline_config.json"]
+    precision = re.search(r"(?mi)^\s*decoder_precision\s*=\s*([^\s#;]+)",
+                          td_config.read_text(encoding="utf-8"))
+    if precision and precision.group(1).strip('"\\\'').lower() == "fp16":
+        model_names.append("decoder_model_fp16.onnx")
     for name in model_names:
         if not (assets / name).is_file():
             parser.error(f"missing model asset: {name}")
     (run / "mods").mkdir(parents=True)
     (run / "config").mkdir()
     (run / "terrain-diffusion-models").mkdir()
-    manifest = {"seed": args.seed, "terralith": args.terralith, "c2me": args.c2me, "dryFloorOverride": args.dry_floor,
+    manifest = {"seed": args.seed, "streamsVersion": args.streams_version,
+                "terralith": args.terralith, "c2me": args.c2me, "dryFloorOverride": args.dry_floor,
                 "waterwaysDisabled": args.disable_waterways,
                 "fixedBiome": args.fixed_biome,
                 "minecraft": "1.21.1", "neoforge": "21.1.249", "mods": [], "modelAssets": {}, "configs": {}}
@@ -73,8 +82,16 @@ def main() -> None:
         shutil.copy2(assets / name, target)
         manifest["modelAssets"][name] = {"bytes": target.stat().st_size, "sha256": digest(target)}
     streams_config = "streamsreflowing-common.toml"
-    if args.streams_version == "2.15.2" and (source / "config/streamsreflowing.properties").is_file():
-        streams_config = "streamsreflowing.properties"
+    properties = source / "config/streamsreflowing.properties"
+    if args.streams_version == "2.16.2":
+        # Streams 2.16 no longer consumes the legacy common TOML.  Do not make a
+        # fixture which appears configured while the mod silently uses defaults.
+        if not properties.is_file():
+            parser.error("Streams 2.16.2 requires config/streamsreflowing.properties; "
+                         "copy or start the source instance once to migrate its configuration")
+        streams_config = properties.name
+    elif args.streams_version == "2.15.2" and properties.is_file():
+        streams_config = properties.name
     for name in ["terrain-diffusion-mc.properties", streams_config]:
         target = run / "config" / name
         shutil.copy2(source / "config" / name, target)

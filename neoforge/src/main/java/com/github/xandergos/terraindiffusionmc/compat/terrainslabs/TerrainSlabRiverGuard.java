@@ -43,8 +43,8 @@ public final class TerrainSlabRiverGuard {
                 Class<?> column = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan");
                 CORRIDOR = column.getMethod("inCorridor");
                 CHANNEL = column.getMethod("inChannel");
-                DISTANCE = column.getMethod("distance");
-                WIDTH = column.getMethod("width");
+                DISTANCE = com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess.accessor(column, "distance");
+                WIDTH = com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess.accessor(column, "width");
                 BED = column.getMethod("bedY");
                 WATER = column.getMethod("waterSurfaceY");
             } catch (ReflectiveOperationException failure) {

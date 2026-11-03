@@ -1,0 +1,10 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="td_photon_waving_probe"
+version="1.0.0"
+displayName="TD Photon Waving Probe"
+description="Clone-only fixed-time visual diagnostic."
+[[mixins]]
+config="photon-waving-probe.mixins.json"
