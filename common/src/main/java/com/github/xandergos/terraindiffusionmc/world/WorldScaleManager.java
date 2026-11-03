@@ -1,6 +1,8 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
+import com.github.xandergos.terraindiffusionmc.world.geology.UndergroundGeneration;
 
 /**
  * Runtime access for world-scoped terrain scale.
@@ -56,6 +58,12 @@ public final class WorldScaleManager {
      */
     public static void setCurrentScale(ServerLevel serverWorld, int configuredScale) {
         int clampedScale = clampScale(configuredScale);
+        if (serverWorld.getChunkSource().getGenerator() instanceof NoiseBasedChunkGenerator noise
+                && UndergroundGeneration.isEnabled(noise)) {
+            var source = TerrainDiffusionBiomeSources.find(noise.getBiomeSource());
+            if (source.boundUndergroundScale() != clampedScale)
+                throw new IllegalArgumentException("Choose TD scale when creating a deep world; existing geology cannot be rescaled");
+        }
 
         WorldScaleSettingsState worldScaleSettingsState = serverWorld.getDataStorage()
                 .computeIfAbsent(WorldScaleSettingsState.TYPE, "terrain_diffusion_world_settings");

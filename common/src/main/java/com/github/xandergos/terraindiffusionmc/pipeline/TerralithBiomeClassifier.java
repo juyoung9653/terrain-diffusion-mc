@@ -69,6 +69,31 @@ public final class TerralithBiomeClassifier {
         return pickCave(blockX, blockY, blockZ);
     }
 
+    /** Deep profiles use mineral cave biomes; legacy worlds retain the original cutoff. */
+    public static short selectCave(int x, int y, int z, int surfaceY, short surfaceBiome, boolean underground) {
+        if (!underground || y >= -60) return selectCave(x, y, z, surfaceY, surfaceBiome);
+        if (surfaceY - y < 24) return 0;
+        int choice = Math.floorMod(caveRegionHash(x, y, z), 4);
+        String name = switch (choice) {
+            case 0 -> "cave/andesite_caves";
+            case 1 -> "cave/diorite_caves";
+            case 2 -> "cave/granite_caves";
+            default -> "cave/tuff_caves";
+        };
+        for (Entry entry : CAVE_ENTRIES) if (entry.name.equals(name)) return entry.id;
+        throw new IllegalStateException("Missing deep cave biome: " + name);
+    }
+
+    /** TD coordinates are continuous in geometry; biome regions use their containing cell. */
+    public static short selectCave(int x, int y, int z, int surfaceY, short surfaceBiome,
+                                   boolean underground, int scale) {
+        if (!underground) return selectCave(x, y, z, surfaceY, surfaceBiome);
+        if (scale < 1 || scale > 6) throw new IllegalArgumentException("Invalid underground scale: " + scale);
+        if (surfaceY - y < 24) return 0;
+        return selectCave(Math.floorDiv(x, scale), 63 + Math.floorDiv(y - 63, scale),
+                Math.floorDiv(z, scale), 63 + Math.floorDiv(surfaceY - 63, scale), surfaceBiome, true);
+    }
+
     private static String group(int blockX, int blockZ, short base, float elevation, float slope, float temp, float precip, float pCv, boolean coastal) {
         if (isVanillaOcean(base) || elevation < 0) {
             return "ocean";

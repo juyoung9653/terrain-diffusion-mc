@@ -18,6 +18,7 @@ public final class TerralithBiomeClassifierTest {
         checkReachability();
         System.out.println("reachability: 83 surface + 11 cave IDs; warm_river reserved");
         checkSeamsAndCaves();
+        checkDeepCaves();
         System.out.println("coherence/guards: deterministic seams, low neighbor change, cave depth guards");
         System.out.println("TerralithBiomeClassifierTest: PASS");
     }
@@ -33,6 +34,34 @@ public final class TerralithBiomeClassifierTest {
         require(expected.size() == 95, "source jar must contain 95 Terralith biomes");
         require(new HashSet<String>(TerralithBiomeClassifier.biomeNames()).size() == 95, "selector IDs must be unique");
         require(expected.equals(new HashSet<String>(TerralithBiomeClassifier.biomeNames())), "selector inventory differs from source jar");
+    }
+
+    private static void checkDeepCaves() {
+        Set<String> found = new HashSet<>();
+        for (int x = -512; x <= 512; x += 37) for (int y : new int[]{-1190, -600, -300, -61}) {
+            require(TerralithBiomeClassifier.selectCave(x, y, x * 3, 90, (short) 44, false) == 0,
+                    "legacy worlds must retain deep biome cutoff");
+            short id = TerralithBiomeClassifier.selectCave(x, y, x * 3, 90, (short) 44, true);
+            String name = TerralithBiomeClassifier.biomeName(id);
+            require(Set.of("terralith:cave/andesite_caves", "terralith:cave/diorite_caves",
+                    "terralith:cave/granite_caves", "terralith:cave/tuff_caves").contains(name),
+                    "deep profile must select a mineral cave biome: " + name);
+            found.add(name);
+        }
+        require(found.size() == 4, "deep mineral biomes must all be reachable");
+        for (int scale = 1; scale <= 6; scale++) for (int x : new int[]{-129, -1, 0, 97}) {
+            short reference = TerralithBiomeClassifier.selectCave(x, -120, x * 3, 140, (short) 44, true, 1);
+            short enlarged = TerralithBiomeClassifier.selectCave(x * scale, 63 + (-120 - 63) * scale,
+                    x * 3 * scale, 63 + (140 - 63) * scale, (short) 44, true, scale);
+            require(reference == enlarged, "deep cave biome regions must follow TD scale about sea level");
+            require(TerralithBiomeClassifier.selectCave(x, -120, x, 140, (short) 44, false, scale) == 0,
+                    "legacy cave cutoff must not change with new scale argument");
+        }
+        for (int y = -60; y < 100; y += 7)
+            require(TerralithBiomeClassifier.selectCave(-1, y, 192, 100, (short) 44, true)
+                    == TerralithBiomeClassifier.selectCave(-1, y, 192, 100, (short) 44),
+                    "upper cave selection must be unchanged");
+        System.out.println("deep caves: legacy cutoff preserved, four mineral biomes reachable");
     }
 
     private static void checkClassifierCompatibility() {

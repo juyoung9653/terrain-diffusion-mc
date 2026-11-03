@@ -2,6 +2,8 @@ package com.github.xandergos.terraindiffusionmc.diagnostic;
 
 import com.github.xandergos.terraindiffusionmc.config.StructurePlacementConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
+import com.github.xandergos.terraindiffusionmc.world.geology.RiverChannelData;
+import com.github.xandergos.terraindiffusionmc.world.geology.UndergroundRivers;
 import com.github.xandergos.terraindiffusionmc.world.AsyncStructureLocate;
 import com.github.xandergos.terraindiffusionmc.world.structure.StructureHeightCache;
 import com.github.xandergos.terraindiffusionmc.world.structure.StructurePlacementRuntime;
@@ -35,6 +37,7 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 @EventBusSubscriber(modid="terrain_diffusion_mc", bus=EventBusSubscriber.Bus.GAME)
 public final class StructureDensityProbe {
     private static final TicketType<ChunkPos> CENSUS_TICKET=TicketType.create("td-census",Comparator.comparingLong(ChunkPos::toLong));
+    private static final TicketType<ChunkPos> RIVER_AUDIT_TICKET=TicketType.create("td-river-audit",Comparator.comparingLong(ChunkPos::toLong));
     private record HeightCase(String name,StructurePlacementConfig.Policy policy) { }
     private record HeightCaseResult(String name,StructureTerrain.Plan plan,List<Map<String,String>> rejected) { }
     private record HeightSequence(String name,List<HeightCaseResult> cases,
@@ -53,6 +56,8 @@ public final class StructureDensityProbe {
         long began=System.nanoTime();
         Long beganCpu=DensityProbeTelemetry.processCpuNanos();
         int availableProcessors=Runtime.getRuntime().availableProcessors();
+        boolean undergroundAudit=Boolean.getBoolean("td.density.underground")
+                || Files.exists(server.getServerDirectory().resolve("underground-audit.txt"));
         report.put("availableProcessors",availableProcessors);
         report.put("processCpuScope","whole JVM process (all threads and native work)");
         Map<String,Double> phaseSeconds=new LinkedHashMap<>();
@@ -75,7 +80,8 @@ public final class StructureDensityProbe {
                     throw new AssertionError("Fixture must match natural-biome, Terralith, scale-one play world: "+report.get("fixture"));
                 System.out.println("[TD-DENSITY] fixture="+report.get("fixture"));
             }
-            if(!server.getWorldData().worldGenOptions().generateStructures())
+            boolean generateStructures=server.getWorldData().worldGenOptions().generateStructures();
+            if(!generateStructures && !undergroundAudit)
                 throw new AssertionError("Density census requires generate-structures=true in the saved world");
             var state=level.getChunkSource().getGeneratorState();
             var registry=level.registryAccess().registryOrThrow(Registries.STRUCTURE);
@@ -97,13 +103,15 @@ public final class StructureDensityProbe {
                 centerX=Integer.parseInt(center[0]);centerZ=Integer.parseInt(center[1]);
             }
             int minX=centerX-radius,maxX=centerX+radius-1,minZ=centerZ-radius,maxZ=centerZ+radius-1;
+            ChunkStatus censusStatus=undergroundAudit ? ChunkStatus.FULL : ChunkStatus.STRUCTURE_STARTS;
+            report.put("chunkCensusStatus",censusStatus.getName());
             boolean shoreAudit=Boolean.getBoolean("td.shoreAudit");
             if(shoreAudit) ShoreFrequencyTrace.begin(minX*16,(maxX+1)*16,minZ*16,(maxZ+1)*16);
             long phaseBegan=System.nanoTime();
             Set<ChunkPos> owners=new HashSet<>();
             boolean villagesOnly=Files.exists(server.getServerDirectory().resolve("village-census-only.txt"));
             report.put("villageCandidateOwnersOnly",villagesOnly);
-            report.put("requestBatchSize",villagesOnly ? densityPrefetch : 1);
+            report.put("requestBatchSize",(villagesOnly || undergroundAudit) ? densityPrefetch : 1);
             var villageTag=net.minecraft.tags.TagKey.create(Registries.STRUCTURE,
                     net.minecraft.resources.ResourceLocation.withDefaultNamespace("village"));
             report.put("taggedVillages",registry.holders().filter(holder -> holder.is(villageTag))
@@ -134,6 +142,12 @@ public final class StructureDensityProbe {
             }
             List<ChunkPos> ordered=new ArrayList<>(owners);
             ordered.sort(Comparator.comparingInt((ChunkPos p)->p.x).thenComparingInt(p->p.z));
+            // A terrain-only fixture intentionally disables structures.  It still
+            // needs a fixed square of chunks so its depth timing is meaningful.
+            if(undergroundAudit && !generateStructures) {
+                ordered.clear();
+                for(int x=minX;x<=maxX;x++) for(int z=minZ;z<=maxZ;z++) ordered.add(new ChunkPos(x,z));
+            }
             if(Files.exists(server.getServerDirectory().resolve("reverse-order.txt"))) Collections.reverse(ordered);
             phaseSeconds.put("candidateEnumeration",DensityProbeTelemetry.seconds(System.nanoTime()-phaseBegan));
             report.put("seed",level.getSeed());report.put("radiusChunks",radius);
@@ -159,10 +173,14 @@ public final class StructureDensityProbe {
             List<Map<String,Object>> villages=new ArrayList<>();
             int attempted=0;
             Map<ChunkPos,ChunkAccess> prefetched=new HashMap<>();
+            // Keep exact census ownership/order separate from the optional material audit.
+            // The later material audit reads the FULL chunks from this timed census.
+            List<ChunkPos> censusChunks=new ArrayList<>();
+            Map<ChunkPos,ChunkAccess> censusChunkData=new HashMap<>();
             for(var p:ordered) {
-                if(villagesOnly && prefetched.isEmpty()) {
+                if((villagesOnly || undergroundAudit) && prefetched.isEmpty()) {
                     var batch=ordered.subList(attempted,Math.min(attempted+densityPrefetch,ordered.size()));
-                    int distance=33-ChunkLevel.byStatus(ChunkStatus.STRUCTURE_STARTS);
+                    int distance=33-ChunkLevel.byStatus(censusStatus);
                     try {
                         long stepBegan=System.nanoTime();
                         server.submit(() -> batch.forEach(pos ->
@@ -172,7 +190,7 @@ public final class StructureDensityProbe {
                         // The public off-thread path schedules admission on that thread and
                         // returns immediately, so this worker can actually submit the batch.
                         var futures=batch.stream().map(pos -> level.getChunkSource()
-                                .getChunkFuture(pos.x,pos.z,ChunkStatus.STRUCTURE_STARTS,true)).toList();
+                                .getChunkFuture(pos.x,pos.z,censusStatus,true)).toList();
                         submissionRoundtripNanos+=System.nanoTime()-stepBegan;
                         stepBegan=System.nanoTime();
                         for(int index=0;index<batch.size();index++) prefetched.put(batch.get(index),
@@ -186,7 +204,9 @@ public final class StructureDensityProbe {
                     }
                 }
                 long stepBegan=System.nanoTime();
-                var chunk=villagesOnly ? prefetched.remove(p) : AsyncStructureLocate.getChunk(level,p.x,p.z);
+                var chunk=(villagesOnly || undergroundAudit) ? prefetched.remove(p) : AsyncStructureLocate.getChunk(level,p.x,p.z);
+                censusChunks.add(p);
+                if(undergroundAudit) censusChunkData.put(p,chunk);
                 singleChunkFetchNanos+=System.nanoTime()-stepBegan;
                 stepBegan=System.nanoTime();
                 for(var start:chunk.getAllStarts().values()) if(start.isValid()) {
@@ -226,6 +246,13 @@ public final class StructureDensityProbe {
             phaseSeconds.put("chunkCensus",DensityProbeTelemetry.seconds(System.nanoTime()-phaseBegan));
             report.put("totalStarts",actual.size());report.put("diagnostics",StructurePlacementRuntime.diagnostics());
             report.put("villages",villages);
+            if(undergroundAudit) {
+                phaseBegan=System.nanoTime();
+                report.put("underground",auditUnderground(level,censusChunks,censusChunkData));
+                // Block-state inspection follows the timed FULL census and does
+                // not advance or load another chunk.
+                phaseSeconds.put("undergroundAudit",DensityProbeTelemetry.seconds(System.nanoTime()-phaseBegan));
+            }
             phaseBegan=System.nanoTime();
             int guard=config.villages().targetMeanNearestNeighborBlocks();
             List<Double> nearest=new ArrayList<>();
@@ -361,6 +388,235 @@ public final class StructureDensityProbe {
         catch(Exception e) {e.printStackTrace();}
         System.out.println("[TD-DENSITY] success="+report.get("success")+" count="+report.get("totalStarts"));
         server.execute(() -> server.halt(false));
+    }
+
+    /**
+     * Records compact material evidence for a deep experimental world.
+     * Underground mode requests FULL during the timed census. This method
+     * only inspects those retained chunk references afterwards.
+     */
+    private static Map<String,Object> auditUnderground(net.minecraft.server.level.ServerLevel level,
+                                                        List<ChunkPos> censusChunks,
+                                                        Map<ChunkPos,ChunkAccess> censusChunkData) throws Exception {
+        int minY=level.getMinBuildHeight(), maxY=level.getMaxBuildHeight()-1;
+        List<ChunkPos> sampled=censusChunks.stream().distinct().toList();
+        if(sampled.isEmpty()) throw new AssertionError("Underground audit needs at least one census chunk");
+        Map<String,long[]> bands=new LinkedHashMap<>();
+        // Values are air, water, lava, bedrock, ore, rock in that order.
+        Set<String> deepRocks=new TreeSet<>();
+        long columns=0, floorBedrock=0, nearLegacyBedrock=0, deepAir=0, scanned=0;
+        var surfaceDigest=java.security.MessageDigest.getInstance("SHA-256");
+        var oceanFloorDigest=java.security.MessageDigest.getInstance("SHA-256");
+        var terrainDigest=java.security.MessageDigest.getInstance("SHA-256");
+        var generator=level.getChunkSource().getGenerator();
+        var randomState=level.getChunkSource().randomState();
+        int generated=0;
+        for(var pos:sampled) {
+            var chunk=censusChunkData.get(pos);
+            if(chunk==null || !chunk.getPersistedStatus().isOrAfter(ChunkStatus.FULL))
+                throw new AssertionError("Underground audit chunk did not reach FULL in the census: "+pos);
+            generated++;
+            for(int localX=2;localX<16;localX+=4) for(int localZ=2;localZ<16;localZ+=4) {
+                columns++;
+                int x=pos.getMinBlockX()+localX, z=pos.getMinBlockZ()+localZ;
+                terrainDigest.update(java.nio.ByteBuffer.allocate(12).putInt(x).putInt(z)
+                        .putInt(generator.getBaseHeight(x,z,Heightmap.Types.OCEAN_FLOOR_WG,level,randomState)).array());
+                surfaceDigest.update(java.nio.ByteBuffer.allocate(12).putInt(x).putInt(z)
+                        .putInt(chunk.getHeight(Heightmap.Types.WORLD_SURFACE_WG,localX,localZ)).array());
+                oceanFloorDigest.update(java.nio.ByteBuffer.allocate(12).putInt(x).putInt(z)
+                        .putInt(chunk.getHeight(Heightmap.Types.OCEAN_FLOOR_WG,localX,localZ)).array());
+                for(int y=minY;y<=maxY;y++) {
+                    var state=chunk.getBlockState(new BlockPos(x,y,z));
+                    long[] counts=bands.computeIfAbsent(depthBand(minY,y), ignored -> new long[6]);
+                    scanned++;
+                    if(state.isAir()) {
+                        counts[0]++;
+                        if(minY<-64 && y<=-128) deepAir++;
+                    } else if(state.is(net.minecraft.world.level.block.Blocks.WATER)) counts[1]++;
+                    else if(state.is(net.minecraft.world.level.block.Blocks.LAVA)) counts[2]++;
+                    else if(state.is(net.minecraft.world.level.block.Blocks.BEDROCK)) {
+                        counts[3]++;
+                        if(y==minY) floorBedrock++;
+                        if(minY<-64 && y>=-72 && y<=-56) nearLegacyBedrock++;
+                    } else {
+                        String id=net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                                .getKey(state.getBlock()).toString();
+                        if(id.endsWith("_ore")) counts[4]++;
+                        else {
+                            counts[5]++;
+                            if(minY<-64 && y<=-128) deepRocks.add(id);
+                        }
+                    }
+                }
+            }
+        }
+        List<Map<String,Object>> bandRows=new ArrayList<>();
+        for(var entry:bands.entrySet()) {
+            long[] c=entry.getValue();
+            bandRows.add(Map.of("band",entry.getKey(),"air",c[0],"water",c[1],"lava",c[2],
+                    "bedrock",c[3],"ore",c[4],"rock",c[5]));
+        }
+        Map<String,Object> result=new LinkedHashMap<>();
+        result.put("minY",minY); result.put("maxY",maxY); result.put("sampledChunks",generated);
+        var terrainSource=com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources
+                .find(generator.getBiomeSource());
+        if(minY<-64 && terrainSource!=null) result.put("boundScale",terrainSource.boundUndergroundScale());
+        result.put("columns",columns); result.put("scannedBlocks",scanned);
+        result.put("floorBedrock",floorBedrock); result.put("legacyShelfBedrock",nearLegacyBedrock);
+        result.put("deepCaveAir",deepAir); result.put("deepRockTypes",deepRocks);
+        result.put("deepCavesObserved",deepAir>0); result.put("variedDeepRocksObserved",deepRocks.size()>=2);
+        result.put("worldSurfaceSha256",HexFormat.of().formatHex(surfaceDigest.digest()));
+        result.put("oceanFloorSha256",HexFormat.of().formatHex(oceanFloorDigest.digest()));
+        result.put("baseTerrainSha256",HexFormat.of().formatHex(terrainDigest.digest()));
+        result.put("bands",bandRows);
+        if(Files.exists(level.getServer().getServerDirectory().resolve("underground-river-audit.txt"))) {
+            if(terrainSource==null || !terrainSource.undergroundRivers()) throw new AssertionError("Cave river profile is disabled");
+            var rivers=new com.github.xandergos.terraindiffusionmc.world.geology.UndergroundRiverModel(level.getSeed(),terrainSource.boundUndergroundScale());
+            long wetColumns=0, present=0, supported=0, airAbove=0;
+            List<BlockPos> flowSamples=new ArrayList<>();
+            Map<ChunkPos,Integer> flowSamplesPerChunk=new LinkedHashMap<>();
+            for(var cp:sampled) {
+                var chunk=censusChunkData.get(cp);
+                for(int x=0;x<16;x++) for(int z=0;z<16;z++) {
+                    int wx=cp.getMinBlockX()+x,wz=cp.getMinBlockZ()+z;
+                    var c=rivers.column(wx,wz);
+                    if(c==null || !c.wet() || !c.fits(minY,chunk.getHeight(Heightmap.Types.OCEAN_FLOOR_WG,x,z))) continue;
+                    wetColumns++;
+                    var p=new BlockPos(wx,c.water(),wz);
+                    if(chunk.getBlockState(p).is(net.minecraft.world.level.block.Blocks.WATER)) {
+                        present++;
+                        if(chunk.getBlockState(new BlockPos(wx,c.bed(),wz)).isSolid()) supported++;
+                        if(chunk.getBlockState(p.above()).isAir()) airAbove++;
+                        // Keep flow validation spatially diverse: at most four columns
+                        // from each of up to eight independently loaded chunks.
+                        if(!c.lake() && flowSamples.size()<32
+                                && flowSamplesPerChunk.getOrDefault(cp,0)<4) {
+                            flowSamples.add(p);
+                            flowSamplesPerChunk.merge(cp,1,Integer::sum);
+                        }
+                    }
+                }
+            }
+            List<ChunkPos> liveRiverChunks=new ArrayList<>(flowSamplesPerChunk.keySet());
+            Set<ChunkPos> riverAuditTicketChunks=new LinkedHashSet<>();
+            for(var cp:liveRiverChunks) for(int dx=-1;dx<=1;dx++) for(int dz=-1;dz<=1;dz++)
+                riverAuditTicketChunks.add(new ChunkPos(cp.x+dx,cp.z+dz));
+            int riverTicketDistance=33-ChunkLevel.byStatus(ChunkStatus.FULL);
+            int currents;
+            int markerRoundTrips;
+            try {
+                // Census tickets are intentionally gone before this audit. These
+                // diagnostic-only tickets make the selected FULL chunks resident
+                // so getChunkNow tests runtime data rather than cache eviction.
+                level.getServer().submit(() -> riverAuditTicketChunks.forEach(cp ->
+                        level.getChunkSource().addRegionTicket(RIVER_AUDIT_TICKET,cp,riverTicketDistance,cp)))
+                        .get(30,TimeUnit.SECONDS);
+                // Entity#updateFluidHeightAndDoFluidPushing exits before sampling
+                // when its one-block-inflated AABB touches an unloaded neighbor.
+                // A column on a chunk edge therefore needs the surrounding 3x3.
+                var futures=riverAuditTicketChunks.stream().map(cp -> level.getChunkSource()
+                        .getChunkFuture(cp.x,cp.z,ChunkStatus.FULL,true)).toList();
+                for(var future:futures) future.get(180,TimeUnit.SECONDS)
+                        .orElseThrow(() -> new AssertionError("River audit chunk unavailable"));
+                level.getServer().submit(() -> {
+                    for(var cp:riverAuditTicketChunks) {
+                        level.getChunkSource().getChunk(cp.x,cp.z,ChunkStatus.FULL,true);
+                        if(level.getChunkSource().getChunkNow(cp.x,cp.z)==null)
+                            throw new AssertionError("River audit halo chunk did not become FULL resident: "+cp);
+                    }
+                }).get(60,TimeUnit.SECONDS);
+                currents=level.getServer().submit(() -> {
+                    int n=0;
+                    for(var p:flowSamples) {
+                        var loaded=level.getChunkSource().getChunkNow(p.getX()>>4,p.getZ()>>4);
+                        if(loaded==null || RiverChannelData.get(loaded,p.getX()&15,p.getZ()&15)==null)
+                            throw new AssertionError("Full chunk lost explicit carved river identity");
+                        var state=level.getFluidState(p);
+                        var velocity=state.getFlow(level,p);
+                        var channel=rivers.column(p.getX(),p.getZ());
+                        if(velocity.x*channel.flowX()+velocity.z*channel.flowZ()>.1) n++;
+                    }
+                    return n;
+                }).get(30,TimeUnit.SECONDS);
+                markerRoundTrips=level.getServer().submit(() -> {
+                    Set<ChunkPos> checked=new HashSet<>();
+                    for(var p:flowSamples) {
+                        var cp=new ChunkPos(p);
+                        if(!checked.add(cp)) continue;
+                        var loaded=level.getChunkSource().getChunkNow(cp.x,cp.z);
+                        if(loaded==null) throw new AssertionError("FULL river audit chunk was evicted: "+cp);
+                        var serialized=net.minecraft.world.level.chunk.storage.ChunkSerializer.write(level,loaded);
+                        var restored=net.minecraft.world.level.chunk.storage.ChunkSerializer.read(level,level.getPoiManager(),
+                                new net.minecraft.world.level.chunk.storage.RegionStorageInfo("river-audit",level.dimension(),"chunk"),cp,serialized);
+                        for(int x=0;x<16;x++) for(int z=0;z<16;z++) {
+                            if(!Objects.equals(RiverChannelData.get(loaded,x,z),RiverChannelData.get(restored,x,z)))
+                                throw new AssertionError("Serialized FULL river marker changed at "+cp+" "+x+","+z);
+                        }
+                        var marker=RiverChannelData.get(loaded,p.getX()&15,p.getZ()&15);
+                        if(marker==null) throw new AssertionError("Resident river column lost explicit marker: "+p);
+                        var floatingItem=new net.minecraft.world.entity.item.ItemEntity(level,
+                                p.getX()+.5,p.getY()+.1,p.getZ()+.5,
+                                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COBBLESTONE));
+                        floatingItem.setNoGravity(true);
+                        // ItemEntity's convenience constructor assigns a random
+                        // horizontal toss in [-.1,.1] and +.2Y.  Zero it so this
+                        // is a current-isolation check rather than a toss test.
+                        floatingItem.setDeltaMovement(net.minecraft.world.phys.Vec3.ZERO);
+                        var fluidAtSample=level.getFluidState(p);
+                        boolean pushedByWater=floatingItem.updateFluidHeightAndDoFluidPushing(
+                                net.minecraft.tags.FluidTags.WATER,.014);
+                        var pushed=floatingItem.getDeltaMovement();
+                        if(pushed.x*marker.flowX()+pushed.z*marker.flowZ()<=0) {
+                            throw new AssertionError("Native item fluid push was not downstream: marker="+marker
+                                    +", position="+floatingItem.position()+", bbox="+floatingItem.getBoundingBox()
+                                    +", touchingUnloaded="+floatingItem.touchingUnloadedChunk()
+                                    +", pushedByFluid="+floatingItem.isPushedByFluid()
+                                    +", waterReturn="+pushedByWater+", fluid="+fluidAtSample
+                                    +", fluidHeight="+fluidAtSample.getHeight(level,p)
+                                    +", flow="+fluidAtSample.getFlow(level,p)+", velocity="+pushed);
+                        }
+                        var markerSnapshot=new net.minecraft.nbt.CompoundTag();
+                        RiverChannelData.write(loaded,markerSnapshot);
+                        try {
+                            RiverChannelData.read(loaded,new net.minecraft.nbt.CompoundTag());
+                            if(!UndergroundRivers.flow(level,p,level.getFluidState(p),net.minecraft.world.phys.Vec3.ZERO)
+                                    .equals(net.minecraft.world.phys.Vec3.ZERO))
+                                throw new AssertionError("Unmarked water received invented current");
+                        } finally { RiverChannelData.read(loaded,markerSnapshot); }
+                        var bedPos=new BlockPos(p.getX(),marker.bed(),p.getZ());
+                        var bed=loaded.getBlockState(bedPos);
+                        try {
+                            loaded.setBlockState(bedPos,net.minecraft.world.level.block.Blocks.AIR.defaultBlockState(),false);
+                            if(!UndergroundRivers.flow(level,p,level.getFluidState(p),net.minecraft.world.phys.Vec3.ZERO)
+                                    .equals(net.minecraft.world.phys.Vec3.ZERO))
+                                throw new AssertionError("Removed river bed retained artificial current");
+                        } finally { loaded.setBlockState(bedPos,bed,false); }
+                    }
+                    return checked.size();
+                }).get(60,TimeUnit.SECONDS);
+            } finally {
+                level.getServer().submit(() -> riverAuditTicketChunks.forEach(cp ->
+                        level.getChunkSource().removeRegionTicket(RIVER_AUDIT_TICKET,cp,riverTicketDistance,cp)))
+                        .get(30,TimeUnit.SECONDS);
+            }
+            result.put("rivers",Map.of("plannedWetColumns",wetColumns,"actualWaterColumns",present,
+                    "supportedWaterColumns",supported,"airAboveWaterColumns",airAbove,
+                    "currentSamples",flowSamples.size(),"downstreamCurrents",currents,
+                    "markerSerializationChunks",markerRoundTrips,"unmarkedAndRemovedBedChecks",markerRoundTrips,
+                    "nativeItemPushChecks",markerRoundTrips));
+            if(present<16 || supported!=present || airAbove<present*.9 || currents==0 || currents!=flowSamples.size())
+                throw new AssertionError("Cave river water/support/current evidence incomplete: "+result.get("rivers"));
+        }
+        if(minY<-64) {
+            if(floorBedrock!=columns) throw new AssertionError("Deep world lacks bedrock at every sampled minimum-Y column: "+floorBedrock+"/"+columns);
+            if(nearLegacyBedrock!=0) throw new AssertionError("Deep world retained a bedrock shelf near Y=-64: "+nearLegacyBedrock);
+        }
+        return result;
+    }
+
+    private static String depthBand(int minY,int y) {
+        int start=minY+Math.floorDiv(y-minY,256)*256;
+        return start+".."+(start+255);
     }
 
     private static Map<String,Object> nativeSnapshot(MinecraftServer server) throws Exception {

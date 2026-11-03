@@ -5,12 +5,14 @@
         "biome_source": {
           "natural_biomes": true,
           "terralith": true,
-          "type": "terrain-diffusion-mc:terrain_diffusion"
+          "type": "terrain-diffusion-mc:terrain_diffusion",
+          "underground": true,
+          "underground_rivers": true
         },
-        "settings": "terrain-diffusion-mc:terrain_diffusion",
+        "settings": "terrain-diffusion-mc:underground",
         "type": "minecraft:noise"
       },
-      "type": "terrain-diffusion-mc:terrain_diffusion"
+      "type": "terrain-diffusion-mc:underground_scale_2"
     },
     "minecraft:the_end": {
       "generator": {

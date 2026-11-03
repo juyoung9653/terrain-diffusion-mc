@@ -1,12 +1,14 @@
 {
   "dimensions": {
     "minecraft:overworld": {
-      "type": "terrain-diffusion-mc:terrain_diffusion",
+      "type": "terrain-diffusion-mc:underground_scale_2",
       "generator": {
         "type": "minecraft:noise",
-        "settings": "terrain-diffusion-mc:terrain_diffusion",
+        "settings": "terrain-diffusion-mc:underground",
         "biome_source": {
-          "type": "terrain-diffusion-mc:terrain_diffusion"
+          "type": "terrain-diffusion-mc:terrain_diffusion",
+          "underground": true,
+          "underground_rivers": true
         }
       }
     },

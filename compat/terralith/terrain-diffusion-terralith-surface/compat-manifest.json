@@ -7,7 +7,7 @@
   },
   "counts": {
     "configured_carvers": 4,
-    "generated_datapack_resources": 2,
+    "generated_datapack_resources": 3,
     "source_jar_minecraft_configured_carvers": 1,
     "surface_predicate_types": 15,
     "surface_referenced_terralith_biomes": 72,
@@ -19,6 +19,7 @@
   "format": 1,
   "generated_resources": [
     "data/terrain-diffusion-mc/worldgen/noise_settings/terrain_diffusion.json",
+    "data/terrain-diffusion-mc/worldgen/noise_settings/underground.json",
     "data/terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json"
   ],
   "limitations": [
@@ -224,6 +225,11 @@
     "minecraft_1_21_1_preliminary_density_validated": true,
     "td_bedrock_rule_preserved": true,
     "td_deepslate_rule_preserved": true,
+    "td_legacy_bedrock_rule_preserved": true,
+    "td_legacy_deepslate_rule_preserved": true,
+    "td_legacy_noise_shape_preserved": true,
+    "td_legacy_router_preserved": true,
+    "td_legacy_sea_level_preserved": true,
     "td_noise_shape_preserved": true,
     "td_router_preserved": true,
     "td_sea_level_preserved": true,

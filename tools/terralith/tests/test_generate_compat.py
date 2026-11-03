@@ -43,6 +43,7 @@ class GenerateCompatTest(unittest.TestCase):
     def make_fixture(self, root: Path) -> tuple[Path, Path]:
         repo = root / "repo"
         noise = repo / MODULE.TD_NOISE_SETTINGS
+        underground_noise = repo / MODULE.TD_UNDERGROUND_NOISE_SETTINGS
         preset = repo / MODULE.TD_WORLD_PRESET
         noise.parent.mkdir(parents=True)
         preset.parent.mkdir(parents=True)
@@ -51,7 +52,12 @@ class GenerateCompatTest(unittest.TestCase):
         shore_top = {"type": "minecraft:condition", "if_true": {"type": "minecraft:stone_depth", "offset": 0}, "then_run": {"type": "minecraft:sequence", "sequence": [{"type": "minecraft:condition", "if_true": {"type": "minecraft:biome", "biome_is": ["minecraft:beach", "minecraft:snowy_beach"]}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:sand"}}}, {"type": "minecraft:condition", "if_true": {"type": "minecraft:biome", "biome_is": ["minecraft:stony_shore"]}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:stone"}}}]}}
         shore_subsurface = {"type": "minecraft:condition", "if_true": {"type": "minecraft:stone_depth", "offset": 4}, "then_run": {"type": "minecraft:sequence", "sequence": [{"type": "minecraft:condition", "if_true": {"type": "minecraft:biome", "biome_is": ["minecraft:beach", "minecraft:snowy_beach"]}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:sandstone"}}}, {"type": "minecraft:condition", "if_true": {"type": "minecraft:biome", "biome_is": ["minecraft:stony_shore"]}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:stone"}}}]}}
         noise.write_text(json.dumps({"sea_level": 63, "noise": {"min_y": -64, "height": 2032}, "noise_router": {"temperature": 0, "vegetation": 0, "initial_density_without_jaggedness": {"type": "terrain-diffusion-mc:terrain_diffusion"}}, "surface_rule": {"type": "minecraft:sequence", "sequence": [td_base, td_deep, shore_top, shore_subsurface, {"type": "minecraft:block", "result_state": {"Name": "minecraft:dirt"}}]}}))
-        preset.write_text(json.dumps({"dimensions": {"minecraft:overworld": {"generator": {"biome_source": {"type": "terrain-diffusion-mc:terrain_diffusion"}}}, "minecraft:the_end": {"generator": {}}}}))
+        underground = json.loads(noise.read_text())
+        underground["noise"] = {"min_y": -1200, "height": 3168}
+        underground["surface_rule"]["sequence"][0]["if_true"]["true_at_and_below"] = {"above_bottom": 0}
+        underground["surface_rule"]["sequence"][0]["if_true"]["false_at_and_above"] = {"above_bottom": 5}
+        underground_noise.write_text(json.dumps(underground))
+        preset.write_text(json.dumps({"dimensions": {"minecraft:overworld": {"type": "terrain-diffusion-mc:underground_scale_2", "generator": {"settings": "terrain-diffusion-mc:underground", "biome_source": {"type": "terrain-diffusion-mc:terrain_diffusion", "underground": True}}}, "minecraft:the_end": {"generator": {}}}}))
         jar = root / "terralith.jar"
         source_base = {"type": "minecraft:condition", "if_true": {"type": "minecraft:vertical_gradient", "random_name": "minecraft:bedrock_floor"}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:bedrock"}}}
         source_deep = {"type": "minecraft:condition", "if_true": {"type": "minecraft:vertical_gradient", "random_name": "minecraft:deepslate"}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:deepslate"}}}
@@ -72,7 +78,8 @@ class GenerateCompatTest(unittest.TestCase):
             repo, jar = self.make_fixture(root)
             output = root / "pack"
             manifest = MODULE.build_pack(jar, repo, output)
-            noise = json.loads((output / "data/terrain-diffusion-mc/worldgen/noise_settings/terrain_diffusion.json").read_text())
+            legacy_noise = json.loads((output / "data/terrain-diffusion-mc/worldgen/noise_settings/terrain_diffusion.json").read_text())
+            noise = json.loads((output / "data/terrain-diffusion-mc/worldgen/noise_settings/underground.json").read_text())
             preset = json.loads((output / "data/terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json").read_text())
             inventory = json.loads((output / "terralith-biome-inventory.json").read_text())
             self.assertEqual(95, manifest["counts"]["terralith_biomes"])
@@ -80,15 +87,27 @@ class GenerateCompatTest(unittest.TestCase):
             self.assertEqual(0, manifest["counts"]["terralith_placed_features"])
             self.assertEqual(1, manifest["counts"]["configured_carvers"])
             self.assertTrue(manifest["validation"]["td_router_preserved"])
+            self.assertTrue(manifest["validation"]["td_legacy_router_preserved"])
+            self.assertTrue(manifest["validation"]["td_legacy_noise_shape_preserved"])
             self.assertTrue(manifest["validation"]["td_bedrock_rule_preserved"])
             self.assertTrue(manifest["validation"]["td_deepslate_rule_preserved"])
             self.assertTrue(manifest["validation"]["vanilla_shore_rules_outside_terralith_gate"])
             self.assertEqual("minecraft:bedrock", noise["surface_rule"]["sequence"][0]["then_run"]["result_state"]["Name"])
+            self.assertEqual({"above_bottom": 0}, noise["surface_rule"]["sequence"][0]["if_true"]["true_at_and_below"])
+            self.assertEqual({"above_bottom": 5}, noise["surface_rule"]["sequence"][0]["if_true"]["false_at_and_above"])
+            self.assertEqual(-1200, noise["noise"]["min_y"])
+            self.assertEqual(1968, noise["noise"]["min_y"] + noise["noise"]["height"])
+            legacy_source = json.loads((repo / MODULE.TD_NOISE_SETTINGS).read_text())
+            self.assertEqual(legacy_source["noise_router"], legacy_noise["noise_router"])
+            self.assertEqual(legacy_source["noise"], legacy_noise["noise"])
             self.assertEqual(95, len(noise["surface_rule"]["sequence"][1]["if_true"]["biome_is"]))
             self.assertEqual("minecraft:mud", noise["surface_rule"]["sequence"][1]["then_run"]["sequence"][1]["then_run"]["result_state"]["Name"])
             self.assertEqual("minecraft:deepslate", noise["surface_rule"]["sequence"][2]["then_run"]["result_state"]["Name"])
             self.assertTrue(preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["terralith"])
             self.assertTrue(preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["natural_biomes"])
+            self.assertTrue(preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["underground"])
+            self.assertEqual("terrain-diffusion-mc:underground", preset["dimensions"]["minecraft:overworld"]["generator"]["settings"])
+            self.assertEqual("terrain-diffusion-mc:underground_scale_2", preset["dimensions"]["minecraft:overworld"]["type"])
             self.assertNotIn("terralith", preset["dimensions"]["minecraft:the_end"])
             self.assertEqual(
                 "deep_cave",
@@ -114,7 +133,7 @@ class GenerateCompatTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)
             repo, jar = self.make_fixture(root)
-            path = repo / MODULE.TD_NOISE_SETTINGS
+            path = repo / MODULE.TD_UNDERGROUND_NOISE_SETTINGS
             noise = json.loads(path.read_text())
             noise["noise_router"]["preliminary_surface_level"] = noise["noise_router"]["initial_density_without_jaggedness"]
             noise["noise_router"]["initial_density_without_jaggedness"] = 0
@@ -152,3 +171,4 @@ class GenerateCompatTest(unittest.TestCase):
             self.assertEqual("user data", sentinel.read_text())
             self.assertEqual(jar_before, jar.read_bytes())
             self.assertTrue((repo / MODULE.TD_NOISE_SETTINGS).is_file())
+            self.assertTrue((repo / MODULE.TD_UNDERGROUND_NOISE_SETTINGS).is_file())

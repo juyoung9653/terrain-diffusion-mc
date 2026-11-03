@@ -1051,8 +1051,11 @@ Use the matching Minecraft 1.21.1 loader builds of Terrain Diffusion, Terralith
 2.6.2, and Lithostitched (Terralith requires at least 1.7.7). For NeoForge, build
 Terrain Diffusion with Java 21 using `./gradlew :neoforge:build -PuseDml=true`.
 The Windows variant also requires the existing `libs/onnxruntime-dml.jar`.
-For an offline NeoForge-only build, add `--configure-on-demand --offline` to
-avoid configuring Fabric Loom and requiring its separate Minecraft cache.
+The locally validated NeoForge 21.1.249 CUDA build uses
+`./gradlew :neoforge:jar -PuseCuda=true -Pneoforge_version=21.1.249 --offline`
+with the populated repository `.gradle` directory as `GRADLE_USER_HOME` and
+normal project configuration. The native probe runners use the same cached
+loader version and offline resolution.
 
 Enable the generated pack in
 `compat/terralith/terrain-diffusion-terralith-surface` **when creating a new world**,
@@ -1167,6 +1170,211 @@ use in-game biome information and `/locate biome terralith:<name>` to inspect th
 actual biome. Searches can be expensive because they request diffusion terrain.
 Visual acceptance should cover coasts, dry/wet transitions, snowy mountains and
 underground vegetation, at the intended world scale.
+
+## Underground geology (new worlds)
+
+New Terrain Diffusion worlds use the `underground` generation profile. The TD
+scale setting enlarges the added strata, faults, conduits, chambers and vein
+shapes in all three axes. Coordinates are `x / scale`, `(y - 63) / scale` and
+`z / scale`: sea level stays at 63. Fine mineral grains remain individual blocks.
+The dimension bounds are symmetric about the boundary between Y=-1 and Y=0;
+Minecraft requires 16-block alignment, hence the one-block difference below.
+
+| TD scale | Minimum block Y | Maximum block Y |
+| --- | ---: | ---: |
+| 1 | -400 | 399 |
+| 2 (default) | -736 | 735 |
+| 3 | -1072 | 1071 |
+| 4 | -1408 | 1407 |
+| 5 | -1744 | 1743 |
+| 6 | -1968 | 1967 |
+
+The maximum noise span is -1968..1967. Minecraft 1.21.1 clamps it to the selected
+dimension through `NoiseSettings.clampToHeightAccessor` and
+`WorldGenerationContext`, as with the legacy TD generator. The scale-2 preset
+now matches the default TD scale. The creation screen selects the matching
+`underground_scale_N` dimension. The source binds `underground_scale` on world
+load and serializes it in its biome-source codec; an existing deep world's scale
+cannot be changed through the runtime scale setter. No worldgen worker reads or
+mutates SavedData to obtain its scale.
+
+The geology pass runs after native surface rules and before native carvers and
+decoration. It changes only stone/deepslate, preserves at least the upper 24
+blocks and basal bedrock, and excludes structure pieces plus support margins
+from new cave carving. It does not fetch AI terrain or write neighboring chunks.
+
+- Folded sedimentary packages include thin stone beds within carbonate rock,
+  sandstone, deeper intrusive/volcanic units and deepslate basement. Dipping,
+  warped faults displace strata and taper with depth; intrusive lenses cross beds.
+- Curved, varying-width conduits widen and occur more often in carbonate rock.
+  Jittered nodes route toward preferred directions, with merging branches,
+  occasional secondary passages and dead ends instead of a rectangular mesh.
+  Fracture zones encourage inclined connections between elevations. Chambers and
+  rough elliptical cross-sections prevent a repeated straight pipe/shaft grid.
+- Sparse mineralized sheets wind, branch and dip. Host-rock conditions filter the
+  ores; incomplete mineral grains break up solid ore blobs. Vanilla/mod ore
+  features still run where their replacement tags allow them.
+- A smooth regional water table replaces the original fixed band above bedrock.
+  It is independent of local hill height and world floor; it is an approximation,
+  not a pressure/flow simulation or a connection to surface-river catchments.
+- New bedrock uses bottom-relative anchors. Terralith cave biome regions use the
+  same sea-level-anchored TD coordinates. Vanilla carvers and other mods' features
+  retain their own dimensions; this does not rescale every external feature.
+
+Legacy `terrain_diffusion` noise and dimension types remain unchanged. The
+`underground` flag defaults to false for existing saves. Use a **new world** for
+this experimental profile; replacing dimensions in an existing save leaves old
+chunks with incompatible floors and geological patterns. The regenerated optional
+Terralith pack supplies both legacy and underground surface rules.
+
+Design references are [TerraFirmaCraft's veins](https://terrafirmacraft.github.io/Documentation/1.21.x/worldgen/features/veins/),
+[GemPy's structural geology](https://docs.gempy.org/) and
+[pyKasso's conduit networks](https://github.com/randlab/pyKasso). These are
+conceptual references, not dependencies. The vanilla rock proxies and procedural
+geometry are a gameplay approximation, not a reconstruction of surveyed geology.
+
+### Subterranean streams
+
+New presets also enable `underground_rivers`; the optional biome-source field
+defaults to false when absent, including previously saved deep worlds. These
+streams use the same sea-level-anchored TD scale as the geology. The pass runs
+after native AIR carvers, preserves roof/floor margins and structure pieces,
+and skips columns containing unknown mod blocks.
+
+Local spring-fed catchments have one to four tributaries, merging discharge
+proxies, alternating pools and descending runs, and irregular terminal ponds.
+Carbonate/sandstone and fracture context influence occurrence and orientation;
+carbonate regions can host larger dissolution pools. Width and current depend
+on accumulated source contribution, depth and slope. Asymmetric banks, rough
+roofs and patches of gravel/clay break up otherwise smooth passages.
+
+Successfully carved columns carry bounded chunk metadata through proto-to-full
+promotion and NBT save/load. Server-side fluid current uses that saved identity
+and a remaining solid bed, without requesting chunks. Skipped/unmarked columns
+retain vanilla flow. This supplies native entity-pushing vectors; it is **not**
+a volume-conserving water or groundwater-pressure solver. Water remains native
+Minecraft source water, catchments end locally in storage/seepage ponds, and
+there is no regional outlet routing, rainfall recharge or connection to surface
+Streams rivers. Client/player prediction and extended live fluid behavior need
+interactive testing; server item-pushing evidence does not establish those.
+
+Conceptual references, without copied code or runtime dependencies, include
+[SimpleHydrology](https://github.com/weigert/SimpleHydrology) for discharge and
+pool/run organization, [SoilMachine](https://github.com/weigert/SoilMachine) for
+separating substrate and water, and [pyKasso](https://github.com/randlab/pyKasso)
+for geology-aware conduit networks. The latter is useful for offline scientific
+comparison, not a proposed Java dependency.
+
+`python -B tools/geology/river_model_tools.py` checks deterministic geometry,
+all six scale bounds, non-uphill paths, raster bank/current behavior and
+confluence discharge, then exports labelled model diagrams. Prepare native
+fixtures with `benchmark.py prepare --rivers` and a river-containing `--center`;
+the usual `run_suite.py --underground-audit` then requires actual water/support,
+downstream flow, FULL-chunk marker serialization, unmarked/removed-bed gating
+and native item-pushing evidence. The flow audit needs its own temporary FULL
+tickets: census tickets have already been removed, and `getChunkNow` returning
+null there is not evidence of lost metadata. Keep injected holder interfaces
+outside the configured `mixin` package; ordinary Java loads from that package
+are rejected by Mixin. `render_rivers.py` reads saved region blocks
+and the corresponding exported column CSV; its diagrams are not game screenshots.
+
+The final stream validation on 2026-11-03 used seed `6187795302574383407`,
+Streams 2.16.2, Terralith 2.6.2, Lithostitched 1.8.1 and prefetch 8. Every run
+generated a fresh 64-chunk square with matched prepared surface-river caches;
+the baseline retained Y=-64 and the candidate enabled the full deep geology
+and stream profile. These are FULL chunk-census times, excluding startup and
+the additional live-chunk physics/serialization audit:
+
+| TD scale | Minimum Y | Baseline | Deep + streams | Increase |
+| --- | ---: | ---: | ---: | ---: |
+| 2 | -736 | 55.72 s | 63.95 s | 14.77% |
+| 6 | -1968 | 51.66 s | 75.23 s | 45.61% |
+| 6, reversed-order repeat | -1968 | 51.95 s | 74.99 s | 44.34% |
+
+All six fresh launches had process exit zero and successful fresh receipts.
+The deep fixtures contained 1,413 (scale 2) and 4,201 (scale 6) planned wet
+columns, all with actual water, solid support and air above. Each deep run
+passed 32 downstream-current samples and eight chunk-level marker round-trips,
+unmarked/removed-bed checks and native item-push checks. Saved-block diagrams
+matched every planned wet column. Pure model tests cover TD scales 1--6 and
+multiple seeds; native performance measurements cover these two regions only.
+They remain below the requested 2x generation-time cap, but do not measure
+cold Streams planning, gameplay FPS or sustained fluid ticks. No depth fallback
+was needed in these measurements.
+
+Evidence: `build/underground-rivers-final-{s2,s6,s6-repeat}-comparison.json`,
+`build/underground-rivers-final-suite.json`, and saved diagrams under
+`build/underground-rivers-final-saved-s{2,6}`. The separately recorded
+`underground-rivers-final-s6-deep` restart was a loaded-chunk correctness test,
+not a fresh-generation performance sample.
+
+Run `python tools/geology/test_geology.py` for deterministic order, raw boundary,
+scale equivalence, ore-host and capsule intersection checks. The pure-model atlas
+is exported by `tools/geology/GeologyAtlas.java` and rendered by
+`tools/geology/render_atlas.py`; its images are labelled as model samples, not
+Minecraft screenshots. Inspect saved native chunks separately before accepting
+the integrated result.
+
+The performance budget remains **at most 2x** the legacy -64-floor FULL chunk
+census at the same TD scale. Use fresh workspace fixtures and compare matching
+seed, scale, ceiling, mods, settings, prefetch and initial caches:
+
+```text
+python tools/geology/benchmark.py prepare --target build/structure-density/depth-base --scale 2 --min-y -64
+python tools/geology/benchmark.py prepare --target build/structure-density/depth-deep --scale 2 --min-y -736
+python tools/structure_placement/run_suite.py --gradle-user-home .gradle --prefetch 8 --underground-audit build/structure-density/depth-base build/structure-density/depth-deep
+python tools/geology/benchmark.py compare --baseline build/structure-density/depth-base --candidate build/structure-density/depth-deep
+```
+
+Use `--java-home` for the installed Java 21 JDK when necessary. Repeat with new
+fixture names and reverse launch order, and check scale six with floor -1968.
+Changing fixture scale archives copied scale-bound river caches and retains the
+same seed/enabled/version-10 natural-river profile at the requested scale; both
+members of that pair start with fresh caches. A matching-scale pair starts with
+identically copied caches. The helper copies/enables the compatibility pack,
+records hashes and verifies actual stable inputs. Production depth profiles use
+the actual shared noise settings without a benchmark-only span override.
+
+At scale six, cold Streams river planning can exceed the probe's 300-second
+chunk-future timeout before the census completes. That failed receipt is not a
+geology timing. For a comparison with prepared river plans, finish the cache
+preparation first, then copy the same completed river caches into both fresh
+fixtures; never copy generated chunks. Keep cold-start planning cost separate.
+An interrupted suite can leave its child server finishing a plan: inspect those
+specific processes before launching another Gradle/server job.
+
+`--underground-audit` times FULL generation. Ordinary structure census requests
+STRUCTURE_STARTS and cannot measure underground cost. The post-census audit checks
+bedrock, missing legacy shelves, contents and AI base-height fingerprints. Native
+river/carver/decoration work can change finished heightmaps independently of the
+AI base heights; finished decoration is not promised to be block-identical.
+
+The pre-river geology validation on 2026-11-03 used seed `6187795302574383407`, Streams 2.16.2,
+Terralith 2.6.2, Lithostitched 1.8.1, river profile 10 and prefetch 8. Each run
+generated 64 fresh FULL chunks; each pair began with identical copied inputs
+and river caches. Repeats used fresh fixtures and reversed baseline/deep launch
+order. The generation source fingerprint was
+`484e4224f9b4feb4675c6fef7ed68275a9657ff4e7bc7f15a3a55a766b8ec901`.
+
+| TD scale / floor | Baseline census, two runs | Deep census, two runs | Increase |
+| --- | --- | --- | --- |
+| 2 / -736 | 57.06 s, 53.81 s | 61.90 s, 62.24 s | 8.5%, 15.6% |
+| 6 / -1968 | 51.55 s, 51.73 s | 75.13 s, 76.68 s | 45.7%, 48.2% |
+
+Both remain below the 2x budget in these samples. This measures generation in
+these regions with prepared river caches, not cold river planning, gameplay FPS
+or every modpack. Native samples covered chunk centers (-16,24) at scale two and
+(-48,72) at scale six. All eight runs returned process exit zero and successful
+fresh receipts. Deep samples contained caves and varied rocks, all 1,024 sampled
+columns had bottom bedrock, no obsolete -64 bedrock shelf remained, base-terrain
+height fingerprints matched, and the saved biome-source scale matched 2 or 6.
+
+Evidence lives under `build/underground-v2-{caves,repeat}-s*-comparison.json`
+and the corresponding suite receipts. Actual saved-block renderings (not game
+screenshots) are in `build/geology-saved-v2-s2` and `build/geology-saved-v2-s6`;
+their metadata records the inspected coordinates. Pure geology tests covered
+all six scales; the nine-profile model atlas covered three seeds at scales
+1, 2 and 6. Resource/reference and Terralith classifier checks also passed.
 
 ## Repeatable local validation
 

@@ -48,5 +48,7 @@ gradle.projectsEvaluated {
             systemProperty 'td.densitySupport', 'true'
         if (gradle.rootProject.findProperty('tdDensityWellSupport')?.toString()?.toBoolean())
             systemProperty 'td.densityWellSupport', 'true'
+        if (gradle.rootProject.findProperty('tdDensityUnderground')?.toString()?.toBoolean())
+            systemProperty 'td.density.underground', 'true'
     }
 }

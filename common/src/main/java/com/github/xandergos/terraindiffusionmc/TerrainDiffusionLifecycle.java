@@ -6,6 +6,7 @@ import com.github.xandergos.terraindiffusionmc.platform.PlatformPaths;
 import com.github.xandergos.terraindiffusionmc.pipeline.ModelAssetManager;
 import com.github.xandergos.terraindiffusionmc.pipeline.PipelineModels;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionDensityFunction;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoSurfaceFeature;
@@ -107,6 +108,8 @@ public final class TerrainDiffusionLifecycle {
         if (isPreviewServer(world.getServer())) return;
         if (world.dimension() == Level.OVERWORLD) {
             WorldScaleManager.initializeForWorld(world);
+            var terrainSource = TerrainDiffusionBiomeSources.find(world.getChunkSource().getGenerator().getBiomeSource());
+            if (terrainSource != null) terrainSource.bindUndergroundScale(WorldScaleManager.getCurrentScale());
             LocalTerrainProvider.init(world.getSeed());
         }
     }

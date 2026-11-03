@@ -18,6 +18,8 @@ import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.dimension.LevelStem;
 import net.minecraft.world.level.levelgen.WorldDimensions;
+import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
+import com.github.xandergos.terraindiffusionmc.world.geology.UndergroundGeneration;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -146,9 +148,12 @@ public final class WorldScaleSettingsScreen extends Screen {
             return null;
         }
 
+        boolean underground = overworldOptions.generator() instanceof NoiseBasedChunkGenerator noise
+                && UndergroundGeneration.isEnabled(noise);
         ResourceKey<DimensionType> dimensionTypeKey = ResourceKey.create(
                 Registries.DIMENSION_TYPE,
-                ResourceLocation.fromNamespaceAndPath(MOD_ID, "terrain_diffusion_scale_" + selectedScale));
+                ResourceLocation.fromNamespaceAndPath(MOD_ID,
+                        (underground ? "underground_scale_" : "terrain_diffusion_scale_") + selectedScale));
         Holder.Reference<DimensionType> selectedDimensionTypeEntry = dimensionTypeRegistry.get(dimensionTypeKey).orElse(null);
         if (selectedDimensionTypeEntry == null) {
             return null;

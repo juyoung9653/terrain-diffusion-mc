@@ -17,7 +17,7 @@ from tools.structure_placement.terrain_snapshot import prepare_snapshot, seal_sn
 
 
 def requested_receipt(path: Path, *, support: bool, well: bool, shore: bool,
-                      terrain_mode: str = "full", snapshot_id: str | None = None) -> str:
+                      underground: bool = False, terrain_mode: str = "full", snapshot_id: str | None = None) -> str:
     status = density_receipt(path)
     if status != "success":
         return status
@@ -31,6 +31,12 @@ def requested_receipt(path: Path, *, support: bool, well: bool, shore: bool,
         return "missing_well_evidence"
     if shore and not positive(row.get("shoreSamples")):
         return "missing_shore_evidence"
+    evidence = row.get("underground")
+    if underground and (not isinstance(evidence, dict)
+                        or not positive(evidence.get("sampledChunks"))
+                        or not positive(evidence.get("columns"))
+                        or row.get("chunkCensusStatus") != "minecraft:full"):
+        return "missing_underground_evidence"
     if terrain_mode != "full":
         replay = row.get("terrainReplay")
         if (row.get("terrainMode") != terrain_mode or not isinstance(replay, dict)
@@ -54,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--shore-audit", action="store_true", help="enable shore diagnostic mixin")
     parser.add_argument("--verify-support", action="store_true", help="require physical foundation checks in this server run")
     parser.add_argument("--verify-well-support", action="store_true", help="also require a basic village with a verified buried well")
+    parser.add_argument("--underground-audit", action="store_true",
+                        help="record bounded post-census material/cave/bedrock evidence")
     terrain = parser.add_mutually_exclusive_group()
     terrain.add_argument("--record-terrain", type=Path, metavar="SNAPSHOT", help="record terrain inputs during a full check (new build/terrain-replay/name)")
     terrain.add_argument("--replay-terrain", type=Path, metavar="SNAPSHOT", help="structure checks against sealed frozen terrain; excludes terrain/classifier validation")
@@ -86,6 +94,8 @@ def main(argv: list[str] | None = None) -> int:
                 options.append("-PtdDensitySupport=true")
             if well:
                 options.append("-PtdDensityWellSupport=true")
+            if args.underground_audit:
+                options.append("-PtdDensityUnderground=true")
             if snapshot:
                 options.extend([f"-PtdTerrainMode={terrain_mode}",
                                 f"-PtdTerrainSnapshotDir={snapshot.absolute()}",
@@ -93,6 +103,7 @@ def main(argv: list[str] | None = None) -> int:
             jobs.append(Job(run, gradle_command(ROOT, options, args.daemon),
                             run / "world/density-audit.json",
                             partial(requested_receipt, support=support, well=well, shore=args.shore_audit,
+                                    underground=args.underground_audit,
                                     terrain_mode=terrain_mode, snapshot_id=snapshot_id)))
         code = run_suite(ROOT, "structure-density", jobs, env)
         if code == 0 and args.record_terrain:

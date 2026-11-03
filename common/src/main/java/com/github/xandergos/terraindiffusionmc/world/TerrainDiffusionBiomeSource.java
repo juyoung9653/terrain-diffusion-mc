@@ -61,7 +61,10 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
                     RegistryOps.retrieveGetter(Registries.BIOME),
                     Codec.BOOL.optionalFieldOf("terralith", false).forGetter(source -> source.terralith),
                     Codec.BOOL.optionalFieldOf("natural_biomes", false).forGetter(source -> source.naturalBiomes),
-                    SHOWCASE_CODEC.optionalFieldOf("ecology_showcase", "").forGetter(source -> source.ecologyShowcase)
+                    SHOWCASE_CODEC.optionalFieldOf("ecology_showcase", "").forGetter(source -> source.ecologyShowcase),
+                    Codec.BOOL.optionalFieldOf("underground", false).forGetter(source -> source.underground),
+                    Codec.intRange(0, 6).optionalFieldOf("underground_scale", 0).forGetter(source -> source.undergroundScale),
+                    Codec.BOOL.optionalFieldOf("underground_rivers", false).forGetter(source -> source.undergroundRivers)
             ).apply(instance, instance.stable(TerrainDiffusionBiomeSource::new)));
 
 
@@ -69,6 +72,9 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     private final boolean terralith;
     private final boolean naturalBiomes;
     private final String ecologyShowcase;
+    private final boolean underground;
+    private final boolean undergroundRivers;
+    private volatile int undergroundScale;
     private final Map<Integer, Holder<Biome>> ecologicalBiomes;
     private final Map<Short, Holder<Biome>> terralithBiomes;
     private Map<Short, Holder<Biome>> biomeIdMap = null;
@@ -87,6 +93,21 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
 
     public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes,
                                        String ecologyShowcase) {
+        this(biomeLookup, terralith, naturalBiomes, ecologyShowcase, false);
+    }
+
+    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes,
+                                       String ecologyShowcase, boolean underground) {
+        this(biomeLookup, terralith, naturalBiomes, ecologyShowcase, underground, 0);
+    }
+
+    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes,
+                                       String ecologyShowcase, boolean underground, int undergroundScale) {
+        this(biomeLookup, terralith, naturalBiomes, ecologyShowcase, underground, undergroundScale, false);
+    }
+
+    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes,
+                                       String ecologyShowcase, boolean underground, int undergroundScale, boolean undergroundRivers) {
         if (naturalBiomes && !terralith) throw new IllegalArgumentException("natural_biomes requires terralith=true and the compatibility pack");
         if (!ecologyShowcase.isEmpty() && (!naturalBiomes || !EcologyClassifier.BIOMES.contains(ecologyShowcase)))
             throw new IllegalArgumentException("ecology_showcase requires natural_biomes and a known ecology biome");
@@ -94,6 +115,9 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         this.terralith = terralith;
         this.naturalBiomes = naturalBiomes;
         this.ecologyShowcase = ecologyShowcase;
+        this.underground = underground;
+        this.undergroundRivers = underground && undergroundRivers;
+        this.undergroundScale = undergroundScale;
         Map<Integer, Holder<Biome>> ecological = new HashMap<>();
         if (naturalBiomes) {
             for (int i = 0; i < EcologyClassifier.BIOMES.size(); i++) {
@@ -122,7 +146,28 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     }
 
     public boolean naturalBiomes() { return naturalBiomes; }
+    public boolean undergroundRivers() { return undergroundRivers; }
     public String ecologyShowcase() { return ecologyShowcase; }
+
+    /** Called on world load, before async generation; the codec preserves this identity. */
+    public synchronized void bindUndergroundScale(int scale) {
+        if (!underground) return;
+        int selected = WorldScaleManager.clampScale(scale);
+        if (undergroundScale != 0 && undergroundScale != selected)
+            throw new IllegalStateException("Underground world scale is fixed at " + undergroundScale
+                    + "; changing saved scale to " + selected + " would split existing terrain");
+        undergroundScale = selected;
+    }
+
+    public int boundUndergroundScale() {
+        if (undergroundScale == 0) throw new IllegalStateException("Underground scale was not bound on world load");
+        return undergroundScale;
+    }
+
+    private int undergroundScale() {
+        // Unbound sources exist in the creation preview, whose terrain also uses this scope.
+        return undergroundScale == 0 ? WorldScaleManager.getCurrentScale() : undergroundScale;
+    }
 
     /** Immutable-source adapter for verified background searches; never fetches another tile. */
     Holder<Biome> fastLocateBiome(int blockX, int blockY, int blockZ, int startX, int startZ,
@@ -242,9 +287,11 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
                     if (EcologyShowcaseProfile.isVanillaOcean(vanillaId)) return biomeIdMap.get(vanillaId);
                     return showcaseBiome();
                 }
-                int surfaceY = HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
+                int surfaceY = underground
+                        ? HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX], undergroundScale())
+                        : HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
                 short caveId = TerralithBiomeClassifier.selectCave(blockX, blockY, blockZ,
-                        surfaceY, surfaceId);
+                        surfaceY, surfaceId, underground, undergroundScale());
                 if (naturalBiomes && caveId == 0) {
                     Holder<Biome> ecological = ecologicalBiomes.get(data.ecology.biomeId(localX, localZ));
                     if (ecological != null) return ecological;
