@@ -8,7 +8,8 @@
         "biome_source": {
           "type": "terrain-diffusion-mc:terrain_diffusion",
           "underground": true,
-          "underground_rivers": true
+          "underground_rivers": true,
+          "underground_river_version": 2
         }
       }
     },

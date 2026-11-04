@@ -264,6 +264,10 @@ def prepare(args):
         raise RuntimeError('Fresh world metadata verification failed')
     (output_world / 'level.dat').write_bytes(gzip.compress(raw, mtime=0))
     settings = nbt.nbt_fields(gzip.decompress((output_world / 'data/terrain_diffusion_world_settings.dat').read_bytes()))
+    # The saved codec omits its semantic default, scale 2.
+    saved_scale = settings.get(('data', 'scale'), (None, None, None, 2))[3]
+    if type(saved_scale) is not int or not 1 <= saved_scale <= 6:
+        raise RuntimeError(f'Invalid saved Terrain Diffusion scale: {saved_scale!r}')
     source_metadata = {name: launch.sha256(world / name) for name in metadata if (world / name).is_file()}
     overrides = {}
     if args.without_streams:
@@ -331,7 +335,7 @@ def prepare(args):
         raise RuntimeError(f'Unexpected staged mod count: {active_mod_jars}, expected {expected_active_mod_jars}')
     save(target / 'input-manifest.json', {
         'source': str(source), 'source_world': str(world), 'versions': versions, 'seed': seed,
-        'scale': settings[('data', 'scale')][3], 'active_mod_jars': active_mod_jars,
+        'scale': saved_scale, 'active_mod_jars': active_mod_jars,
         'expected_active_mod_jars': expected_active_mod_jars,
         'files': files, 'source_files': source_files,
         'streams_ablation': streams_ablation,
@@ -349,7 +353,7 @@ def prepare(args):
         'complete': True,
     })
     print(json.dumps({'prepared': str(target), 'mods': active_mod_jars, 'seed': seed,
-                      'scale': settings[('data', 'scale')][3]}, ensure_ascii=True), flush=True)
+                      'scale': saved_scale}, ensure_ascii=True), flush=True)
 
 
 def build():

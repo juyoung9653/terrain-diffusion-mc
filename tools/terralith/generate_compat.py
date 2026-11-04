@@ -320,8 +320,10 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
         "sequence": [copy.deepcopy(td_bedrock), gate, copy.deepcopy(td_deepslate)] + copy.deepcopy(td_fallback),
     }
     generated_preset = copy.deepcopy(td_preset)
-    generated_preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["terralith"] = True
-    generated_preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["natural_biomes"] = True
+    generated_biome_source = generated_preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]
+    generated_biome_source["terralith"] = True
+    generated_biome_source["natural_biomes"] = True
+    generated_biome_source["underground_river_version"] = 2
 
     noise_output = output / "data/terrain-diffusion-mc/worldgen/noise_settings/terrain_diffusion.json"
     underground_noise_output = output / "data/terrain-diffusion-mc/worldgen/noise_settings/underground.json"
@@ -379,6 +381,7 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
             "terralith_dimension_override_copied": False,
             "world_preset_terralith_flag": True,
             "world_preset_natural_biomes_flag": True,
+            "world_preset_underground_river_version": generated_biome_source["underground_river_version"],
         },
         "surface_dependencies": dependencies,
         "biome_reference_closure": biome_closure,

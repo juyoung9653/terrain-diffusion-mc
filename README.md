@@ -1235,18 +1235,30 @@ geometry are a gameplay approximation, not a reconstruction of surveyed geology.
 
 ### Subterranean streams
 
-New presets also enable `underground_rivers`; the optional biome-source field
-defaults to false when absent, including previously saved deep worlds. These
-streams use the same sea-level-anchored TD scale as the geology. The pass runs
+New presets enable `underground_rivers` and `underground_river_version: 2`.
+The river flag defaults to false; the version defaults to 1 when absent, so
+existing saves retain their original geometry. Changing the preset does not
+upgrade saved chunks or a saved biome source. Use a fresh disposable world to
+evaluate version 2. Route distances and depth use the sea-level-anchored TD
+scale, while channel width increases only 10% per additional scale step and
+headroom stays in physical blocks. The pass runs
 after native AIR carvers, preserves roof/floor margins and structure pieces,
 and skips columns containing unknown mod blocks.
 
-Local spring-fed catchments have one to four tributaries, merging discharge
-proxies, alternating pools and descending runs, and irregular terminal ponds.
-Carbonate/sandstone and fracture context influence occurrence and orientation;
-carbonate regions can host larger dissolution pools. Width and current depend
-on accumulated source contribution, depth and slope. Asymmetric banks, rough
-roofs and patches of gravel/clay break up otherwise smooth passages.
+Version 2 uses a small collector with zero to three tributaries joining different
+nodes. Discharge increases only downstream of a confluence. Geology influences
+cubic route bends; gentle continuous head profiles replace repeated pool/drop
+steps. Wet radii are capped at 3.1 blocks times the mild width multiplier;
+rare carbonate terminal pools can be wider than their adjoining stream.
+Narrow arched shoulders replace the
+wide dry-bank tunnels. Cut-bank and exposed-bar margins vary over 0.35--2.6 physical blocks
+before rasterization and arch closure, with opposite banks biased differently.
+Their height varies independently; a
+pure neighbor check retains just enough bank rock beside higher water steps
+instead of forcing raised parallel walkways. The carver requires an existing solid bed, or cools a
+wet channel's lava-contact layer into one block of obsidian. It never fills
+old cave air with a tall foundation. Gravel/clay patches have no sinusoidal
+repetition. These are local procedural conduits, not a connected aquifer model.
 
 Successfully carved columns carry bounded chunk metadata through proto-to-full
 promotion and NBT save/load. Server-side fluid current uses that saved identity
@@ -1257,6 +1269,11 @@ Minecraft source water, catchments end locally in storage/seepage ponds, and
 there is no regional outlet routing, rainfall recharge or connection to surface
 Streams rivers. Client/player prediction and extended live fluid behavior need
 interactive testing; server item-pushing evidence does not establish those.
+The installed Streams Reflowing 2.16.2 layer producer was inspected: its async,
+cached layers cannot preserve TD's live removed-bed gate, and early empty layers
+can remain cached when speculative prefetch is enabled. Version 2 therefore
+keeps TD's marker-based current rather than registering approximate Streams
+layers for columns that might not be carved.
 
 Conceptual references, without copied code or runtime dependencies, include
 [SimpleHydrology](https://github.com/weigert/SimpleHydrology) for discharge and
@@ -1264,6 +1281,17 @@ pool/run organization, [SoilMachine](https://github.com/weigert/SoilMachine) for
 separating substrate and water, and [pyKasso](https://github.com/randlab/pyKasso)
 for geology-aware conduit networks. The latter is useful for offline scientific
 comparison, not a proposed Java dependency.
+
+The section revision also draws on the [Voxel Tools cave-generation notes](https://voxel-tools.readthedocs.io/en/latest/procedural_generation/#caves-with-graph-generator):
+rounded vertical envelopes and slowly varying local shape avoid extruding a
+fixed 2D mask into vertical walls. TD implements its own bounded smooth fields
+for left/right bank asymmetry, width, bed relief and roof relief; the water head
+is still tied to the descending route. These are geometry heuristics, not
+physical erosion. [Why Are Rivers So Complicated?](https://gist.github.com/alcatrazEscapee/8bd54572c8d3fe070d1ed92704dd6aed)
+informs source/drain direction and accumulation: tributary sources now lie
+upstream and oblique to the collector, join before its endpoint, and the
+collector widens gradually downstream. No external source code or new runtime
+dependency is included.
 
 `python -B tools/geology/river_model_tools.py` checks deterministic geometry,
 all six scale bounds, non-uphill paths, raster bank/current behavior and
@@ -1277,8 +1305,14 @@ null there is not evidence of lost metadata. Keep injected holder interfaces
 outside the configured `mixin` package; ordinary Java loads from that package
 are rejected by Mixin. `render_rivers.py` reads saved region blocks
 and the corresponding exported column CSV; its diagrams are not game screenshots.
+For a fixture expected to contain an uninterrupted stream, prepare with
+`--require-complete-river`; its `underground-river-complete.txt` marker requires actual water in every planned wet
+column. Inspect `cooledBedColumns` and saved chunk markers as well: an earlier
+scale-six pass met the minimum-water assertion while 51 lava-bed columns were
+missing. `tools/geology/audit_saved_streams.py` reports the actual/planned
+coverage and connectivity; final states alone do not prove pre-carve causation.
 
-The final stream validation on 2026-11-03 used seed `6187795302574383407`,
+The **version 1** stream validation on 2026-11-03 used seed `6187795302574383407`,
 Streams 2.16.2, Terralith 2.6.2, Lithostitched 1.8.1 and prefetch 8. Every run
 generated a fresh 64-chunk square with matched prepared surface-river caches;
 the baseline retained Y=-64 and the candidate enabled the full deep geology
@@ -1306,7 +1340,72 @@ Evidence: `build/underground-rivers-final-{s2,s6,s6-repeat}-comparison.json`,
 `build/underground-rivers-final-suite.json`, and saved diagrams under
 `build/underground-rivers-final-saved-s{2,6}`. The separately recorded
 `underground-rivers-final-s6-deep` restart was a loaded-chunk correctness test,
-not a fresh-generation performance sample.
+not a fresh-generation performance sample. These results establish functional
+behavior and bounded performance for version 1, not visual realism. Subsequent
+in-game screenshots exposed repetitive oversized dry passages and artificial
+foundations; the previous visual acceptance is withdrawn. Version 2 requires its
+own fresh receipts and actual client screenshots, including narrow passages and
+confluences. Saved-block diagrams alone are insufficient visual acceptance.
+
+Version-2 validation on 2026-11-04 used fresh 64-chunk fixtures at scale 2
+(`underground-v3-s2-v2-resume`) and scale 6 (`underground-v3-s6-contact-v2`).
+Saved-block auditing found all 656 and 391 planned wet columns respectively;
+the scale-six stream is one four-neighbor connected component with no missing
+columns. Its strict coverage receipt also records 51 cooled lava-contact beds,
+32 flow samples, nine marker/gating/item-push checks and the reversible
+above-Y=-48 current check. Evidence is in `build/underground-v3-saved-audit-final.json`
+and the corresponding fixture diagnostic receipts. An overlapping, unrelated FPS
+run invalidated the scale-six timing comparison; do not use
+`build/underground-v3-s6-final-comparison.json` as accepted performance evidence.
+The replacement `underground-v3-s6-isolated-{v2,base}` pair passed with fresh
+receipts and no external Java process detected during either launch. FULL census
+times were 124.18 s versus 89.67 s, a 38.48% increase, within the requested 2x
+limit. Both used the same copied scale-six Streams cache and fixed 64-chunk area;
+this does not measure cold Streams planning or sustained fluid ticks. The
+comparison and process monitor are `build/underground-v3-s6-isolated-comparison.json`
+and `build/underground-v3-exclusive-suite.json`. The replacement candidate also
+passed strict 391/391 wet-column coverage and all current/marker checks.
+
+`tools/geology/visual_probe.py` captures actual clients in private full-modpack
+clones. The source save is read only; its generated chunks are excluded when
+preparing a fresh fixture. The initial `small-stream` capture under
+`build/geology/visual-probe/captures` shows the narrow granite passage with
+night vision and shaders disabled. It establishes that case only, not all
+confluences or cave intersections. Model diagrams and frozen-client captures do
+not establish sustained water physics or gameplay performance.
+
+The first high-discharge `confluence` capture was rejected: it still showed a
+rectangular chamber and transverse water shelf. The above 2026-11-04 timings
+and captures predate the subsequent section/topology revision and must not be
+treated as acceptance of that revision. `UndergroundRiverSectionAudit.java`
+exports sampled width/headroom/asymmetry and graph-derived camera locations;
+those measurements support inspection but do not certify visual naturalness.
+
+The final asymmetric-bank revision passed on fresh `underground-v4-s2` and
+`underground-v4-s6` fixtures (the directory label predates the final revision).
+Both generated a fixed 64-chunk area at centers `(-61,24)` and `(-181,72)`.
+Strict native receipts and an independent saved-block audit agree on all
+612 / 1,031 planned wet columns, each forming one four-neighbor component with
+no missing water or markers. Each passed 32 downstream-current samples and
+eight marker round-trips, unmarked/removed-bed gates and item-push checks;
+scale 2 also contains eight cooled lava-contact beds. All three suite launches
+exited zero with fresh successful receipts and no external Java process detected.
+The scale-six FULL census comparison was **91.16 s baseline versus 115.16 s
+candidate (+26.32%)**, below the 2x limit. This is one matched warm-cache region,
+not a cold-planning or gameplay-FPS measurement. Evidence:
+`build/underground-v6-{final-suite,final-comparison,saved-audit}.json`.
+
+The actual `captures/v6-confluence/screenshots/fps-probe.png` was reviewed
+independently after the same-camera earlier revisions were rejected. It removes
+the paired-walkway appearance and shows an asymmetric cave stream, but this
+close angle alone does not establish the joining tributary topology. Keep this
+distinction when presenting the image. The complementary `v6-overview` actual
+client capture shows the joining channels and downstream continuation from a
+spectator cutaway. Its blue void and clipped rock faces are viewing artifacts,
+not open-air cave geometry. Both final views passed independent review; this
+remains bounded visual evidence, not a geological simulation claim.
+Private captures now check free space
+before copying and re-extract native libraries instead of inheriting DLL folders.
 
 Run `python tools/geology/test_geology.py` for deterministic order, raw boundary,
 scale equivalence, ore-host and capsule intersection checks. The pure-model atlas

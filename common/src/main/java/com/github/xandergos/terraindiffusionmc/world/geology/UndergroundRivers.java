@@ -31,7 +31,9 @@ public final class UndergroundRivers {
         if (com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle.isPreviewServer(region.getLevel().getServer())) return;
         if (!TerrainDiffusionBiomeSources.find(generator.getBiomeSource()).undergroundRivers()) return;
         int scale = TerrainDiffusionBiomeSources.find(generator.getBiomeSource()).boundUndergroundScale();
-        var rivers = new UndergroundRiverModel(region.getSeed(), scale);
+        var rivers = new UndergroundRiverModel(region.getSeed(), scale,
+                TerrainDiffusionBiomeSources.find(generator.getBiomeSource()).undergroundRiverVersion());
+        boolean compact = TerrainDiffusionBiomeSources.find(generator.getBiomeSource()).undergroundRiverVersion() >= 2;
         var geology = new GeologyModel(region.getSeed(), chunk.getMinBuildHeight(), scale);
         List<net.minecraft.world.level.levelgen.structure.BoundingBox> protectedPieces = new ArrayList<>();
         for (var start : structures.startsForStructure(chunk.getPos(), ignored -> true)) {
@@ -55,20 +57,32 @@ public final class UndergroundRivers {
                         && channel.roof() >= b.minY() && channel.liningBottom() <= b.maxY()) { blocked = true; break; }
             }
             if (blocked) continue;
+            // Compact streams cut into a real floor. Never bridge a pre-existing void
+            // with a tall artificial retaining wall or a source-water column.
+            int bottom = compact ? channel.bed() : channel.liningBottom();
+            BlockState existingBed = chunk.getBlockState(pos.set(wx, bottom, wz));
+            // Water crossing a lava pocket cools just the contact layer. Air gaps
+            // still fail closed; this never builds a foundation down into a void.
+            boolean cooledBed = compact && channel.wet() && existingBed.is(Blocks.LAVA);
+            if (compact && !existingBed.isSolid() && !cooledBed) continue;
             // Preserve unknown mod blocks; never leave half a cut through an already placed object.
-            for (int y = channel.liningBottom(); y <= channel.roof(); y++) {
+            for (int y = bottom; y <= channel.roof(); y++) {
                 if (!replaceable(chunk.getBlockState(pos.set(wx, y, wz)))) { blocked = true; break; }
             }
             if (blocked) continue;
             var rock = geology.column(wx, wz, ground);
-            for (int y = channel.liningBottom(); y <= channel.roof(); y++) {
+            for (int y = bottom; y <= channel.roof(); y++) {
+                if (compact && y == bottom && !channel.wet()) continue;
                 BlockState state = y <= channel.bed() ? bedMaterial(rock.rock(y))
                         : channel.wet() && y <= channel.water() ? WATER : AIR;
                 if (y == channel.bed() && channel.wet()) {
-                    double patch = Math.sin(wx / (7.0 * scale)) + Math.cos(wz / (11.0 * scale));
+                    double patch = compact ? sedimentPatch(region.getSeed(), wx, wz)
+                            : Math.sin(wx / (7.0 * scale)) + Math.cos(wz / (11.0 * scale));
                     if (channel.lake() && patch > .2) state = Blocks.CLAY.defaultBlockState();
-                    else if (Math.hypot(channel.flowX(), channel.flowZ()) < .65 && patch > .6)
+                    else if (Math.hypot(channel.flowX(), channel.flowZ()) < .65 && patch > .6
+                            && (!compact || chunk.getBlockState(pos.set(wx, y - 1, wz)).isSolid()))
                         state = Blocks.GRAVEL.defaultBlockState();
+                    if (cooledBed) state = Blocks.OBSIDIAN.defaultBlockState();
                 }
                 chunk.setBlockState(pos.set(wx, y, wz), state, false);
                 if (state == WATER) chunk.markPosForPostprocessing(pos);
@@ -76,6 +90,15 @@ public final class UndergroundRivers {
             if (channel.wet()) RiverChannelData.record(chunk, x, z, new RiverChannelData.Entry(
                     channel.bed(), channel.water(), channel.roof(), channel.flowX(), channel.flowZ(), channel.lake()));
         }
+    }
+
+    private static double sedimentPatch(long seed, int x, int z) {
+        // Small irregular sediment patches, independent of the TD distance multiplier.
+        long h = seed ^ Math.floorDiv(x, 3) * 0x9E3779B97F4A7C15L
+                ^ Math.floorDiv(z, 3) * 0xC2B2AE3D27D4EB4FL;
+        h = (h ^ h >>> 30) * 0xBF58476D1CE4E5B9L;
+        h = (h ^ h >>> 27) * 0x94D049BB133111EBL;
+        return ((h ^ h >>> 31) >>> 11) * 0x1.0p-53 * 2 - 1;
     }
 
     private static boolean replaceable(BlockState state) {
@@ -102,7 +125,9 @@ public final class UndergroundRivers {
 
     /** Server-authoritative current in our generated channel footprint; never requests a chunk. */
     public static Vec3 flow(BlockGetter view, BlockPos pos, FluidState fluid, Vec3 vanilla) {
-        if (!(view instanceof ServerLevel level) || pos.getY() >= -48 || !fluid.is(FluidTags.WATER)) return vanilla;
+        // A scale-one spring can be above Y=-48. Persisted carved identity,
+        // not a fixed world-height cutoff, determines whether this is our water.
+        if (!(view instanceof ServerLevel level) || !fluid.is(FluidTags.WATER)) return vanilla;
         if (com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle.isPreviewServer(level.getServer())) return vanilla;
         var generator = level.getChunkSource().getGenerator();
         if (!(generator instanceof NoiseBasedChunkGenerator noise) || !UndergroundGeneration.isEnabled(noise)) return vanilla;

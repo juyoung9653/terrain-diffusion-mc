@@ -9,13 +9,14 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build" / "underground-river-model"
 MODEL = ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/geology/UndergroundRiverModel.java"
+LEGACY_MODEL = ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/geology/LegacyUndergroundRiverModel.java"
 GEOLOGY = ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/geology/GeologyModel.java"
 TEST = ROOT / "tools/geology/UndergroundRiverModelTest.java"
 
 def main() -> None:
     jdk = Path(os.environ.get("JAVA_HOME", r"C:\Program Files\Android\Android Studio\jbr")) / "bin"
     OUT.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(jdk / "javac.exe"), "--release", "21", "-d", str(OUT), str(GEOLOGY), str(MODEL), str(TEST)], check=True, cwd=ROOT)
+    subprocess.run([str(jdk / "javac.exe"), "--release", "21", "-d", str(OUT), str(GEOLOGY), str(LEGACY_MODEL), str(MODEL), str(TEST)], check=True, cwd=ROOT)
     subprocess.run([str(jdk / "java.exe"), "-ea", "-cp", str(OUT), "UndergroundRiverModelTest", "--export", str(OUT)], check=True, cwd=ROOT)
     for scale in (2, 6): render(scale)
     render_catchment()

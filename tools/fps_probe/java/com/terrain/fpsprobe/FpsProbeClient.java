@@ -26,6 +26,9 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.GameRules;
+import net.minecraft.world.level.GameType;
+import net.minecraft.world.effect.MobEffectInstance;
+import net.minecraft.world.effect.MobEffects;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import net.neoforged.neoforge.client.event.RenderLivingEvent;
@@ -55,6 +58,8 @@ public final class FpsProbeClient {
     private static final long MAX_EXTRA_SETTLE_NS = 120_000_000_000L;
     private final boolean wantedVsync = Boolean.parseBoolean(System.getProperty("fpsprobe.vsync", "true"));
     private final boolean renderLivingEntities = Boolean.parseBoolean(System.getProperty("fpsprobe.entities", "true"));
+    private final boolean spectator = Boolean.parseBoolean(System.getProperty("fpsprobe.spectator", "false"));
+    private final boolean nightVision = Boolean.parseBoolean(System.getProperty("fpsprobe.nightVision", "false"));
     private final int wantedCap = integer("fpsprobe.cap", 70, 10, 260);
     private final double x = decimal("fpsprobe.x", 39.587), y = decimal("fpsprobe.y", 99.88247), z = decimal("fpsprobe.z", -572.153);
     private final float yaw = (float)decimal("fpsprobe.yaw", -129.3), pitch = (float)decimal("fpsprobe.pitch", 36.6);
@@ -149,7 +154,7 @@ public final class FpsProbeClient {
         level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING).set(false, null);
         level.getGameRules().getRule(GameRules.RULE_RANDOMTICKING).set(0, null);
         level.setDayTime(6000L); level.setWeatherParameters(0, 0, false, false);
-        if (player != null) { player.teleportTo(level, x, y, z, yaw, pitch); player.getAbilities().mayfly=true; player.getAbilities().flying=true; player.onUpdateAbilities(); }
+        if (player != null) { if(spectator) player.setGameMode(GameType.SPECTATOR); if(nightVision) player.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, Integer.MAX_VALUE, 0, false, false)); player.teleportTo(level, x, y, z, yaw, pitch); player.getAbilities().mayfly=true; player.getAbilities().flying=true; player.onUpdateAbilities(); }
         level.getServer().tickRateManager().setFrozen(true);
         loadedNs=System.nanoTime(); frozen=true; sceneConfigured=true;
     }

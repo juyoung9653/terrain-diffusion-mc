@@ -131,7 +131,8 @@ def encoded_string(value: str) -> bytes:
     return len(encoded).to_bytes(2, "big") + encoded
 
 
-def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = False) -> None:
+def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = False,
+                river_version: int = 2) -> None:
     """Patch only overworld registry ids and the TD biome-source experiment bit."""
     raw = gzip.decompress(path.read_bytes())
     before = nbt_fields(raw)
@@ -149,6 +150,7 @@ def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = Fal
     bound_scale = BIOME_SOURCE + ("underground_scale",)
     patches: list[tuple[int, int, bytes]] = []
     river_flag = BIOME_SOURCE + ("underground_rivers",)
+    river_version_field = BIOME_SOURCE + ("underground_river_version",)
     if river_flag in before:
         kind, start, end, _old = before[river_flag]
         if kind != 1:
@@ -157,6 +159,17 @@ def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = Fal
     else:
         patches.append((before[BIOME_SOURCE][2] - 1, before[BIOME_SOURCE][2] - 1,
                         named_byte("underground_rivers", underground and rivers)))
+    if river_version not in (1, 2):
+        raise ValueError("underground river version must be 1 or 2")
+    if underground and rivers:
+        if river_version_field in before:
+            kind, start, end, _old = before[river_version_field]
+            if kind != 3:
+                raise ValueError("Existing underground_river_version is not an int")
+            patches.append((start, end, scalar_payload(kind, river_version)))
+        else:
+            patches.append((before[BIOME_SOURCE][2] - 1, before[BIOME_SOURCE][2] - 1,
+                            named_int("underground_river_version", river_version)))
     for key, value in changes.items():
         _kind, start, end, _old = before[key]
         patches.append((start, end, encoded_string(value)))
@@ -195,6 +208,8 @@ def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = Fal
             or after[flag][3] != (1 if underground else 0)
             or after[bound_scale][3] != 0):
         raise AssertionError("level.dat worldgen patch did not round-trip")
+    if underground and rivers and after[river_version_field][3] != river_version:
+        raise AssertionError("level.dat cave river version did not round-trip")
     path.write_bytes(gzip.compress(raw))
 
 
@@ -370,6 +385,8 @@ def write_depth_override(world: Path, scale: int, min_y: int, ceiling: int, *, u
 
 
 def prepare(args: argparse.Namespace) -> dict[str, object]:
+    if args.require_complete_river and not (args.rivers and args.min_y < -64):
+        raise ValueError("--require-complete-river requires an enabled deep river fixture")
     source = args.source.resolve(strict=True)
     target = args.target.resolve()
     if target.exists():
@@ -399,9 +416,12 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         patch_saved_scale(world / "data/terrain_diffusion_world_settings.dat", scale)
     river_cache = fresh_river_cache_for_scale(target, source_scale=saved, scale=scale)
     ceiling = ceiling_for_saved_dimension(world) if args.scale is None else ceiling_for_scale(scale)
-    patch_level(world / "level.dat", scale=scale, underground=args.min_y < -64, rivers=args.rivers)
+    patch_level(world / "level.dat", scale=scale, underground=args.min_y < -64,
+                rivers=args.rivers, river_version=args.river_version)
     if args.rivers and args.min_y < -64:
         (target / "underground-river-audit.txt").write_text("true\n", encoding="ascii")
+        if args.require_complete_river:
+            (target / "underground-river-complete.txt").write_text("true\n", encoding="ascii")
     write_depth_override(world, scale, args.min_y, ceiling, underground=args.min_y < -64)
     (target / "underground-audit.txt").write_text("true\n", encoding="ascii")
     inputs = verified_inputs(target)
@@ -415,6 +435,8 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         "riverCache": river_cache,
         "mode": "underground" if args.min_y < -64 else "baseline",
         "undergroundRivers": args.rivers and args.min_y < -64,
+        "undergroundRiverVersion": args.river_version if args.rivers and args.min_y < -64 else None,
+        "riverCompleteCoverageRequired": args.require_complete_river,
     }
     (target / "underground-benchmark.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest
@@ -503,6 +525,10 @@ def main(argv: list[str] | None = None) -> int:
     stage.add_argument("--min-y", type=int, required=True)
     stage.add_argument("--scale", type=int, choices=range(1, 7))
     stage.add_argument("--rivers", action="store_true", help="enable the new-world cave river profile and require actual river evidence")
+    stage.add_argument("--river-version", type=int, choices=(1, 2), default=2,
+                       help="persisted cave-river model version; applied only with --rivers")
+    stage.add_argument("--require-complete-river", action="store_true",
+                       help="require every planned wet column in a known uninterrupted stream fixture")
     stage.add_argument("--center", default="0,0")
     stage.add_argument("--radius", type=int, default=4)
     check = commands.add_parser("compare")

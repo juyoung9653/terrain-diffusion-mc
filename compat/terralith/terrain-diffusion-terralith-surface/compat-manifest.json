@@ -243,6 +243,7 @@
     "vanilla_shore_rules_outside_terralith_gate": true,
     "vanilla_stony_shore": "minecraft:stony_shore",
     "world_preset_natural_biomes_flag": true,
+    "world_preset_underground_river_version": 2,
     "world_preset_terralith_flag": true
   }
 }

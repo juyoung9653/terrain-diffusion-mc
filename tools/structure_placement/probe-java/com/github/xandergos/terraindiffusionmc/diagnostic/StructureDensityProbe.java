@@ -471,8 +471,10 @@ public final class StructureDensityProbe {
         result.put("bands",bandRows);
         if(Files.exists(level.getServer().getServerDirectory().resolve("underground-river-audit.txt"))) {
             if(terrainSource==null || !terrainSource.undergroundRivers()) throw new AssertionError("Cave river profile is disabled");
-            var rivers=new com.github.xandergos.terraindiffusionmc.world.geology.UndergroundRiverModel(level.getSeed(),terrainSource.boundUndergroundScale());
-            long wetColumns=0, present=0, supported=0, airAbove=0;
+            var rivers=new com.github.xandergos.terraindiffusionmc.world.geology.UndergroundRiverModel(
+                    level.getSeed(),terrainSource.boundUndergroundScale(),terrainSource.undergroundRiverVersion());
+            result.put("riverVersion",terrainSource.undergroundRiverVersion());
+            long wetColumns=0, present=0, supported=0, airAbove=0, cooledBeds=0;
             List<BlockPos> flowSamples=new ArrayList<>();
             Map<ChunkPos,Integer> flowSamplesPerChunk=new LinkedHashMap<>();
             for(var cp:sampled) {
@@ -486,6 +488,7 @@ public final class StructureDensityProbe {
                     if(chunk.getBlockState(p).is(net.minecraft.world.level.block.Blocks.WATER)) {
                         present++;
                         if(chunk.getBlockState(new BlockPos(wx,c.bed(),wz)).isSolid()) supported++;
+                        if(chunk.getBlockState(new BlockPos(wx,c.bed(),wz)).is(net.minecraft.world.level.block.Blocks.OBSIDIAN)) cooledBeds++;
                         if(chunk.getBlockState(p.above()).isAir()) airAbove++;
                         // Keep flow validation spatially diverse: at most four columns
                         // from each of up to eight independently loaded chunks.
@@ -534,10 +537,40 @@ public final class StructureDensityProbe {
                         var state=level.getFluidState(p);
                         var velocity=state.getFlow(level,p);
                         var channel=rivers.column(p.getX(),p.getZ());
-                        if(velocity.x*channel.flowX()+velocity.z*channel.flowZ()>.1) n++;
+                        double expectedSpeed=Math.hypot(channel.flowX(),channel.flowZ());
+                        double actualSpeed=Math.hypot(velocity.x,velocity.z);
+                        double alignment=velocity.x*channel.flowX()+velocity.z*channel.flowZ();
+                        if(expectedSpeed>0 && actualSpeed>=expectedSpeed*.95 && actualSpeed<=expectedSpeed*1.05
+                                && alignment>=expectedSpeed*actualSpeed*.99) n++;
                     }
                     return n;
                 }).get(30,TimeUnit.SECONDS);
+                // Scale-one springs can lie above the former fixed Y=-48 gate.
+                // Exercise persisted identity at that height, then restore the fixture.
+                level.getServer().submit(() -> {
+                    if(flowSamples.isEmpty()) throw new AssertionError("No river sample for shallow-current check");
+                    var p=flowSamples.getFirst();
+                    var loaded=level.getChunkSource().getChunkNow(p.getX()>>4,p.getZ()>>4);
+                    var original=RiverChannelData.get(loaded,p.getX()&15,p.getZ()&15);
+                    var shallow=new BlockPos(p.getX(),-32,p.getZ());
+                    var shallowBed=shallow.below();
+                    var waterBefore=loaded.getBlockState(shallow);
+                    var bedBefore=loaded.getBlockState(shallowBed);
+                    try {
+                        loaded.setBlockState(shallowBed,net.minecraft.world.level.block.Blocks.STONE.defaultBlockState(),false);
+                        loaded.setBlockState(shallow,net.minecraft.world.level.block.Blocks.WATER.defaultBlockState(),false);
+                        RiverChannelData.record(loaded,p.getX()&15,p.getZ()&15,
+                                new RiverChannelData.Entry(-33,-32,-29,original.flowX(),original.flowZ(),false));
+                        var actual=UndergroundRivers.flow(level,shallow,level.getFluidState(shallow),net.minecraft.world.phys.Vec3.ZERO);
+                        if(Math.abs(actual.x-original.flowX())>1e-9 || Math.abs(actual.z-original.flowZ())>1e-9)
+                            throw new AssertionError("Marked shallow river current was suppressed");
+                    } finally {
+                        RiverChannelData.record(loaded,p.getX()&15,p.getZ()&15,original);
+                        loaded.setBlockState(shallow,waterBefore,false);
+                        loaded.setBlockState(shallowBed,bedBefore,false);
+                    }
+                }).get(30,TimeUnit.SECONDS);
+                result.put("shallowRiverCurrentChecked",true);
                 markerRoundTrips=level.getServer().submit(() -> {
                     Set<ChunkPos> checked=new HashSet<>();
                     for(var p:flowSamples) {
@@ -603,7 +636,11 @@ public final class StructureDensityProbe {
                     "supportedWaterColumns",supported,"airAboveWaterColumns",airAbove,
                     "currentSamples",flowSamples.size(),"downstreamCurrents",currents,
                     "markerSerializationChunks",markerRoundTrips,"unmarkedAndRemovedBedChecks",markerRoundTrips,
-                    "nativeItemPushChecks",markerRoundTrips));
+                    "nativeItemPushChecks",markerRoundTrips,"cooledBedColumns",cooledBeds));
+            boolean completeRequired=Files.exists(level.getServer().getServerDirectory().resolve("underground-river-complete.txt"));
+            result.put("riverCompleteCoverageRequired",completeRequired);
+            if(completeRequired && present!=wetColumns)
+                throw new AssertionError("Required complete river fixture contains missing water: "+result.get("rivers"));
             if(present<16 || supported!=present || airAbove<present*.9 || currents==0 || currents!=flowSamples.size())
                 throw new AssertionError("Cave river water/support/current evidence incomplete: "+result.get("rivers"));
         }

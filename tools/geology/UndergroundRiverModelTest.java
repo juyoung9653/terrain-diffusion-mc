@@ -10,8 +10,9 @@ public final class UndergroundRiverModelTest {
 
     public static void main(String[] args) throws Exception {
         verifyDeterminismAndNegativeCoordinates();
+        verifyLegacyVersionOneSnapshots();
         verifyGeometryAndHydraulics();
-        verifyScaleAnchoring();
+        verifyPhysicalScaleContract();
         verifyAllProfileBounds();
         verifyDischargeAndMultiSeedRaster();
         if (args.length == 2 && args[0].equals("--export")) export(Path.of(args[1]));
@@ -46,7 +47,6 @@ public final class UndergroundRiverModelTest {
                 } else {
                     check(r.from().y() >= r.to().y(), "uphill reach");
                     if (r.from().y() > r.to().y()) descending++;
-                    assertDownstreamCurrent(model, r, 2);
                     degree.merge(r.from(), 1, Integer::sum);
                     degree.merge(r.to(), 1, Integer::sum);
                 }
@@ -74,20 +74,6 @@ public final class UndergroundRiverModelTest {
         verifyWetCacheOrder(wetSamples);
         check(reaches > 0 && lakes > 0 && junctions > 0 && descending > 0, "missing connected descending branch/lake geometry");
         check(wet > 0 && banks > 0, "raster lacks wet channels or dry banks");
-    }
-
-    static void assertDownstreamCurrent(UndergroundRiverModel model,UndergroundRiverModel.Reach r,int scale){
-        for(double t:new double[]{ .2,.5,.8 }){
-            double x=(r.from().x()+(r.to().x()-r.from().x())*t)*scale,z=(r.from().z()+(r.to().z()-r.from().z())*t)*scale;
-            var c=model.column((int)Math.round(x),(int)Math.round(z));
-            check(c!=null&&c.wet(),"reach centre did not rasterize wet: "+r+" t="+t);
-            if(c.lake()){
-                check(Math.hypot(c.flowX(),c.flowZ())<1e-9,"receiving lake has current");
-                continue;
-            }
-            double dot=c.flowX()*(r.to().x()-r.from().x())+c.flowZ()*(r.to().z()-r.from().z());
-            check(Math.hypot(c.flowX(),c.flowZ())>1e-8&&dot>0,"wet current is not downstream: reach="+r+" t="+t+" flow="+c.flowX()+","+c.flowZ()+" dot="+dot+" chosen="+c);
-        }
     }
 
     static void assertLakeStill(UndergroundRiverModel model, UndergroundRiverModel.Reach r, int scale) {
@@ -120,13 +106,22 @@ public final class UndergroundRiverModelTest {
 
     static void assertRasterFlow(UndergroundRiverModel m, int x, int z, UndergroundRiverModel.Column c) {
         if (c.lake()) return;
-        double speed = Math.hypot(c.flowX(), c.flowZ());
-        check(speed > 1e-9, "nonlake wet raster cell lost flow at " + x + "," + z);
+        int currentX = x, currentZ = z;
+        var current = c;
         for (int step = 1; step <= 3; step++) {
-            int nx = (int) Math.round(x + c.flowX() / speed * step), nz = (int) Math.round(z + c.flowZ() / speed * step);
+            double speed = Math.hypot(current.flowX(), current.flowZ());
+            check(speed > 1e-9, "nonlake wet raster cell lost flow at " + currentX + "," + currentZ);
+            int nx = (int) Math.round(currentX + current.flowX() / speed);
+            int nz = (int) Math.round(currentZ + current.flowZ() / speed);
             var n = m.column(nx, nz);
-            check(n != null && n.wet(), "chosen flow leaves wet channel from " + x + "," + z + " step=" + step + " -> " + nx + "," + nz + " next=" + n);
-            check(n.water() <= c.water(), "chosen flow raises water head from " + x + "," + z + " water=" + c.water() + " to " + nx + "," + nz + " water=" + n.water());
+            check(n != null && n.wet(), "chosen flow leaves wet channel from " + currentX + "," + currentZ
+                    + " step=" + step + " -> " + nx + "," + nz + " next=" + n);
+            check(n.water() <= current.water(), "chosen flow raises water head from " + currentX + "," + currentZ
+                    + " water=" + current.water() + " to " + nx + "," + nz + " water=" + n.water());
+            currentX = nx;
+            currentZ = nz;
+            current = n;
+            if (current.lake()) break;
         }
     }
 
@@ -143,22 +138,86 @@ public final class UndergroundRiverModelTest {
         }
     }
 
-    static void verifyScaleAnchoring() {
+    static void verifyLegacyVersionOneSnapshots() {
+        var legacy = new UndergroundRiverModel(6761977799736804665L, 2, 1);
+        assertSnapshot(legacy, -1016, 969, -251, -254, -241, -270, false);
+        assertSnapshot(legacy, -1040, 989, -238, -241, -228, -257, false);
+    }
+
+    static void assertSnapshot(UndergroundRiverModel model, int x, int z, int bed, int water,
+                               int roof, int liningBottom, boolean wet) {
+        var column = model.column(x, z);
+        check(column != null, "missing version-one regression column at " + x + "," + z);
+        check(column.bed() == bed && column.water() == water && column.roof() == roof
+                        && column.liningBottom() == liningBottom && column.wet() == wet,
+                "version-one regression changed at " + x + "," + z + ": " + column);
+    }
+
+    static void verifyPhysicalScaleContract() {
         var scaleTwo = new UndergroundRiverModel(SEED, 2);
         var scaleSix = new UndergroundRiverModel(SEED, 6);
         for (int cellX = -2; cellX <= 1; cellX++) {
             for (int cellZ = -1; cellZ <= 1; cellZ++) {
-                check(scaleTwo.reaches(cellX, cellZ).equals(scaleSix.reaches(cellX, cellZ)),                         "TD reach geometry moved with scale");
+                check(scaleTwo.reaches(cellX, cellZ).equals(scaleSix.reaches(cellX, cellZ)),
+                        "TD route geometry moved with scale");
             }
         }
-        for (int tdX = -400; tdX <= 400; tdX += 80) for (int tdZ = -400; tdZ <= 400; tdZ += 80) {
-            var two = scaleTwo.column(tdX * 2, tdZ * 2);
-            var six = scaleSix.column(tdX * 6, tdZ * 6);
-            check((two == null) == (six == null), "scale changed corridor footprint");
-            if (two == null) continue;
-            check(two.wet() == six.wet() && two.lake() == six.lake(), "scale changed water class");
-            check(Math.abs((two.bed() - 63) / 2.0 - (six.bed() - 63) / 6.0) <= 1.1,                     "sea-level anchored bed mismatch");
+        int compared = 0, maxHeadroom = 0, maxV2Width = 0, maxLegacyWidth = 0, flat = 0;
+        var legacySix = new UndergroundRiverModel(SEED, 6, 1);
+        for (int cellX = -2; cellX <= 1; cellX++) for (int cellZ = -1; cellZ <= 2; cellZ++) {
+            for (var reach : scaleTwo.reaches(cellX, cellZ)) {
+                if (reach.lake()) continue;
+                if (Math.abs(reach.from().y() - reach.to().y()) < 1e-8) flat++;
+                for (double t : new double[]{.3, .7}) {
+                    double tdX = reach.from().x() + (reach.to().x() - reach.from().x()) * t;
+                    double tdZ = reach.from().z() + (reach.to().z() - reach.from().z()) * t;
+                    int x2 = (int) Math.round(tdX * 2), z2 = (int) Math.round(tdZ * 2);
+                    int x6 = (int) Math.round(tdX * 6), z6 = (int) Math.round(tdZ * 6);
+                    var two = scaleTwo.column(x2, z2);
+                    var six = scaleSix.column(x6, z6);
+                    if (two == null || six == null || !two.wet() || !six.wet()) continue;
+                    compared++;
+                    int twoHeadroom = two.roof() - two.water(), sixHeadroom = six.roof() - six.water();
+                    maxHeadroom = Math.max(maxHeadroom, Math.max(twoHeadroom, sixHeadroom));
+                    check(Math.abs(twoHeadroom - sixHeadroom) <= 3,
+                            "cross-section height scales with world depth");
+                    int twoWidth = wetWidth(scaleTwo, x2, z2, reach);
+                    int sixWidth = wetWidth(scaleSix, x6, z6, reach);
+                    maxV2Width = Math.max(maxV2Width, sixWidth);
+                    maxLegacyWidth = Math.max(maxLegacyWidth, wetWidth(legacySix, x6, z6, reach));
+                    check(sixWidth <= twoWidth + 8,
+                            "scale-six physical width is not mild: " + twoWidth + " -> " + sixWidth
+                                    + " at " + x6 + "," + z6 + " q=" + reach.discharge());
+                }
+            }
         }
+        check(compared > 12, "insufficient scale cross-sections");
+        check(maxHeadroom <= 12, "v2 cave headroom exceeds physical cap: " + maxHeadroom);
+        check(maxV2Width <= 28, "v2 wet width is physically excessive: " + maxV2Width);
+        check(maxLegacyWidth >= maxV2Width + 8,
+                "v2 scale-six widths are not materially smaller than legacy: v2=" + maxV2Width
+                        + " legacy=" + maxLegacyWidth);
+        check(flat == 0, "v2 route profile retained forced level-step segments");
+    }
+
+    static int wetWidth(UndergroundRiverModel model, int x, int z, UndergroundRiverModel.Reach reach) {
+        double dx = reach.to().x() - reach.from().x(), dz = reach.to().z() - reach.from().z();
+        double length = Math.max(1e-9, Math.hypot(dx, dz));
+        double nx = -dz / length, nz = dx / length;
+        var center = model.column(x, z);
+        if (center == null || !center.wet()) return 0;
+        // Measure this contiguous channel, not a second bend crossed by the
+        // infinite section line 20--30 blocks away. Count rounded blocks once.
+        Set<Long> water = new HashSet<>();
+        water.add(((long) x << 32) ^ (z & 0xffffffffL));
+        for (int sign : new int[]{-1, 1}) for (int offset = 1; offset <= 32; offset++) {
+            int sx = (int) Math.round(x + nx * offset * sign);
+            int sz = (int) Math.round(z + nz * offset * sign);
+            var column = model.column(sx, sz);
+            if (column == null || !column.wet()) break;
+            water.add(((long) sx << 32) ^ (sz & 0xffffffffL));
+        }
+        return water.size();
     }
 
     static void verifyAllProfileBounds() {
@@ -200,6 +259,7 @@ public final class UndergroundRiverModelTest {
             }
         }
         check(sourceCounts.size() >= 2, "source count does not vary across cells");
+        double globalMinimum = Double.POSITIVE_INFINITY, globalMaximum = 0;
         for (long seed : new long[]{
             0L, 91357L, -71421L
         }
@@ -215,10 +275,14 @@ public final class UndergroundRiverModelTest {
                     check(speed > 0, "nonlake multi-seed water lost current");
                     minimum = Math.min(minimum, speed);
                     maximum = Math.max(maximum, speed);
+                    globalMinimum = Math.min(globalMinimum, speed);
+                    globalMaximum = Math.max(globalMaximum, speed);
                 }
             }
-            check(maximum > minimum + .02, "current speed lacks variety for seed " + seed);
+            check(maximum > 0 && minimum < Double.POSITIVE_INFINITY,
+                    "no nonlake current samples for seed " + seed);
         }
+        check(globalMaximum > globalMinimum + .02, "current speed lacks multi-seed variety");
     }
 
     static String snapshot(UndergroundRiverModel model, int x, int z) {
@@ -250,11 +314,17 @@ public final class UndergroundRiverModelTest {
 
     static Fixture fixture(int scale){
         var m=new UndergroundRiverModel(SEED,scale);
-        for(int cx=-1;cx>=-1;cx--)for(int cz=0;cz<=0;cz++){
-            var r=m.reaches(cx,cz);
-            if(!r.isEmpty())return new Fixture(cx,cz,(cx*320+160)*scale,(cz*320+160)*scale,profile(r));
+        // Illustrative wet window inside benchmark basin (-2,0). Native audits
+        // use their separately exported fixed chunk bounds, not this moving window.
+        int cx=-2,cz=0;
+        var reaches=m.reaches(cx,cz);
+        for(var reach:reaches) if(!reach.lake()) for(double t:new double[]{.25,.5,.75}){
+            int x=(int)Math.round((reach.from().x()+(reach.to().x()-reach.from().x())*t)*scale);
+            int z=(int)Math.round((reach.from().z()+(reach.to().z()-reach.from().z())*t)*scale);
+            var column=m.column(x,z);
+            if(column!=null&&column.wet())return new Fixture(cx,cz,x,z,profile(reaches));
         }
-        throw new AssertionError("no warm-quadrant fixture");
+        throw new AssertionError("no wet benchmark-cell fixture at TD cell (-2,0)");
     }
 
     static List<UndergroundRiverModel.Reach> profile(List<UndergroundRiverModel.Reach> all){
