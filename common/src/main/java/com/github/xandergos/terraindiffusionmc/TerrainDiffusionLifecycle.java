@@ -110,6 +110,8 @@ public final class TerrainDiffusionLifecycle {
             WorldScaleManager.initializeForWorld(world);
             var terrainSource = TerrainDiffusionBiomeSources.find(world.getChunkSource().getGenerator().getBiomeSource());
             if (terrainSource != null) terrainSource.bindUndergroundScale(WorldScaleManager.getCurrentScale());
+            if (world.getChunkSource().getGenerator() instanceof net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator noise)
+                com.github.xandergos.terraindiffusionmc.world.geology.UndergroundGeneration.validateProfile(noise);
             LocalTerrainProvider.init(world.getSeed());
         }
     }

@@ -7,7 +7,7 @@
   },
   "counts": {
     "configured_carvers": 4,
-    "generated_datapack_resources": 3,
+    "generated_datapack_resources": 4,
     "source_jar_minecraft_configured_carvers": 1,
     "surface_predicate_types": 15,
     "surface_referenced_terralith_biomes": 72,
@@ -20,6 +20,7 @@
   "generated_resources": [
     "data/terrain-diffusion-mc/worldgen/noise_settings/terrain_diffusion.json",
     "data/terrain-diffusion-mc/worldgen/noise_settings/underground.json",
+    "data/terrain-diffusion-mc/worldgen/noise_settings/underground_v2.json",
     "data/terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json"
   ],
   "limitations": [
@@ -233,6 +234,11 @@
     "td_noise_shape_preserved": true,
     "td_router_preserved": true,
     "td_sea_level_preserved": true,
+    "td_v2_bedrock_rule_preserved": true,
+    "td_v2_deepslate_rule_preserved": true,
+    "td_v2_noise_shape_preserved": true,
+    "td_v2_router_preserved": true,
+    "td_v2_sea_level_preserved": true,
     "td_zero_channel_predicates": [],
     "terralith_dimension_override_copied": false,
     "uses_above_preliminary_surface": true,
@@ -243,7 +249,8 @@
     "vanilla_shore_rules_outside_terralith_gate": true,
     "vanilla_stony_shore": "minecraft:stony_shore",
     "world_preset_natural_biomes_flag": true,
-    "world_preset_underground_river_version": 2,
-    "world_preset_terralith_flag": true
+    "world_preset_terralith_flag": true,
+    "world_preset_underground_profile_version": 2,
+    "world_preset_underground_river_version": 3
   }
 }

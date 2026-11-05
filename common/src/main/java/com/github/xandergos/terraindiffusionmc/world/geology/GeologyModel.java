@@ -15,18 +15,29 @@ public final class GeologyModel {
     public static final int MIN_ROOF = 24, SEA_LEVEL = 63;
     private static final int CELL = 112, LEVEL = 92, ORE_CELL = 84;
     private final long seed;
-    private final int minY, scale;
+    private final int minY, scale, profileVersion;
     // Per-generation-pass cache. No shared mutable state or neighbor chunk reads.
     private final Map<Long, PassageTile> tiles = new LinkedHashMap<>(8, .75f, true);
 
-    public GeologyModel(long seed, int minY) { this(seed, minY, 1); }
+    public GeologyModel(long seed, int minY) { this(seed, minY, 1, 1); }
 
-    public GeologyModel(long seed, int minY, int scale) {
-        if (minY < -2032 || minY > -64 || (minY & 15) != 0 || scale < 1 || scale > 6)
-            throw new IllegalArgumentException("Invalid geology floor/scale: " + minY + "/" + scale);
+    /** The three-argument form is the persisted V1 geology contract. */
+    public GeologyModel(long seed, int minY, int scale) { this(seed, minY, scale, 1); }
+
+    /**
+     * V2 keeps the same analytic, column-local pass but selects a regional
+     * lithology province before evaluating beds and passages.  Its caller must
+     * persist this value with the world profile; it is never inferred at runtime.
+     */
+    public GeologyModel(long seed, int minY, int scale, int profileVersion) {
+        if (minY < -2032 || minY > -64 || (minY & 15) != 0 || scale < 1 || scale > 6
+                || profileVersion < 1 || profileVersion > 2)
+            throw new IllegalArgumentException("Invalid geology floor/scale/profile: "
+                    + minY + "/" + scale + "/" + profileVersion);
         this.seed = seed;
         this.minY = minY;
         this.scale = scale;
+        this.profileVersion = profileVersion;
     }
 
     public Column column(int x, int z, int surfaceY) { return new Column(x, z, surfaceY); }
@@ -53,7 +64,13 @@ public final class GeologyModel {
             lithology = lithology(gx, gz);
             // A smooth regional hydraulic-head approximation, independent of bedrock.
             // No local hill-height input: adjacent columns agree even under steep cliffs.
-            waterY = (int) Math.floor(SEA_LEVEL + scale * (-285 + smooth(gx, gz, 811, 700) * 24));
+            waterY = (int) Math.floor(SEA_LEVEL + scale * (profileVersion == 1
+                    ? -285 + smooth(gx, gz, 811, 700) * 24
+                    // A deterministic regional hydraulic head. Caves below it
+                    // are wet; cave geometry itself remains independent of
+                    // local terrain height so neighboring columns agree.
+                    : -232 + smooth(gx, gz, 811, 700) * 58
+                            + smooth(gx, gz, 812, 170) * 22));
             caves = intervals(x, z, surfaceY);
             veins = veins(gx, gz);
         }
@@ -88,11 +105,20 @@ public final class GeologyModel {
         // Buried lenticular intrusions interrupt the stratigraphy in three dimensions.
         double intrusion = Math.max(0, (smooth(x, z, 74, 130) - .16) * 170);
         double intrusionY = -155 + smooth(x, z, 75, 290) * 40;
-        return new Lithology(fold, facies, phase, intrusion, intrusionY);
+        if (profileVersion == 1) return new Lithology(fold, facies, phase, intrusion, intrusionY, 1, 0);
+
+        // A continent-sized province chooses a rock sequence; a second field moves
+        // contacts without turning the result into repeated vertical stripes.
+        int province = Math.min(3, (int) Math.floor((smooth(x, z, 770, 1450) + 1) * 2));
+        double contact = smooth(x, z, 771, 430) * 54 + smooth(x, z, 772, 115) * 16;
+        double v2Fold = fold + contact;
+        double v2Intrusion = Math.max(0, (smooth(x, z, 773, 180) - .30) * 210);
+        double v2IntrusionY = -168 + smooth(x, z, 774, 330) * 74;
+        return new Lithology(v2Fold, facies, phase, v2Intrusion, v2IntrusionY, 2, province);
     }
 
     private record Lithology(double fold, double facies, double phase,
-                             double intrusion, double intrusionY) {
+                             double intrusion, double intrusionY, int profile, int province) {
         double fracture(double y) {
             double p = phase + y * .006;
             double within = p - Math.floor(p / Math.PI) * Math.PI;
@@ -100,17 +126,35 @@ public final class GeologyModel {
         }
 
         int rock(double y) {
-            // Dipping faults taper downward instead of cutting vertical stripes through every unit.
+            // Preserve V1 exactly: its coordinates and profile are part of saved-world identity.
+            if (profile == 1) return legacyRock(y);
+            int side = (int) Math.floor((phase + y * .0045) / Math.PI);
+            double throwDepth = Math.max(0, Math.min(1, (y + 350) / 220));
+            double bed = y + fold + ((side & 1) == 0 ? 18 : -18) * throwDepth;
+            if (bed < -292) return ROCK_DEEPSLATE;
+            if (Math.abs(y - intrusionY) < intrusion) return province == 2 ? ROCK_DIORITE : ROCK_GRANITE;
+            if (fracture(y) > .965 && bed < -74) return province == 1 ? ROCK_DIORITE : ROCK_GRANITE;
+            return switch (province) {
+                // Continental sedimentary shelves: sandstone cap, carbonate lenses, then basement.
+                case 0 -> bed > 34 ? ROCK_SANDSTONE : bed > -92 ? (Math.floorMod((int) Math.floor(bed / 19), 5) == 0 ? ROCK_CALCITE : ROCK_SANDSTONE) : bed > -190 ? ROCK_STONE : ROCK_GRANITE;
+                // Karst province retains a carbonate interval but never makes it global.
+                case 1 -> bed > 48 ? ROCK_CALCITE : bed > -112 ? (Math.floorMod((int) Math.floor(bed / 16), 4) == 0 ? ROCK_STONE : ROCK_CALCITE) : bed > -222 ? ROCK_STONE : ROCK_TUFF;
+                // Uplift/intrusive province has thin sediment cover over mixed crystalline rock.
+                case 2 -> bed > 62 ? ROCK_STONE : bed > -72 ? (Math.floorMod((int) Math.floor(bed / 23), 3) == 0 ? ROCK_DIORITE : ROCK_GRANITE) : bed > -208 ? ROCK_GRANITE : ROCK_TUFF;
+                // Old basin: layered tuff/stone with a deep deepslate basement.
+                default -> bed > 42 ? ROCK_STONE : bed > -125 ? (Math.floorMod((int) Math.floor(bed / 21), 4) == 0 ? ROCK_SANDSTONE : ROCK_STONE) : bed > -238 ? ROCK_TUFF : ROCK_DEEPSLATE;
+            };
+        }
+
+        private int legacyRock(double y) {
             int side = (int) Math.floor((phase + y * .006) / Math.PI);
             double throwDepth = Math.max(0, Math.min(1, (y + 340) / 180));
             double bed = y + fold + ((side & 1) == 0 ? 14 : -14) * throwDepth;
             if (bed < -275) return ROCK_DEEPSLATE;
-            if (Math.abs(y - intrusionY) < intrusion)
-                return facies > 0 ? ROCK_DIORITE : ROCK_GRANITE;
+            if (Math.abs(y - intrusionY) < intrusion) return facies > 0 ? ROCK_DIORITE : ROCK_GRANITE;
             if (fracture(y) > .94 && bed < -55) return ROCK_GRANITE;
             if (bed < -195) return facies > .12 ? ROCK_TUFF : ROCK_GRANITE;
             if (bed < -140) return ROCK_STONE;
-            // Beds dip and fold together; thin insoluble seams remain within carbonate.
             int bedIndex = Math.floorMod((int) Math.floor(bed / 13), 7);
             if (bed < -28) return bedIndex == 0 ? ROCK_STONE : ROCK_CALCITE;
             if (bed < 28) return bedIndex < 2 ? ROCK_STONE : ROCK_SANDSTONE;
@@ -169,7 +213,16 @@ public final class GeologyModel {
                 Node here = node(gx, gz, level);
                 Lithology geology = lithology(here.x, here.z);
                 boolean carbonate = geology.rock(here.y) == ROCK_CALCITE;
-                double probability = carbonate ? .96 : .65 + geology.fracture(here.y) * .3;
+                double caveField = profileVersion == 1 ? 0
+                        : smooth(here.x, here.z, 843, 460)
+                                + smooth(here.x, here.z, 844, 105) * .42;
+                double probability = profileVersion == 1
+                        ? (carbonate ? .96 : .65 + geology.fracture(here.y) * .3)
+                        // Low-potential regions terminate rather than carrying a
+                        // uniform conduit graph across every province.
+                        : Math.max(.10, Math.min(.94, .38 + caveField * .25
+                                + geology.fracture(here.y) * .38
+                                + (carbonate ? .18 : 0)));
                 // Scatter/route in every direction. A single preferred outlet makes
                 // merging branches rather than the old repeated x/z quadrilateral mesh.
                 double angle = smooth(here.x, here.z, 841, 380) * Math.PI * 1.5
@@ -190,15 +243,25 @@ public final class GeologyModel {
                 }
                 if (first != null && unit(gx, gz, level, 501) < probability)
                     passage(segments, here, first, gx, gz, level, 502, false);
-                if (second != null && unit(gx, gz, level, 503) < (carbonate ? .16 : .06))
+                double branchChance = profileVersion == 1 ? (carbonate ? .16 : .06)
+                        : Math.max(.015, (carbonate ? .13 : .035) + caveField * .055);
+                if (second != null && unit(gx, gz, level, 503) < branchChance)
                     passage(segments, here, second, gx, gz, level, 504, false);
                 // Inclined fractures connect different elevations; shafts no longer form a grid.
+                double shaftChance = profileVersion == 1 ? .12 + geology.fracture(here.y) * .55
+                        : Math.max(.025, .07 + geology.fracture(here.y) * .36 + caveField * .10);
                 if (hasNode(gx, gz, level + 1)
-                        && unit(gx, gz, level, 505) < .12 + geology.fracture(here.y) * .55)
+                        && unit(gx, gz, level, 505) < shaftChance)
                     passage(segments, here, node(gx, gz, level + 1), gx, gz, level, 506, true);
-                if (carbonate && unit(gx, gz, level, 507) < .28) {
-                    double radius = 10 + unit(gx, gz, level, 508) * 9;
-                    segments.add(segment(here, here, radius, .45 + unit(gx, gz, level, 509) * .35));
+                double chamberChance = profileVersion == 1 ? (carbonate ? .28 : 0)
+                        : Math.max(0, carbonate ? .12 + caveField * .10
+                                : geology.rock(here.y) == ROCK_TUFF ? .035 + caveField * .025 : 0);
+                if (unit(gx, gz, level, 507) < chamberChance) {
+                    double radius = profileVersion == 1 ? 10 + unit(gx, gz, level, 508) * 9
+                            : 7 + unit(gx, gz, level, 508) * (carbonate ? 10 : 5);
+                    double aspect = profileVersion == 1 ? .45 + unit(gx, gz, level, 509) * .35
+                            : .42 + unit(gx, gz, level, 509) * .30;
+                    segments.add(segment(here, here, radius, aspect));
                 }
             }
         }
@@ -213,7 +276,12 @@ public final class GeologyModel {
         return result;
     }
 
-    private boolean hasNode(int gx, int gz, int level) { return unit(gx, gz, level, 480) > .16; }
+    private boolean hasNode(int gx, int gz, int level) {
+        if (profileVersion == 1) return unit(gx, gz, level, 480) > .16;
+        double potential = smooth(gx * CELL, gz * CELL, 845, 520)
+                + smooth(gx * CELL, gz * CELL, 846, 130) * .35;
+        return unit(gx, gz, level, 480) > Math.max(.10, Math.min(.58, .29 - potential * .18));
+    }
 
     private Node node(int gx, int gz, int level) {
         double x = gx * (double) CELL + 6 + unit(gx, gz, level, 481) * (CELL - 12);
@@ -244,6 +312,10 @@ public final class GeologyModel {
             int rock = geology.rock((previous.y + next.y) / 2);
             double radius = (rock == ROCK_CALCITE ? 5.6 : rock == ROCK_TUFF ? 4.0 : 2.7)
                     + geology.fracture((previous.y + next.y) / 2) * 2.6 + (1 + Math.sin(t * 7 + phase)) * 1.1;
+            if (profileVersion == 2) {
+                double potential = smooth((previous.x + next.x) / 2, (previous.z + next.z) / 2, 847, 180);
+                radius = Math.max(1.8, radius * (.82 + potential * .18));
+            }
             out.add(segment(previous, next, shaft ? radius * .72 : radius, shaft ? 1 : .63));
             previous = next;
         }

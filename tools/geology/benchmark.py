@@ -132,7 +132,7 @@ def encoded_string(value: str) -> bytes:
 
 
 def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = False,
-                river_version: int = 2) -> None:
+                river_version: int = 2, profile_version: int = 1) -> None:
     """Patch only overworld registry ids and the TD biome-source experiment bit."""
     raw = gzip.decompress(path.read_bytes())
     before = nbt_fields(raw)
@@ -141,8 +141,16 @@ def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = Fal
             raise ValueError(f"Missing level.dat field: {'/'.join(key)}")
     if before[GENERATOR_SETTINGS][0] != 8 or before[DIMENSION_TYPE][0] != 8 or before[BIOME_SOURCE][0] != 10:
         raise ValueError("Unexpected saved overworld worldgen representation")
+    if profile_version not in (1, 2):
+        raise ValueError("underground profile version must be 1 or 2")
+    if river_version not in (1, 2, 3):
+        raise ValueError("underground river version must be 1, 2, or 3")
+    if underground and rivers and ((river_version == 3) != (profile_version == 2)):
+        raise ValueError("cave-river version 3 requires underground profile 2, and profile 2 rivers require version 3")
     changes = {
-        GENERATOR_SETTINGS: "terrain-diffusion-mc:underground" if underground else "terrain-diffusion-mc:terrain_diffusion",
+        GENERATOR_SETTINGS: ("terrain-diffusion-mc:underground_v2" if underground and profile_version == 2
+                             else "terrain-diffusion-mc:underground" if underground
+                             else "terrain-diffusion-mc:terrain_diffusion"),
         DIMENSION_TYPE: (f"terrain-diffusion-mc:underground_scale_{scale}" if underground
                          else f"terrain-diffusion-mc:terrain_diffusion_scale_{scale}"),
     }
@@ -151,6 +159,7 @@ def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = Fal
     patches: list[tuple[int, int, bytes]] = []
     river_flag = BIOME_SOURCE + ("underground_rivers",)
     river_version_field = BIOME_SOURCE + ("underground_river_version",)
+    profile_field = BIOME_SOURCE + ("underground_profile_version",)
     if river_flag in before:
         kind, start, end, _old = before[river_flag]
         if kind != 1:
@@ -159,8 +168,6 @@ def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = Fal
     else:
         patches.append((before[BIOME_SOURCE][2] - 1, before[BIOME_SOURCE][2] - 1,
                         named_byte("underground_rivers", underground and rivers)))
-    if river_version not in (1, 2):
-        raise ValueError("underground river version must be 1 or 2")
     if underground and rivers:
         if river_version_field in before:
             kind, start, end, _old = before[river_version_field]
@@ -170,6 +177,14 @@ def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = Fal
         else:
             patches.append((before[BIOME_SOURCE][2] - 1, before[BIOME_SOURCE][2] - 1,
                             named_int("underground_river_version", river_version)))
+    if profile_field in before:
+        kind, start, end, _old = before[profile_field]
+        if kind != 3:
+            raise ValueError("Existing underground_profile_version is not an int")
+        patches.append((start, end, scalar_payload(kind, profile_version if underground else 1)))
+    else:
+        patches.append((before[BIOME_SOURCE][2] - 1, before[BIOME_SOURCE][2] - 1,
+                        named_int("underground_profile_version", profile_version if underground else 1)))
     for key, value in changes.items():
         _kind, start, end, _old = before[key]
         patches.append((start, end, encoded_string(value)))
@@ -206,7 +221,8 @@ def patch_level(path: Path, *, scale: int, underground: bool, rivers: bool = Fal
     after = nbt_fields(raw)
     if (any(after[key][3] != value for key, value in changes.items())
             or after[flag][3] != (1 if underground else 0)
-            or after[bound_scale][3] != 0):
+            or after[bound_scale][3] != 0
+            or after[profile_field][3] != (profile_version if underground else 1)):
         raise AssertionError("level.dat worldgen patch did not round-trip")
     if underground and rivers and after[river_version_field][3] != river_version:
         raise AssertionError("level.dat cave river version did not round-trip")
@@ -260,7 +276,7 @@ def patch_saved_scale(path: Path, scale: int) -> None:
     path.write_bytes(gzip.compress(raw))
 
 
-def patch_river_profile_scale(path: Path, scale: int) -> dict[str, object]:
+def patch_river_profile_scale(path: Path, scale: int, *, profile_version: int | None = None) -> dict[str, object]:
     """Retain the selected natural-river profile while binding it to the scale."""
     raw = gzip.decompress(path.read_bytes())
     before = nbt_fields(raw)
@@ -273,23 +289,33 @@ def patch_river_profile_scale(path: Path, scale: int) -> dict[str, object]:
     for key, kind in required.items():
         if key not in before or before[key][0] != kind:
             raise ValueError(f"Invalid natural-river profile field: {'/'.join(key)}")
-    if before[("data", "version")][3] != 10 or before[("data", "enabled")][3] != 1:
-        raise ValueError("Natural-river profile must retain version 10 and enabled=true")
-    current = before[("data", "scale")]
-    raw = raw[:current[1]] + scalar_payload(3, scale) + raw[current[2]:]
+    source_version = before[("data", "version")][3]
+    if source_version not in (10, 11) or before[("data", "enabled")][3] != 1:
+        raise ValueError("Natural-river profile must retain supported version 10 or 11 and enabled=true")
+    target_version = source_version if profile_version is None else profile_version
+    if target_version not in (10, 11):
+        raise ValueError("Natural-river profile version must be 10 or 11")
+    patches = [(before[("data", "scale")][1], before[("data", "scale")][2], scalar_payload(3, scale))]
+    if target_version != source_version:
+        version = before[("data", "version")]
+        patches.append((version[1], version[2], scalar_payload(3, target_version)))
+    for start, end, payload in sorted(patches, reverse=True):
+        raw = raw[:start] + payload + raw[end:]
     after = nbt_fields(raw)
     if (after[("data", "scale")][3] != scale
-            or after[("data", "version")][3] != 10
+            or after[("data", "version")][3] != target_version
             or after[("data", "enabled")][3] != 1):
         raise AssertionError("Natural-river profile scale patch did not round-trip")
     path.write_bytes(gzip.compress(raw))
     return {"seed": after[("data", "seed")][3], "scale": scale,
-            "version": 10, "enabled": True}
+            "version": target_version, "enabled": True}
 
 
-def fresh_river_cache_for_scale(target: Path, *, source_scale: int, scale: int) -> dict[str, object]:
+def fresh_river_cache_for_scale(target: Path, *, source_scale: int, scale: int,
+                                force_fresh: bool = False,
+                                natural_profile_version: int | None = None) -> dict[str, object]:
     """Archive copied scale-bound river state and leave a valid fresh cache."""
-    if scale == source_scale:
+    if scale == source_scale and not force_fresh and natural_profile_version is None:
         return {"cacheMode": "copied-for-matching-scale", "sourceScale": source_scale,
                 "scale": scale, "operations": []}
     archive = target / "benchmark-source-river-cache"
@@ -306,13 +332,14 @@ def fresh_river_cache_for_scale(target: Path, *, source_scale: int, scale: int) 
         operations.append({"move": relative.as_posix(), "archive": saved.relative_to(target).as_posix()})
     archived_profile = archive / RIVER_STATE
     if not archived_profile.is_file():
-        raise ValueError("Scale override requires copied natural-river profile")
+        raise ValueError("Fresh river cache requires copied natural-river profile")
     staged_profile = target / RIVER_STATE
     staged_profile.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(archived_profile, staged_profile)
-    profile = patch_river_profile_scale(staged_profile, scale)
+    profile = patch_river_profile_scale(staged_profile, scale, profile_version=natural_profile_version)
     return {
-        "cacheMode": "fresh-for-scale", "sourceScale": source_scale, "scale": scale,
+        "cacheMode": "fresh-for-profile" if force_fresh else "fresh-for-scale",
+        "sourceScale": source_scale, "scale": scale, "forceFresh": force_fresh,
         "operations": operations,
         "archivedSha256": {relative.as_posix(): (tree_digest(archive / relative)
                              if (archive / relative).is_dir() else sha256(archive / relative))
@@ -355,7 +382,8 @@ def _bedrock_rule(node: object, min_y: int) -> None:
             _bedrock_rule(value, min_y)
 
 
-def write_depth_override(world: Path, scale: int, min_y: int, ceiling: int, *, underground: bool) -> None:
+def write_depth_override(world: Path, scale: int, min_y: int, ceiling: int, *, underground: bool,
+                         profile_version: int = 1) -> None:
     """Override the registered experimental entries for exactly this disposable world."""
     if min_y % 16 or min_y < -2032 or min_y > -64:
         raise ValueError("min-y must be a 16-aligned value between -2032 and -64")
@@ -375,11 +403,12 @@ def write_depth_override(world: Path, scale: int, min_y: int, ceiling: int, *, u
     # selected dimension.  Historical arbitrary depths need an explicit noise
     # span so they remain comparable to their prior receipts.
     if underground and min_y != SCALE_FLOORS.get(scale):
-        noise = json.loads((world / "datapacks/terrain-diffusion-terralith-surface/data/terrain-diffusion-mc/worldgen/noise_settings/underground.json").read_text(encoding="utf-8"))
+        noise_name = "underground_v2" if profile_version == 2 else "underground"
+        noise = json.loads((world / "datapacks/terrain-diffusion-terralith-surface/data/terrain-diffusion-mc/worldgen/noise_settings" / f"{noise_name}.json").read_text(encoding="utf-8"))
         noise["noise"]["min_y"] = min_y
         noise["noise"]["height"] = height
         _bedrock_rule(noise.get("surface_rule"), min_y)
-        (pack / "data/terrain-diffusion-mc/worldgen/noise_settings/underground.json").write_text(json.dumps(noise, indent=2) + "\n", encoding="utf-8")
+        (pack / "data/terrain-diffusion-mc/worldgen/noise_settings" / f"{noise_name}.json").write_text(json.dumps(noise, indent=2) + "\n", encoding="utf-8")
     (pack / "pack.mcmeta").write_text(json.dumps({"pack": {"pack_format": 48,
         "description": f"TD disposable underground benchmark at {min_y}"}}, indent=2) + "\n", encoding="utf-8")
 
@@ -414,15 +443,21 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
     scale = saved if args.scale is None else args.scale
     if args.scale is not None:
         patch_saved_scale(world / "data/terrain_diffusion_world_settings.dat", scale)
-    river_cache = fresh_river_cache_for_scale(target, source_scale=saved, scale=scale)
+    force_fresh_cache = (args.fresh_river_cache or args.profile_version == 2
+                         or args.natural_profile_version is not None)
+    river_cache = fresh_river_cache_for_scale(target, source_scale=saved, scale=scale,
+                                               force_fresh=force_fresh_cache,
+                                               natural_profile_version=args.natural_profile_version)
     ceiling = ceiling_for_saved_dimension(world) if args.scale is None else ceiling_for_scale(scale)
     patch_level(world / "level.dat", scale=scale, underground=args.min_y < -64,
-                rivers=args.rivers, river_version=args.river_version)
+                rivers=args.rivers, river_version=args.river_version,
+                profile_version=args.profile_version)
     if args.rivers and args.min_y < -64:
         (target / "underground-river-audit.txt").write_text("true\n", encoding="ascii")
         if args.require_complete_river:
             (target / "underground-river-complete.txt").write_text("true\n", encoding="ascii")
-    write_depth_override(world, scale, args.min_y, ceiling, underground=args.min_y < -64)
+    write_depth_override(world, scale, args.min_y, ceiling, underground=args.min_y < -64,
+                         profile_version=args.profile_version)
     (target / "underground-audit.txt").write_text("true\n", encoding="ascii")
     inputs = verified_inputs(target)
     manifest = {
@@ -433,9 +468,12 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
         "center": args.center, "radius": args.radius,
         "actualInputs": inputs,
         "riverCache": river_cache,
+        "freshRiverCache": force_fresh_cache,
+        "naturalRiverProfileVersion": river_cache.get("runtimeRiverProfile", {}).get("version"),
         "mode": "underground" if args.min_y < -64 else "baseline",
         "undergroundRivers": args.rivers and args.min_y < -64,
         "undergroundRiverVersion": args.river_version if args.rivers and args.min_y < -64 else None,
+        "undergroundProfileVersion": args.profile_version if args.min_y < -64 else 1,
         "riverCompleteCoverageRequired": args.require_complete_river,
     }
     (target / "underground-benchmark.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -471,6 +509,22 @@ def compare(args: argparse.Namespace) -> dict[str, object]:
                      and base_ground.get("oceanFloorSha256") == next_ground.get("oceanFloorSha256"))
     base_terrain, next_terrain = base_ground.get("baseTerrainSha256"), next_ground.get("baseTerrainSha256")
     base_terrain_match = None if base_terrain is None or next_terrain is None else base_terrain == next_terrain
+    land_columns = (int(base_ground.get("landColumns", 0)), int(next_ground.get("landColumns", 0)))
+    land_terrain_match = (land_columns[0] > 0 and land_columns[1] > 0
+                          and base_ground.get("landBaseTerrainSha256") == next_ground.get("landBaseTerrainSha256"))
+    no_land_samples = land_columns == (0, 0)
+    marine_terrain_changed = (base_ground.get("marineBaseTerrainSha256") != next_ground.get("marineBaseTerrainSha256")
+                              and base_ground.get("marineBaseTerrainSha256") is not None
+                              and next_ground.get("marineBaseTerrainSha256") is not None)
+    base_profile = base_manifest.get("undergroundProfileVersion", 1)
+    next_profile = next_manifest.get("undergroundProfileVersion", 1)
+    same_profile = base_profile == next_profile
+    allowed_profile_transition = (base_profile, next_profile) == (1, 2)
+    if not same_profile and not allowed_profile_transition:
+        raise ValueError(f"Unsupported underground profile comparison: {base_profile} -> {next_profile}")
+    terrain_fingerprint_match = (base_terrain_match is not False if same_profile
+                                 else (land_terrain_match or no_land_samples)
+                                 and marine_terrain_changed and base_terrain_match is False)
     same_bounds = (baseline.get("centerChunk") == candidate.get("centerChunk")
                    and baseline.get("radiusChunks") == candidate.get("radiusChunks"))
     result = {"baseline": str(args.baseline), "candidate": str(args.candidate),
@@ -479,6 +533,11 @@ def compare(args: argparse.Namespace) -> dict[str, object]:
               "chunkCensusSeconds": {"baseline": base_census, "candidate": next_census,
                                       "regressionPercent": (next_census / base_census - 1.0) * 100.0},
               "surfaceFingerprintMatch": surface_match, "baseTerrainFingerprintMatch": base_terrain_match,
+              "landTerrainFingerprintMatch": land_terrain_match,
+              "landTerrainColumns": {"baseline": land_columns[0], "candidate": land_columns[1]},
+              "landTerrainNotSampled": no_land_samples,
+              "marineTerrainChanged": marine_terrain_changed,
+              "profileTransition": f"{base_profile}->{next_profile}",
               "sameBounds": same_bounds, "actualInputs": base_inputs,
               "depthOverrideDigests": {"baseline": base_inputs["depthOverride"],
                                         "candidate": next_inputs["depthOverride"]},
@@ -498,6 +557,22 @@ def compare(args: argparse.Namespace) -> dict[str, object]:
                    and next_ground.get("minY") == next_manifest.get("minY")
                    and base_ground.get("maxY") == base_manifest.get("ceiling")
                    and next_ground.get("maxY") == next_manifest.get("ceiling"))
+    profile_binding = (base_ground.get("undergroundProfileVersion")
+                       == base_manifest.get("undergroundProfileVersion")
+                       and next_ground.get("undergroundProfileVersion")
+                       == next_manifest.get("undergroundProfileVersion"))
+    marine_evidence = True
+    actual_marine_deepening = True
+    if allowed_profile_transition:
+        marine_evidence = (int(next_ground.get("marineColumns", 0)) > 0
+                           and int(next_ground.get("marineWaterColumns", 0)) > 0
+                           and next_ground.get("marineLavaAboveFloor") == 0
+                           and isinstance(next_ground.get("lowestOceanFloorY"), int)
+                           and int(next_ground["lowestOceanFloorY"]) < 63)
+        actual_marine_deepening = (isinstance(base_ground.get("lowestOceanFloorY"), int)
+                                   and isinstance(next_ground.get("lowestOceanFloorY"), int)
+                                   and int(next_ground["lowestOceanFloorY"])
+                                   < int(base_ground["lowestOceanFloorY"]))
     scale_binding = True
     if next_manifest["minY"] == SCALE_FLOORS[int(next_manifest["scale"])]:
         saved = nbt_fields(gzip.decompress((args.candidate / "world/level.dat").read_bytes()))
@@ -509,10 +584,15 @@ def compare(args: argparse.Namespace) -> dict[str, object]:
              and next_ground.get("legacyShelfBedrock") == 0)
     result["receiptEvidence"] = {"fullStatus": full, "expectedChunks": expected_chunks,
                                  "fixedArea": fixed_area, "depthRange": depth_range,
-                                 "bottomBedrock": floor, "persistedScale": scale_binding}
+                                 "bottomBedrock": floor, "persistedScale": scale_binding,
+                                 "persistedProfile": profile_binding,
+                                 "marineEvidence": marine_evidence,
+                                 "actualMarineDeepening": actual_marine_deepening}
     result["withinLimit"] = (result["chunkCensusSeconds"]["regressionPercent"] <= args.max_regression_percent
                              and same_bounds and full and fixed_area and depth_range and floor and scale_binding
-                             and base_terrain_match is not False)
+                             and profile_binding and marine_evidence
+                             and actual_marine_deepening
+                             and terrain_fingerprint_match)
     return result
 
 
@@ -525,8 +605,14 @@ def main(argv: list[str] | None = None) -> int:
     stage.add_argument("--min-y", type=int, required=True)
     stage.add_argument("--scale", type=int, choices=range(1, 7))
     stage.add_argument("--rivers", action="store_true", help="enable the new-world cave river profile and require actual river evidence")
-    stage.add_argument("--river-version", type=int, choices=(1, 2), default=2,
+    stage.add_argument("--river-version", type=int, choices=(1, 2, 3), default=2,
                        help="persisted cave-river model version; applied only with --rivers")
+    stage.add_argument("--profile-version", type=int, choices=(1, 2), default=1,
+                       help="persisted bathymetry/geology/cave profile; V2 rivers require --river-version 3")
+    stage.add_argument("--fresh-river-cache", action="store_true",
+                       help="archive copied Streams graph/cache even when the scale matches")
+    stage.add_argument("--natural-profile-version", type=int, choices=(10, 11),
+                       help="override the copied natural-river profile; requires a fresh cache")
     stage.add_argument("--require-complete-river", action="store_true",
                        help="require every planned wet column in a known uninterrupted stream fixture")
     stage.add_argument("--center", default="0,0")
@@ -543,6 +629,12 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--min-y must be -64, a scale floor, or a retained legacy comparison floor")
         if args.scale is not None and args.min_y < -64 and args.min_y != SCALE_FLOORS[args.scale]:
             parser.error("--scale deep fixtures require that scale's symmetric floor")
+        if args.profile_version == 2 and args.min_y >= -64:
+            parser.error("--profile-version 2 requires a deep fixture")
+        if args.natural_profile_version is not None and not args.fresh_river_cache:
+            parser.error("--natural-profile-version requires --fresh-river-cache")
+        if args.rivers and (args.min_y >= -64 or (args.profile_version == 2) != (args.river_version == 3)):
+            parser.error("--rivers requires a deep fixture and matching profile (V1 with river V1/V2; V2 with river V3)")
         print(json.dumps(prepare(args), indent=2))
         return 0
     result = compare(args)

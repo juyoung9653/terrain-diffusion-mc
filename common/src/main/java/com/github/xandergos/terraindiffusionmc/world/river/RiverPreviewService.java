@@ -77,6 +77,9 @@ public final class RiverPreviewService {
         requireStreamsCarvingDisabled();
         long started = System.nanoTime();
         Ground sampler;
+        var terrainSource = com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources
+                .find(level.getChunkSource().getGenerator().getBiomeSource());
+        int terrainProfile = terrainSource == null ? 1 : terrainSource.undergroundProfileVersion();
         int n = settings.size() / settings.spacing() + 1;
         double[] ground = new double[n * n], runoff = new double[n * n];
         boolean[] ocean = new boolean[n * n];
@@ -84,17 +87,17 @@ public final class RiverPreviewService {
                 .resolve(settings.cacheFileName());
         var cacheKey = new RiverPreviewCache.Key(settings.version(), settings.seed(), settings.scale(),
                 settings.originX(), settings.originZ(), settings.size(), settings.spacing(),
-                settings.minCatchment(), settings.maxFillDepth(), settings.maxCut());
+                settings.minCatchment(), settings.maxFillDepth(), settings.maxCut(), terrainProfile);
         if (Files.exists(cachePath)) {
             var cached = RiverPreviewCache.read(cachePath, cacheKey);
             ground = cached.ground(); runoff = cached.runoff(); ocean = cached.ocean();
-            sampler = new Ground(settings, cached.fullGround());
+            sampler = new Ground(settings, cached.fullGround(), terrainProfile);
             LOG.info("Loaded immutable river terrain cache: {}", cachePath.getFileName());
         } else {
             if (!WorldRiverPreviewState.mayCreateFirstCache(level)) {
                 throw new IOException("Existing river preview world is missing its immutable terrain cache; restore the world backup");
             }
-            sampler = new Ground();
+            sampler = new Ground(terrainProfile);
             var generator = level.getChunkSource().getGenerator();
             var climate = level.getChunkSource().randomState().sampler();
             var registryOps = RegistryOps.create(JsonOps.INSTANCE, level.registryAccess());
@@ -287,10 +290,14 @@ public final class RiverPreviewService {
         };
         private final int originX, originZ, side;
         private final short[] frozen;
-        Ground() { originX = 0; originZ = 0; side = 0; frozen = null; }
-        Ground(RiverPreviewSettings settings, short[] frozen) {
+        private final int terrainProfile;
+        Ground(int terrainProfile) {
+            originX = 0; originZ = 0; side = 0; frozen = null; this.terrainProfile = terrainProfile;
+        }
+        Ground(RiverPreviewSettings settings, short[] frozen, int terrainProfile) {
             this.originX = settings.originX(); this.originZ = settings.originZ();
             this.side = settings.size() + 1; this.frozen = frozen;
+            this.terrainProfile = terrainProfile;
         }
         Ground freeze(RiverPreviewSettings settings) {
             int size = settings.size() + 1;
@@ -300,7 +307,7 @@ public final class RiverPreviewService {
                 if (height < Short.MIN_VALUE || height > Short.MAX_VALUE) throw new IllegalStateException("River ground exceeds cache range");
                 snapshot[x + z * size] = (short) height;
             }
-            return new Ground(settings, snapshot);
+            return new Ground(settings, snapshot, terrainProfile);
         }
         @Override public int ground(int x, int z) {
             long dx = (long) x - originX, dz = (long) z - originZ;
@@ -318,7 +325,8 @@ public final class RiverPreviewService {
                     tiles.put(key, tile);
                 }
             }
-            return HeightConverter.convertToMinecraftHeight(tile.heightmap[Math.floorMod(z, tileSize)][Math.floorMod(x, tileSize)]) - 1;
+            return HeightConverter.convertToMinecraftHeight(tile.heightmap[Math.floorMod(z, tileSize)][Math.floorMod(x, tileSize)],
+                    com.github.xandergos.terraindiffusionmc.world.WorldScaleManager.getCurrentScale(), terrainProfile) - 1;
         }
     }
 }

@@ -4,15 +4,19 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 BASE = ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/hybridaquatic"
 
 STUBS = {
-    "com.mojang.serialization.MapCodec": """import java.util.function.Supplier; public class MapCodec<T>{public static <T> MapCodec<T> unit(Supplier<T> x){return new MapCodec<>();}}""",
+    "com.mojang.serialization.MapCodec": """import java.util.function.Function; public class MapCodec<T>{public <O> MapCodec<T> forGetter(Function<O,T> x){return this;}}""",
+    "com.mojang.serialization.Codec": """public class Codec<T>{public static Codec<Integer> intRange(int a,int b){return new Codec<>();} public MapCodec<T> optionalFieldOf(String n,T d){return new MapCodec<>();}}""",
+    "com.mojang.serialization.codecs.RecordCodecBuilder": """import com.mojang.serialization.MapCodec; import java.util.function.Function; public final class RecordCodecBuilder { public static <O> MapCodec<O> mapCodec(Function<Instance<O>,MapCodec<O>> f){return new MapCodec<>();} public static final class Instance<O>{public <A> Group<O,A> group(MapCodec<A> field){return new Group<>();}} public static final class Group<O,A>{public MapCodec<O> apply(Instance<O> i,Function<A,O> constructor){return new MapCodec<>();}} }""",
     "net.minecraft.util.KeyDispatchDataCodec": """import com.mojang.serialization.MapCodec; public class KeyDispatchDataCodec<T>{public static <T> KeyDispatchDataCodec<T> of(MapCodec<T> x){return new KeyDispatchDataCodec<>();}}""",
     "net.minecraft.world.level.levelgen.DensityFunction": """import net.minecraft.util.KeyDispatchDataCodec; public interface DensityFunction { interface FunctionContext {int blockX();int blockY();int blockZ();} interface ContextProvider {FunctionContext forIndex(int i);} interface Visitor {DensityFunction apply(DensityFunction x);} double compute(FunctionContext c);void fillArray(double[] a,ContextProvider p);DensityFunction mapAll(Visitor v);double minValue();double maxValue();KeyDispatchDataCodec<? extends DensityFunction> codec(); }""",
-    "com.github.xandergos.terraindiffusionmc.world.HeightConverter": """public final class HeightConverter { public static int convertToMinecraftHeight(short raw) { return raw / 2 + 13; } }""",
+    "com.github.xandergos.terraindiffusionmc.world.HeightConverter": """public final class HeightConverter { public static int convertToMinecraftHeight(short raw) { return raw / 2 + 13; } public static int convertToMinecraftHeight(short raw,int scale,int profile) { if(profile==1)return convertToMinecraftHeight(raw); return raw>=0?convertToMinecraftHeight(raw):raw / 2 - 77; } }""",
+    "com.github.xandergos.terraindiffusionmc.world.WorldScaleManager": """public final class WorldScaleManager { public static int getCurrentScale(){return 1;} }""",
     "com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider": """
 public final class LocalTerrainProvider {
  public static final class HeightmapData { public final short[][] heightmap; public final int width,height; public HeightmapData(short[][] v){heightmap=v;height=v.length;width=v[0].length;} }
@@ -37,19 +41,28 @@ public class HybridAquaticDensityTest {
   LocalTerrainProvider.reset(); LocalTerrainProvider.put(0,0,(short)52); double y0=d.compute(new P(0,-64,0)),y1=d.compute(new P(0,319,0)); eq(y0,y1,"Y invariant");
   LocalTerrainProvider.reset(); LocalTerrainProvider.put(0,0,(short)100);LocalTerrainProvider.put(1,0,(short)52); P[] ps={new P(0,0,0),new P(1,8,0),new P(2,16,0),new P(3,24,1)};double[] out=new double[ps.length];d.fillArray(out,provider(ps));for(int i=0;i<ps.length;i++){double expected=HybridAquaticMarineProfile.continentalnessForHeight(i<2?63:39);eq(out[i],expected,"fill parity "+i);}ok(LocalTerrainProvider.fetches==2,"one fetch per positive tile transition");
   LocalTerrainProvider.reset();LocalTerrainProvider.put(-1,-1,(short)100);LocalTerrainProvider.put(-2,-1,(short)52);P[] neg={new P(-1,0,-1),new P(-2,0,-1),new P(-3,0,-1)};out=new double[3];d.fillArray(out,provider(neg));ok(LocalTerrainProvider.fetches==2,"negative tile transitions");
+  LocalTerrainProvider.reset();LocalTerrainProvider.put(0,0,(short)-20);double legacy=d.compute(new P(0,0,0));var deep=new HybridAquaticContinentalnessDensityFunction(2);double corrected=deep.compute(new P(0,0,0));eq(legacy,HybridAquaticMarineProfile.continentalnessForHeight(3),"legacy negative conversion parity");eq(corrected,HybridAquaticMarineProfile.continentalnessForHeight(-87),"V2 negative conversion");ok(legacy!=corrected,"V2 must change only its own marine sample");
   LocalTerrainProvider.reset();boolean threw=false;try{d.compute(new P(0,0,0));}catch(IllegalStateException e){threw=true;}ok(threw,"missing tile fails closed");System.out.println("HybridAquaticDensityTest: PASS (conversion, cursor, fill, negative, missing)"); }
 }
 """
 
 def main():
-    home=Path(os.environ["JAVA_HOME"]) if os.environ.get("JAVA_HOME") else None; ext=".exe" if os.name=="nt" else ""
-    javac=str(home/"bin"/("javac"+ext)) if home else shutil.which("javac"); java=str(home/"bin"/("java"+ext)) if home else shutil.which("java")
-    if not javac or not java: raise SystemExit("JDK required; set JAVA_HOME")
+    homes=([Path(os.environ["JAVA_HOME"])] if os.environ.get("JAVA_HOME") else []) + [
+        Path(r"C:\Program Files\Java\jdk-21"), Path(r"C:\Program Files\Android\Android Studio\jbr")]
+    home=next((candidate for candidate in homes if (candidate/"bin/javac.exe").is_file()),None)
+    if home is None: raise SystemExit("JDK 21 required; set JAVA_HOME")
+    javac=str(home/"bin/javac.exe"); java=str(home/"bin/java.exe")
     scratch=ROOT/".tmp";scratch.mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="hybrid-aquatic-density-",dir=scratch) as directory:
         out=Path(directory); sources=[str(BASE/"HybridAquaticMarineProfile.java"),str(BASE/"HybridAquaticContinentalnessDensityFunction.java")]
         for name,body in STUBS.items():
             package,_,_=name.rpartition(".");path=out/(name.replace(".","/")+".java");path.parent.mkdir(parents=True,exist_ok=True);path.write_text(f"package {package};\n{body}",encoding="utf-8");sources.append(str(path))
         harness=out/"HybridAquaticDensityTest.java";harness.write_text(HARNESS,encoding="utf-8");sources.append(str(harness))
-        subprocess.run([javac,"--release","21","-d",directory,*sources],check=True);subprocess.run([java,"-cp",directory,"HybridAquaticDensityTest"],check=True)
+        flags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        for command in ([javac,"--release","21","-d",directory,*sources],
+                        [java,"-cp",directory,"HybridAquaticDensityTest"]):
+            result=subprocess.run(command,capture_output=True,text=True,creationflags=flags)
+            print(result.stdout,end="")
+            print(result.stderr,end="",file=sys.stderr)
+            result.check_returncode()
 if __name__=="__main__":main()

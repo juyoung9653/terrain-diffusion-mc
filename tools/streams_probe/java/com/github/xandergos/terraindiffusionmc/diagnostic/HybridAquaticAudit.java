@@ -198,7 +198,7 @@ public final class HybridAquaticAudit {
             float weight = coarse.data[6 * plane + index];
             float rootMeters = weight > 1e-6f ? coarse.data[index] / weight : 0f;
             float signedMeters = rootMeters * Math.abs(rootMeters);
-            int estimate = HeightConverter.convertToMinecraftHeight((short)Math.max(Short.MIN_VALUE,
+            int estimate = profileHeight(level, (short)Math.max(Short.MIN_VALUE,
                     Math.min(Short.MAX_VALUE, Math.round(signedMeters))));
             int blockX = (minCellX + x) * blocksPerCell + blocksPerCell / 2;
             int blockZ = (minCellZ + z) * blocksPerCell + blocksPerCell / 2;
@@ -250,10 +250,17 @@ public final class HybridAquaticAudit {
         return result;
     }
 
+    private static int profileHeight(ServerLevel level, short meters) {
+        var source = com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources
+                .find(level.getChunkSource().getGenerator().getBiomeSource());
+        return HeightConverter.convertToMinecraftHeight(meters, WorldScaleManager.getCurrentScale(),
+                source == null ? 1 : source.undergroundProfileVersion());
+    }
+
     private static Sample findInTile(ServerLevel level, LocalTerrainProvider.HeightmapData tile, TileKey key, Kind kind) {
         int size = LocalTerrainProvider.sampleTileSize();
         for (int z = key.z; z < key.z + size; z += 16) for (int x = key.x; x < key.x + size; x += 16) {
-            int y = HeightConverter.convertToMinecraftHeight(tile.heightmap[z - key.z][x - key.x]);
+            int y = profileHeight(level, tile.heightmap[z - key.z][x - key.x]);
             if ((kind == Kind.TRENCH && (y < 2 || y > 12))
                     || (kind == Kind.SHALLOW && (y < 40 || y >= 63))
                     || (kind == Kind.LAND && y < 64)) continue;

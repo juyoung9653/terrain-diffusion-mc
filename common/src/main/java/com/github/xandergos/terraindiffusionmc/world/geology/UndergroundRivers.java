@@ -34,7 +34,8 @@ public final class UndergroundRivers {
         var rivers = new UndergroundRiverModel(region.getSeed(), scale,
                 TerrainDiffusionBiomeSources.find(generator.getBiomeSource()).undergroundRiverVersion());
         boolean compact = TerrainDiffusionBiomeSources.find(generator.getBiomeSource()).undergroundRiverVersion() >= 2;
-        var geology = new GeologyModel(region.getSeed(), chunk.getMinBuildHeight(), scale);
+        var geology = new GeologyModel(region.getSeed(), chunk.getMinBuildHeight(), scale,
+                TerrainDiffusionBiomeSources.find(generator.getBiomeSource()).undergroundProfileVersion());
         List<net.minecraft.world.level.levelgen.structure.BoundingBox> protectedPieces = new ArrayList<>();
         for (var start : structures.startsForStructure(chunk.getPos(), ignored -> true)) {
             for (var piece : start.getPieces()) {

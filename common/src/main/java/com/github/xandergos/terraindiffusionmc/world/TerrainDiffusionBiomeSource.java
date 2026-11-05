@@ -65,8 +65,10 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
                     Codec.BOOL.optionalFieldOf("underground", false).forGetter(source -> source.underground),
                     Codec.intRange(0, 6).optionalFieldOf("underground_scale", 0).forGetter(source -> source.undergroundScale),
                     Codec.BOOL.optionalFieldOf("underground_rivers", false).forGetter(source -> source.undergroundRivers),
-                    Codec.intRange(1, 2).optionalFieldOf("underground_river_version", 1)
-                            .forGetter(source -> source.undergroundRiverVersion)
+                    Codec.intRange(1, 3).optionalFieldOf("underground_river_version", 1)
+                            .forGetter(source -> source.undergroundRiverVersion),
+                    Codec.intRange(1, 2).optionalFieldOf("underground_profile_version", 1)
+                            .forGetter(source -> source.undergroundProfileVersion)
             ).apply(instance, instance.stable(TerrainDiffusionBiomeSource::new)));
 
 
@@ -77,6 +79,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     private final boolean underground;
     private final boolean undergroundRivers;
     private final int undergroundRiverVersion;
+    private final int undergroundProfileVersion;
     private volatile int undergroundScale;
     private final Map<Integer, Holder<Biome>> ecologicalBiomes;
     private final Map<Short, Holder<Biome>> terralithBiomes;
@@ -118,6 +121,20 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes,
                                        String ecologyShowcase, boolean underground, int undergroundScale,
                                        boolean undergroundRivers, int undergroundRiverVersion) {
+        this(biomeLookup, terralith, naturalBiomes, ecologyShowcase, underground, undergroundScale,
+                undergroundRivers, undergroundRiverVersion, 1);
+    }
+
+    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, boolean terralith, boolean naturalBiomes,
+                                       String ecologyShowcase, boolean underground, int undergroundScale,
+                                       boolean undergroundRivers, int undergroundRiverVersion, int undergroundProfileVersion) {
+        if (undergroundProfileVersion < 1 || undergroundProfileVersion > 2
+                || undergroundRiverVersion < 1 || undergroundRiverVersion > 3)
+            throw new IllegalArgumentException("Unsupported underground generation profile");
+        if (undergroundProfileVersion == 2 && !underground)
+            throw new IllegalArgumentException("Deep profile requires underground terrain");
+        if (underground && undergroundRivers && (undergroundRiverVersion == 3) != (undergroundProfileVersion == 2))
+            throw new IllegalArgumentException("Underground river V3 requires geology profile V2 and vice versa");
         if (naturalBiomes && !terralith) throw new IllegalArgumentException("natural_biomes requires terralith=true and the compatibility pack");
         if (!ecologyShowcase.isEmpty() && (!naturalBiomes || !EcologyClassifier.BIOMES.contains(ecologyShowcase)))
             throw new IllegalArgumentException("ecology_showcase requires natural_biomes and a known ecology biome");
@@ -128,6 +145,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         this.underground = underground;
         this.undergroundRivers = underground && undergroundRivers;
         this.undergroundRiverVersion = undergroundRiverVersion;
+        this.undergroundProfileVersion = undergroundProfileVersion;
         this.undergroundScale = undergroundScale;
         Map<Integer, Holder<Biome>> ecological = new HashMap<>();
         if (naturalBiomes) {
@@ -159,6 +177,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     public boolean naturalBiomes() { return naturalBiomes; }
     public boolean undergroundRivers() { return undergroundRivers; }
     public int undergroundRiverVersion() { return undergroundRiverVersion; }
+    public int undergroundProfileVersion() { return undergroundProfileVersion; }
     public String ecologyShowcase() { return ecologyShowcase; }
 
     /** Called on world load, before async generation; the codec preserves this identity. */
@@ -300,7 +319,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
                     return showcaseBiome();
                 }
                 int surfaceY = underground
-                        ? HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX], undergroundScale())
+                        ? HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX], undergroundScale(), undergroundProfileVersion)
                         : HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
                 short caveId = TerralithBiomeClassifier.selectCave(blockX, blockY, blockZ,
                         surfaceY, surfaceId, underground, undergroundScale());

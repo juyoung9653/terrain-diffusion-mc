@@ -255,7 +255,7 @@ public final class StreamsReflowingProbe {
                     try {
                         ChunkReceipt receipt = future.get(config.timeoutSeconds, TimeUnit.SECONDS);
                         // Fetching TD pipeline data occurs after the server task returns, so no server-thread lock is held.
-                        receipt.preCarve = preCarveHeight(receipt.sampleX, receipt.sampleZ);
+                        receipt.preCarve = preCarveHeight(level, receipt.sampleX, receipt.sampleZ);
                         receipt.baseMinusPreCarve = receipt.baseHeight - receipt.preCarve;
                         receipt.plannedChannelColumns = candidate.channelColumns;
                         receipt.plannedWaterSurfaceY = candidate.waterSurfaceY;
@@ -785,7 +785,7 @@ public final class StreamsReflowingProbe {
         return result;
     }
 
-    private static int preCarveHeight(int x, int z) {
+    private static int preCarveHeight(ServerLevel level, int x, int z) {
         int tileSize = TerrainDiffusionConfig.tileSize();
         int tileX = x >> Integer.numberOfTrailingZeros(tileSize);
         int tileZ = z >> Integer.numberOfTrailingZeros(tileSize);
@@ -796,7 +796,11 @@ public final class StreamsReflowingProbe {
         if (data == null || data.heightmap == null || data.height == 0 || data.width == 0) {
             throw new IllegalStateException("Terrain Diffusion heightmap unavailable");
         }
-        return HeightConverter.convertToMinecraftHeight(data.heightmap[z - blockStartZ][x - blockStartX]);
+        var source = com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources
+                .find(level.getChunkSource().getGenerator().getBiomeSource());
+        return HeightConverter.convertToMinecraftHeight(data.heightmap[z - blockStartZ][x - blockStartX],
+                com.github.xandergos.terraindiffusionmc.world.WorldScaleManager.getCurrentScale(),
+                source == null ? 1 : source.undergroundProfileVersion());
     }
 
     /** Exercise Streams' real player-triggered tick path, absent in a headless chunk-only probe. */

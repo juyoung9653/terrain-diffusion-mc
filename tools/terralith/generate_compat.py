@@ -21,6 +21,7 @@ from typing import Any, Iterable
 
 TD_NOISE_SETTINGS = Path("common/src/main/resources/data/terrain-diffusion-mc/worldgen/noise_settings/terrain_diffusion.json")
 TD_UNDERGROUND_NOISE_SETTINGS = Path("common/src/main/resources/data/terrain-diffusion-mc/worldgen/noise_settings/underground.json")
+TD_UNDERGROUND_V2_NOISE_SETTINGS = Path("common/src/main/resources/data/terrain-diffusion-mc/worldgen/noise_settings/underground_v2.json")
 TD_WORLD_PRESET = Path("common/src/main/resources/data/terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json")
 BIOME_PREFIX = "data/terralith/worldgen/biome/"
 JAR_OVERWORLD_NOISE = "data/minecraft/worldgen/noise_settings/overworld.json"
@@ -263,16 +264,24 @@ def validate_biome_reference_closure(jar: zipfile.ZipFile, jar_names: set[str]) 
 def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
     td_noise_path = repo_root / TD_NOISE_SETTINGS
     td_underground_noise_path = repo_root / TD_UNDERGROUND_NOISE_SETTINGS
+    td_underground_v2_noise_path = repo_root / TD_UNDERGROUND_V2_NOISE_SETTINGS
     td_preset_path = repo_root / TD_WORLD_PRESET
-    if not td_noise_path.is_file() or not td_underground_noise_path.is_file() or not td_preset_path.is_file():
-        raise ValueError("repository TD noise settings, underground noise settings, or world preset is missing")
+    if (not td_noise_path.is_file() or not td_underground_noise_path.is_file()
+            or not td_underground_v2_noise_path.is_file() or not td_preset_path.is_file()):
+        raise ValueError("repository TD noise settings, both underground noise settings, or world preset is missing")
     td_noise = json.loads(td_noise_path.read_text(encoding="utf-8"))
     td_underground_noise = json.loads(td_underground_noise_path.read_text(encoding="utf-8"))
+    td_underground_v2_noise = json.loads(td_underground_v2_noise_path.read_text(encoding="utf-8"))
     # 1.21.1 reads this density field when evaluating above_preliminary_surface.
     # The newer preliminary_surface_level key is silently ignored by its codec.
-    for source_noise in (td_noise, td_underground_noise):
+    for source_noise, terrain_profile in ((td_noise, 1), (td_underground_noise, 1),
+                                          (td_underground_v2_noise, 2)):
         router = source_noise.get("noise_router", {})
-        if (router.get("initial_density_without_jaggedness") != {"type": "terrain-diffusion-mc:terrain_diffusion"}
+        density = {"type": "terrain-diffusion-mc:terrain_diffusion"}
+        if terrain_profile == 2:
+            density["terrain_profile"] = 2
+        if (router.get("initial_density_without_jaggedness") != density
+                or router.get("final_density") != density
                 or "preliminary_surface_level" in router):
             raise ValueError("Minecraft 1.21.1 requires TD initial_density_without_jaggedness for Terralith surface rules")
     td_preset = json.loads(td_preset_path.read_text(encoding="utf-8"))
@@ -298,8 +307,10 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
     core = extract_terralith_core(terralith_noise["surface_rule"])
     legacy_bedrock, legacy_deepslate, legacy_fallback = td_base_entries(td_noise["surface_rule"])
     td_bedrock, td_deepslate, td_fallback = td_base_entries(td_underground_noise["surface_rule"])
+    v2_bedrock, v2_deepslate, v2_fallback = td_base_entries(td_underground_v2_noise["surface_rule"])
     validate_vanilla_shore_rules(legacy_fallback)
     validate_vanilla_shore_rules(td_fallback)
+    validate_vanilla_shore_rules(v2_fallback)
     # The gate prevents the source rule's generic dirt/gravel fallbacks from
     # changing TD-selected biomes.  Bedrock remains first.  Terralith's cave
     # branch must run before TD's deepslate rule, just as it does in the source.
@@ -319,19 +330,30 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
         "type": "minecraft:sequence",
         "sequence": [copy.deepcopy(td_bedrock), gate, copy.deepcopy(td_deepslate)] + copy.deepcopy(td_fallback),
     }
+    generated_underground_v2_noise = copy.deepcopy(td_underground_v2_noise)
+    generated_underground_v2_noise["surface_rule"] = {
+        "type": "minecraft:sequence",
+        "sequence": [copy.deepcopy(v2_bedrock), copy.deepcopy(gate), copy.deepcopy(v2_deepslate)]
+                    + copy.deepcopy(v2_fallback),
+    }
     generated_preset = copy.deepcopy(td_preset)
     generated_biome_source = generated_preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]
     generated_biome_source["terralith"] = True
     generated_biome_source["natural_biomes"] = True
-    generated_biome_source["underground_river_version"] = 2
+    generated_biome_source["underground_profile_version"] = 2
+    generated_biome_source["underground_river_version"] = 3
+    generated_preset["dimensions"]["minecraft:overworld"]["generator"]["settings"] = (
+            "terrain-diffusion-mc:underground_v2")
 
     noise_output = output / "data/terrain-diffusion-mc/worldgen/noise_settings/terrain_diffusion.json"
     underground_noise_output = output / "data/terrain-diffusion-mc/worldgen/noise_settings/underground.json"
+    underground_v2_noise_output = output / "data/terrain-diffusion-mc/worldgen/noise_settings/underground_v2.json"
     preset_output = output / "data/terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json"
     inventory_output = output / "terralith-biome-inventory.json"
     manifest_output = output / "compat-manifest.json"
     pack_meta_output = output / "pack.mcmeta"
-    generated_paths = {noise_output, underground_noise_output, preset_output, inventory_output, manifest_output, pack_meta_output}
+    generated_paths = {noise_output, underground_noise_output, underground_v2_noise_output,
+                       preset_output, inventory_output, manifest_output, pack_meta_output}
     if output.exists():
         unexpected = [path for path in output.rglob("*") if path.is_file() and path not in generated_paths]
         if unexpected:
@@ -347,6 +369,7 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
         "generated_resources": [
             str(noise_output.relative_to(output)).replace("\\", "/"),
             str(underground_noise_output.relative_to(output)).replace("\\", "/"),
+            str(underground_v2_noise_output.relative_to(output)).replace("\\", "/"),
             str(preset_output.relative_to(output)).replace("\\", "/"),
         ],
         "not_copied": ["Terralith biome definitions", "Terralith features", "minecraft:overworld dimension override", "Terralith density functions"],
@@ -356,7 +379,7 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
             "surface_referenced_terralith_noises": len(dependencies["noise_ids"]),
             "surface_predicate_types": len(dependencies["predicate_types"]),
             **biome_closure,
-            "generated_datapack_resources": 3,
+            "generated_datapack_resources": 4,
         },
         "validation": {
             "td_legacy_router_preserved": generated_legacy_noise["noise_router"] == td_noise["noise_router"],
@@ -370,6 +393,11 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
             "td_sea_level_preserved": generated_underground_noise["sea_level"] == td_underground_noise["sea_level"],
             "td_bedrock_rule_preserved": generated_underground_noise["surface_rule"]["sequence"][0] == td_bedrock,
             "td_deepslate_rule_preserved": generated_underground_noise["surface_rule"]["sequence"][2] == td_deepslate,
+            "td_v2_router_preserved": generated_underground_v2_noise["noise_router"] == td_underground_v2_noise["noise_router"],
+            "td_v2_noise_shape_preserved": generated_underground_v2_noise["noise"] == td_underground_v2_noise["noise"],
+            "td_v2_sea_level_preserved": generated_underground_v2_noise["sea_level"] == td_underground_v2_noise["sea_level"],
+            "td_v2_bedrock_rule_preserved": generated_underground_v2_noise["surface_rule"]["sequence"][0] == v2_bedrock,
+            "td_v2_deepslate_rule_preserved": generated_underground_v2_noise["surface_rule"]["sequence"][2] == v2_deepslate,
             "vanilla_shore_rules_outside_terralith_gate": True,
             "vanilla_sand_shores": sorted(VANILLA_SAND_SHORES),
             "vanilla_stony_shore": VANILLA_STONY_SHORE,
@@ -382,6 +410,7 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
             "world_preset_terralith_flag": True,
             "world_preset_natural_biomes_flag": True,
             "world_preset_underground_river_version": generated_biome_source["underground_river_version"],
+            "world_preset_underground_profile_version": generated_biome_source["underground_profile_version"],
         },
         "surface_dependencies": dependencies,
         "biome_reference_closure": biome_closure,
@@ -398,7 +427,11 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
         },
     }
     pack_meta = {"pack": {"pack_format": 48, "description": "Terrain Diffusion optional Terralith surface compatibility (requires Terralith + Lithostitched)"}}
-    for path, data in ((noise_output, generated_legacy_noise), (underground_noise_output, generated_underground_noise), (preset_output, generated_preset), (inventory_output, {"biomes": inventory}), (manifest_output, manifest), (pack_meta_output, pack_meta)):
+    for path, data in ((noise_output, generated_legacy_noise),
+                       (underground_noise_output, generated_underground_noise),
+                       (underground_v2_noise_output, generated_underground_v2_noise),
+                       (preset_output, generated_preset), (inventory_output, {"biomes": inventory}),
+                       (manifest_output, manifest), (pack_meta_output, pack_meta)):
         temporary = path.with_suffix(path.suffix + ".tmp")
         temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         temporary.replace(path)

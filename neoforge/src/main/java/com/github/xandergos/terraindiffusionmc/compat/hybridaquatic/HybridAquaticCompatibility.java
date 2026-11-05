@@ -50,7 +50,8 @@ public final class HybridAquaticCompatibility {
                 "Hybrid Aquatic native marine generation uses TD ground depth; trench band is 48..64 blocks deep before carving");
         return new NoiseRouter(router.barrierNoise(), router.fluidLevelFloodednessNoise(),
                 router.fluidLevelSpreadNoise(), router.lavaNoise(), router.temperature(), router.vegetation(),
-                HybridAquaticContinentalnessDensityFunction.INSTANCE, router.erosion(), router.depth(),
+                new HybridAquaticContinentalnessDensityFunction(terrain.undergroundProfileVersion()),
+                router.erosion(), router.depth(),
                 router.ridges(), router.initialDensityWithoutJaggedness(), router.finalDensity(),
                 router.veinToggle(), router.veinRidged(), router.veinGap());
     }
@@ -94,7 +95,8 @@ public final class HybridAquaticCompatibility {
         // Reject nonmarine IDs before sampling any terrain.
         if (HybridAquaticMarineProfile.oceanAlias(key.getNamespace(), key.getPath(), 0) == null) return actual;
         if (scope.groundY == Integer.MIN_VALUE)
-            scope.groundY = HybridAquaticContinentalnessDensityFunction.groundHeight(scope.x, scope.z);
+            scope.groundY = HybridAquaticContinentalnessDensityFunction.groundHeight(
+                    scope.x, scope.z, scope.terrain.undergroundProfileVersion());
         String alias = HybridAquaticMarineProfile.oceanAlias(key.getNamespace(), key.getPath(), scope.groundY);
         if (alias == null) return actual;
         var lookup = ((TerrainDiffusionBiomeSourceAccessor) scope.terrain).terrainDiffusion$biomeLookup();

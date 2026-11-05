@@ -12,7 +12,7 @@ public final class RiverPreviewCacheTest {
     public static void main(String[] args) throws Exception {
         Path directory = Files.createTempDirectory("td-river-preview-cache-test-");
         RiverPreviewCache.Key key = new RiverPreviewCache.Key(1, 12345L, 2, -256, -256,
-                256, 8, 1024, 1, 6);
+                256, 8, 1024, 1, 6, 1);
         RiverPreviewCache.Data data = sample(key);
         Path cache = directory.resolve("preview.tdrp.gz");
 
@@ -24,7 +24,7 @@ public final class RiverPreviewCacheTest {
         require(Arrays.equals(data.ocean(), loaded.ocean()), "round-trip ocean");
         require(Arrays.equals(data.fullGround(), loaded.fullGround()), "round-trip full ground");
         RiverPreviewCache.Key naturalKey = new RiverPreviewCache.Key(2, 12345L, 2, -256, -256,
-                256, 8, 1024, 1, 6);
+                256, 8, 1024, 1, 6, 1);
         expectIOException(() -> RiverPreviewCache.read(cache, naturalKey));
         Path naturalCache = directory.resolve("natural.tdrp.gz");
         RiverPreviewCache.write(naturalCache, new RiverPreviewCache.Data(naturalKey,
@@ -37,7 +37,16 @@ public final class RiverPreviewCacheTest {
         require(loaded.ground()[0] != -99, "accessor defensive copy");
 
         expectIOException(() -> RiverPreviewCache.read(cache, new RiverPreviewCache.Key(1, 12346L, 2, -256, -256,
-                256, 8, 1024, 1, 6)));
+                256, 8, 1024, 1, 6, 1)));
+
+        RiverPreviewCache.Key profile2Key = new RiverPreviewCache.Key(1, 12345L, 2, -256, -256,
+                256, 8, 1024, 1, 6, 2);
+        expectIOException(() -> RiverPreviewCache.read(cache, profile2Key));
+        Path legacy = directory.resolve("legacy.tdrp.gz");
+        writeLegacy(legacy, data);
+        require(RiverPreviewCache.read(legacy, key).key().terrainProfile() == 1,
+                "legacy cache defaults to profile 1");
+        expectIOException(() -> RiverPreviewCache.read(legacy, profile2Key));
 
         byte[] encoded = Files.readAllBytes(cache);
         Path truncated = directory.resolve("truncated.tdrp.gz");
@@ -88,6 +97,28 @@ public final class RiverPreviewCacheTest {
         try (GZIPOutputStream output = new GZIPOutputStream(Files.newOutputStream(target))) {
             output.write(decoded);
             output.write(7);
+        }
+    }
+
+    private static void writeLegacy(Path target, RiverPreviewCache.Data data) throws IOException {
+        RiverPreviewCache.Key key = data.key();
+        try (DataOutputStream output = new DataOutputStream(new GZIPOutputStream(Files.newOutputStream(target)))) {
+            output.writeInt(0x54445250);
+            output.writeInt(1);
+            output.writeInt(key.version());
+            output.writeLong(key.seed());
+            output.writeInt(key.scale());
+            output.writeInt(key.originX());
+            output.writeInt(key.originZ());
+            output.writeInt(key.size());
+            output.writeInt(key.spacing());
+            output.writeInt(key.minCatchment());
+            output.writeInt(key.maxFillDepth());
+            output.writeInt(key.maxCut());
+            for (double value : data.ground()) output.writeDouble(value);
+            for (double value : data.runoff()) output.writeDouble(value);
+            for (boolean value : data.ocean()) output.writeByte(value ? 1 : 0);
+            for (short value : data.fullGround()) output.writeShort(value);
         }
     }
 

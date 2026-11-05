@@ -22,14 +22,15 @@ import java.util.zip.GZIPOutputStream;
  */
 public final class RiverPreviewCache {
     private static final int MAGIC = 0x54445250; // TDRP
-    private static final int FORMAT_VERSION = 1;
+    private static final int FORMAT_VERSION = 2;
+    private static final int LEGACY_FORMAT_VERSION = 1;
     private static final int MAX_GRID_SIDE = 513;
 
     private RiverPreviewCache() {
     }
 
     public record Key(int version, long seed, int scale, int originX, int originZ, int size, int spacing,
-                      int minCatchment, int maxFillDepth, int maxCut) {
+                      int minCatchment, int maxFillDepth, int maxCut, int terrainProfile) {
         public Key {
             // Algorithm identity is independent of the unchanged binary input format.
             if (version != 1 && version != 2) {
@@ -37,6 +38,9 @@ public final class RiverPreviewCache {
             }
             if (scale < 1 || scale > 6) {
                 throw new IllegalArgumentException("River preview cache scale must be from 1 through 6: " + scale);
+            }
+            if (terrainProfile < 1 || terrainProfile > 2) {
+                throw new IllegalArgumentException("River preview cache terrain profile must be 1 or 2");
             }
             validateBounds(size, spacing, minCatchment, maxFillDepth, maxCut);
             if (originX > Integer.MAX_VALUE - size || originZ > Integer.MAX_VALUE - size) {
@@ -99,10 +103,11 @@ public final class RiverPreviewCache {
             if (input.readInt() != MAGIC) {
                 throw new IOException("Invalid river preview cache header");
             }
-            if (input.readInt() != FORMAT_VERSION) {
+            int format = input.readInt();
+            if (format != LEGACY_FORMAT_VERSION && format != FORMAT_VERSION) {
                 throw new IOException("Unsupported river preview cache format");
             }
-            Key actual = readKey(input);
+            Key actual = readKey(input, format);
             if (!actual.equals(expected)) {
                 throw new IOException("River preview cache key does not match this world settings");
             }
@@ -168,10 +173,11 @@ public final class RiverPreviewCache {
         }
     }
 
-    private static Key readKey(DataInputStream input) throws IOException {
+    private static Key readKey(DataInputStream input, int format) throws IOException {
         try {
             return new Key(input.readInt(), input.readLong(), input.readInt(), input.readInt(), input.readInt(),
-                    input.readInt(), input.readInt(), input.readInt(), input.readInt(), input.readInt());
+                    input.readInt(), input.readInt(), input.readInt(), input.readInt(), input.readInt(),
+                    format == LEGACY_FORMAT_VERSION ? 1 : input.readInt());
         } catch (IllegalArgumentException invalid) {
             throw new IOException("Invalid river preview cache key", invalid);
         }
@@ -188,6 +194,7 @@ public final class RiverPreviewCache {
         output.writeInt(key.minCatchment);
         output.writeInt(key.maxFillDepth);
         output.writeInt(key.maxCut);
+        output.writeInt(key.terrainProfile);
     }
 
     private static void validateBounds(int size, int spacing, int minCatchment, int maxFillDepth, int maxCut) {

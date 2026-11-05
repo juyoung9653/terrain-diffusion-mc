@@ -22,6 +22,8 @@ import java.util.List;
 public final class UndergroundGeneration {
     public static final ResourceKey<NoiseGeneratorSettings> SETTINGS = ResourceKey.create(
             Registries.NOISE_SETTINGS, ResourceLocation.fromNamespaceAndPath("terrain-diffusion-mc", "underground"));
+    public static final ResourceKey<NoiseGeneratorSettings> V2_SETTINGS = ResourceKey.create(
+            Registries.NOISE_SETTINGS, ResourceLocation.fromNamespaceAndPath("terrain-diffusion-mc", "underground_v2"));
     private static final BlockState AIR = Blocks.CAVE_AIR.defaultBlockState();
     private static final BlockState WATER = Blocks.WATER.defaultBlockState();
     private static final BlockState[] MATERIALS = new BlockState[32];
@@ -45,8 +47,16 @@ public final class UndergroundGeneration {
     private UndergroundGeneration() {}
 
     public static boolean isEnabled(NoiseBasedChunkGenerator generator) {
-        return generator.generatorSettings().is(SETTINGS)
+        return (generator.generatorSettings().is(SETTINGS) || generator.generatorSettings().is(V2_SETTINGS))
                 && TerrainDiffusionBiomeSources.isTerrainDiffusion(generator.getBiomeSource());
+    }
+
+    public static void validateProfile(NoiseBasedChunkGenerator generator) {
+        if (!isEnabled(generator)) return;
+        var source = TerrainDiffusionBiomeSources.find(generator.getBiomeSource());
+        int expected = generator.generatorSettings().is(V2_SETTINGS) ? 2 : 1;
+        if (source.undergroundProfileVersion() != expected)
+            throw new IllegalStateException("Saved underground geology and ocean settings use different profiles");
     }
 
     public static void apply(WorldGenRegion region, StructureManager structures,
@@ -56,7 +66,8 @@ public final class UndergroundGeneration {
         int minY = chunk.getMinBuildHeight();
         if (minY >= -64) return;
         var terrainSource = TerrainDiffusionBiomeSources.find(generator.getBiomeSource());
-        GeologyModel geology = new GeologyModel(region.getSeed(), minY, terrainSource.boundUndergroundScale());
+        GeologyModel geology = new GeologyModel(region.getSeed(), minY, terrainSource.boundUndergroundScale(),
+                terrainSource.undergroundProfileVersion());
         int startX = chunk.getPos().getMinBlockX(), startZ = chunk.getPos().getMinBlockZ();
         // Starts/references already exist at SURFACE. Protect each piece plus its support,
         // rather than masking an entire settlement's aggregate bounding box.

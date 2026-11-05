@@ -4,6 +4,7 @@ import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.mojang.serialization.MapCodec;
+import com.mojang.serialization.Codec;
 import net.minecraft.util.KeyDispatchDataCodec;
 import net.minecraft.world.level.levelgen.DensityFunction;
 
@@ -11,10 +12,23 @@ import net.minecraft.world.level.levelgen.DensityFunction;
 public class TerrainDiffusionDensityFunction implements DensityFunction {
 
     public static final MapCodec<TerrainDiffusionDensityFunction> CODEC =
-            MapCodec.unit(TerrainDiffusionDensityFunction::new);
+            Codec.intRange(1, 2).optionalFieldOf("terrain_profile", 1)
+                    .xmap(TerrainDiffusionDensityFunction::new, TerrainDiffusionDensityFunction::terrainProfile);
 
     public static final TerrainDiffusionDensityFunction INSTANCE =
             new TerrainDiffusionDensityFunction();
+
+    private final int terrainProfile;
+
+    public TerrainDiffusionDensityFunction() { this(1); }
+    public TerrainDiffusionDensityFunction(int terrainProfile) {
+        if (terrainProfile < 1 || terrainProfile > 2) throw new IllegalArgumentException("Unsupported terrain profile");
+        this.terrainProfile = terrainProfile;
+    }
+    public int terrainProfile() { return terrainProfile; }
+    private int height(short meters) {
+        return HeightConverter.convertToMinecraftHeight(meters, WorldScaleManager.getCurrentScale(), terrainProfile);
+    }
 
     @Override
     public double compute(DensityFunction.FunctionContext pos) {
@@ -24,7 +38,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
         int sampledHeight = LocalTerrainProvider.scopedGroundHeight(x, z);
         if (sampledHeight != Integer.MIN_VALUE) {
-            return HeightConverter.convertToMinecraftHeight((short) sampledHeight) - y;
+            return height((short) sampledHeight) - y;
         }
 
         int tileSize = LocalTerrainProvider.sampleTileSize();
@@ -49,7 +63,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
         int localX = Math.max(0, Math.min(data.width - 1, x - blockStartX));
         int localZ = Math.max(0, Math.min(data.height - 1, z - blockStartZ));
 
-        int targetHeight = HeightConverter.convertToMinecraftHeight(
+        int targetHeight = height(
                 data.heightmap[localZ][localX]
         );
 
@@ -109,8 +123,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
             int localX = Math.max(0, Math.min(data.width  - 1, x - ctx.blockStartX));
             int localZ = Math.max(0, Math.min(data.height - 1, z - ctx.blockStartZ));
 
-            int targetHeight = HeightConverter
-                .convertToMinecraftHeight(data.heightmap[localZ][localX]);
+            int targetHeight = height(data.heightmap[localZ][localX]);
             densities[i] = targetHeight - y;
         }
     }
@@ -122,12 +135,14 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
     @Override
     public double minValue() {
-        return -64;
+        // V2 can extend below vanilla Y bounds. Keep finite, conservative bounds
+        // for the integer height-minus-Y result across all supported world scales.
+        return terrainProfile == 1 ? -64 : Integer.MIN_VALUE;
     }
 
     @Override
     public double maxValue() {
-        return 1024;
+        return terrainProfile == 1 ? 1024 : Integer.MAX_VALUE;
     }
 
     @Override

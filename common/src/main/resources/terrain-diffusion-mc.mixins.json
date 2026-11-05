@@ -18,6 +18,7 @@
     "StructureTemplatePaletteAccess",
     "ListPoolElementsAccess",
     "StructureTerrainSurfaceMixin",
+    "DeepOceanFluidPickerMixin",
     "UndergroundGenerationMixin",
     "UndergroundRiverCarverMixin",
     "UndergroundRiverFlowMixin",

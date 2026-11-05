@@ -27,6 +27,14 @@ public class HeightConverter {
         return baseY + SEA_LEVEL;
     }
 
+    /** Explicit saved profile; the legacy overloads never change existing worlds. */
+    public static int convertToMinecraftHeight(short meters, int configuredScale, int terrainProfile) {
+        if (terrainProfile < 1 || terrainProfile > 2)
+            throw new IllegalArgumentException("Unsupported terrain profile " + terrainProfile);
+        if (terrainProfile == 1 || meters >= 0) return convertToMinecraftHeight(meters, configuredScale);
+        return OceanDepthProfile.oceanBoundary(meters, WorldScaleManager.clampScale(configuredScale));
+    }
+
     /**
      * Returns the highest generated block Y expected from pipeline output for a given scale.
      */

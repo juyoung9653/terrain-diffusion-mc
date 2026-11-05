@@ -17,10 +17,13 @@ public final class UndergroundRiverModel {
 
     public UndergroundRiverModel(long seed, int scale) { this(seed, scale, 2); }
     public UndergroundRiverModel(long seed, int scale, int version) {
-        if (scale < 1 || scale > 6 || (version != 1 && version != 2))
+        if (scale < 1 || scale > 6 || (version != 1 && version != 2 && version != 3))
             throw new IllegalArgumentException("Invalid underground river scale/version");
         this.seed = seed; this.scale = scale; this.version = version;
-        this.geology = version == 2 ? new GeologyModel(seed, -400, 1) : null;
+        // V3 shares its rock provinces and fracture field with the cave pass.
+        // V1/V2 must retain their original model identity for saved worlds.
+        this.geology = version == 2 ? new GeologyModel(seed, -400, 1)
+                : version == 3 ? new GeologyModel(seed, -400, 1, 2) : null;
         this.legacy = version == 1 ? new LegacyUndergroundRiverModel(seed, scale) : null;
     }
 
@@ -195,7 +198,7 @@ public final class UndergroundRiverModel {
         long key = ((long) cellX << 32) ^ (cellZ & 0xffffffffL);
         List<Reach> cached = basins.get(key);
         if (cached != null) return cached;
-        List<Reach> made = makeBasin(cellX, cellZ);
+        List<Reach> made = version == 3 ? makeHydroGeologicBasin(cellX, cellZ) : makeBasin(cellX, cellZ);
         basins.put(key, made);
         if (basins.size() > 16) basins.remove(basins.keySet().iterator().next());
         return made;
@@ -255,6 +258,75 @@ public final class UndergroundRiverModel {
         Point terminal = collector[nodeCount - 1];
         double poolRadius = radius(Math.max(.1, flow)) * (carbonate && unit(cellX, cellZ, 160) < .08 ? 1.7 : 1.05);
         result.add(new Reach(terminal, terminal, poolRadius, poolRadius, true, Math.max(.1, flow)));
+        return List.copyOf(result);
+    }
+
+    /**
+     * V3 keeps the compact, per-cell collector topology of V2, but chooses where
+     * springs form from the same rock and fracture context that shapes caves.
+     * This makes soluble/faulted provinces more likely to drain without making a
+     * high-permeability province one uniformly wide channel.
+     */
+    private List<Reach> makeHydroGeologicBasin(int cellX, int cellZ) {
+        double centerX = cellX * (double) CELL + CELL / 2.0 + (unit(cellX, cellZ, 1) - .5) * 80;
+        double centerZ = cellZ * (double) CELL + CELL / 2.0 + (unit(cellX, cellZ, 2) - .5) * 80;
+        var center = geology.riverContext(centerX, -145, centerZ);
+        var northWest = geology.riverContext(centerX - 72, -145, centerZ - 72);
+        var southEast = geology.riverContext(centerX + 72, -145, centerZ + 72);
+        double fracture = (center.fracture() + northWest.fracture() + southEast.fracture()) / 3.0;
+        int soluble = (center.rock() == GeologyModel.ROCK_CALCITE ? 1 : 0)
+                + (northWest.rock() == GeologyModel.ROCK_CALCITE ? 1 : 0)
+                + (southEast.rock() == GeologyModel.ROCK_CALCITE ? 1 : 0);
+        // Low permeability cells can still have a sparse spring, while karst and
+        // faulted areas receive a higher chance and one additional tributary.
+        double occurrence = .12 + soluble * .13 + fracture * .29;
+        if (unit(cellX, cellZ, 3) >= occurrence) return List.of();
+
+        double angle = center.faultBearing() + (unit(cellX, cellZ, 4) - .5) * .82;
+        double length = 52 + unit(cellX, cellZ, 5) * (72 + fracture * 42);
+        int nodeCount = 3 + (int) (unit(cellX, cellZ, 6) * (2 + (soluble > 0 ? 1 : 0)));
+        double topY = -104 - unit(cellX, cellZ, 7) * (72 + soluble * 18);
+        double fall = length * (.038 + unit(cellX, cellZ, 8) * (.042 + fracture * .038));
+        Point[] collector = new Point[nodeCount];
+        for (int i = 0; i < nodeCount; i++) {
+            double t = i / (double) (nodeCount - 1);
+            if (i > 0 && i < nodeCount - 1)
+                t = clamp(t + (unit(cellX, cellZ, 200 + i) - .5) * .14, .10, .90);
+            double lateral = (unit(cellX, cellZ, 30 + i) - .5) * (24 + fracture * 20)
+                    * Math.sin(t * Math.PI);
+            collector[i] = point(centerX, centerZ, angle, length * (t - .5), lateral, topY - fall * t);
+        }
+
+        List<Reach> result = new ArrayList<>();
+        int tributaries = (int) (unit(cellX, cellZ, 9) * (1 + soluble + (fracture > .55 ? 1 : 0)));
+        double[] added = new double[nodeCount];
+        for (int branch = 0; branch < tributaries; branch++) {
+            int join = 1 + (int) (unit(cellX, cellZ, 40 + branch) * (nodeCount - 2));
+            double q = .08 + Math.pow(unit(cellX, cellZ, 50 + branch), 2) * (1.45 + .35 * soluble);
+            double distance = 24 + unit(cellX, cellZ, 80 + branch) * (42 + fracture * 34);
+            double gain = distance * (.042 + unit(cellX, cellZ, 60 + branch) * .070);
+            double sourceY = clamp(collector[join].y + gain, -210, -96);
+            double side = unit(cellX, cellZ, 70 + branch) < .5 ? -1 : 1;
+            double sourceAngle = angle + Math.PI + side * (.58 + unit(cellX, cellZ, 75 + branch) * .58);
+            Point source = new Point(collector[join].x + Math.cos(sourceAngle) * distance, sourceY,
+                    collector[join].z + Math.sin(sourceAngle) * distance);
+            curve(result, source, collector[join], radius(q), radius(q), q, cellX, cellZ, 100 + branch);
+            added[join] += q;
+        }
+        double flow = .08 + added[0];
+        double entryRadius = radius(flow);
+        for (int i = 0; i < nodeCount - 1; i++) {
+            curve(result, collector[i], collector[i + 1], entryRadius, radius(flow),
+                    Math.max(.08, flow), cellX, cellZ, 140 + i);
+            entryRadius = radius(flow);
+            flow += added[i + 1];
+        }
+        Point terminal = collector[nodeCount - 1];
+        // A small terminal pool is allowed in karst only. It is still a local
+        // feature, never a filled aquifer spanning the complete cave layer.
+        double poolRadius = radius(Math.max(.08, flow))
+                * (soluble >= 2 && unit(cellX, cellZ, 160) < .13 ? 1.45 : 1.0);
+        result.add(new Reach(terminal, terminal, poolRadius, poolRadius, true, Math.max(.08, flow)));
         return List.copyOf(result);
     }
 

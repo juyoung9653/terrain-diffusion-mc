@@ -3,27 +3,48 @@ package com.github.xandergos.terraindiffusionmc.compat.hybridaquatic;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
+import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
+import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
+import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.util.KeyDispatchDataCodec;
 import net.minecraft.world.level.levelgen.DensityFunction;
 
 /** Samples raw TD ground, never the carved router or a biome/chunk query. */
 public final class HybridAquaticContinentalnessDensityFunction implements DensityFunction {
     public static final MapCodec<HybridAquaticContinentalnessDensityFunction> CODEC =
-            MapCodec.unit(HybridAquaticContinentalnessDensityFunction::new);
+            RecordCodecBuilder.mapCodec(instance -> instance.group(
+                    Codec.intRange(1, 2).optionalFieldOf("terrain_profile", 1)
+                            .forGetter(HybridAquaticContinentalnessDensityFunction::terrainProfile)
+            ).apply(instance, HybridAquaticContinentalnessDensityFunction::new));
     public static final HybridAquaticContinentalnessDensityFunction INSTANCE =
-            new HybridAquaticContinentalnessDensityFunction();
+            new HybridAquaticContinentalnessDensityFunction(1);
+    private final int terrainProfile;
+
+    public HybridAquaticContinentalnessDensityFunction(int terrainProfile) {
+        if (terrainProfile < 1 || terrainProfile > 2)
+            throw new IllegalArgumentException("Unsupported TD terrain profile " + terrainProfile);
+        this.terrainProfile = terrainProfile;
+    }
+
+    public int terrainProfile() { return terrainProfile; }
 
     public static int groundHeight(int x, int z) {
-        return new GroundCursor().height(x, z);
+        return groundHeight(x, z, 1);
+    }
+
+    /** Uses the saved TD height transform, never mutable compatibility state. */
+    public static int groundHeight(int x, int z, int terrainProfile) {
+        return new GroundCursor(terrainProfile).height(x, z);
     }
 
     @Override public double compute(FunctionContext pos) {
-        return HybridAquaticMarineProfile.continentalnessForHeight(groundHeight(pos.blockX(), pos.blockZ()));
+        return HybridAquaticMarineProfile.continentalnessForHeight(
+                groundHeight(pos.blockX(), pos.blockZ(), terrainProfile));
     }
 
     @Override public void fillArray(double[] values, ContextProvider contexts) {
-        GroundCursor cursor = new GroundCursor();
+        GroundCursor cursor = new GroundCursor(terrainProfile);
         for (int i = 0; i < values.length; i++) {
             FunctionContext pos = contexts.forIndex(i);
             values[i] = HybridAquaticMarineProfile.continentalnessForHeight(cursor.height(pos.blockX(), pos.blockZ()));
@@ -31,12 +52,17 @@ public final class HybridAquaticContinentalnessDensityFunction implements Densit
     }
 
     private static final class GroundCursor {
+        private final int terrainProfile;
         private HeightmapData tile;
         private int startX, startZ, size;
 
+        GroundCursor(int terrainProfile) { this.terrainProfile = terrainProfile; }
+
         int height(int x, int z) {
             int scoped = LocalTerrainProvider.scopedGroundHeight(x, z);
-            if (scoped != Integer.MIN_VALUE) return HeightConverter.convertToMinecraftHeight((short) scoped);
+            int scale = WorldScaleManager.getCurrentScale();
+            if (scoped != Integer.MIN_VALUE)
+                return HeightConverter.convertToMinecraftHeight((short) scoped, scale, terrainProfile);
             int currentSize = LocalTerrainProvider.sampleTileSize();
             int sx = Math.floorDiv(x, currentSize) * currentSize;
             int sz = Math.floorDiv(z, currentSize) * currentSize;
@@ -49,7 +75,7 @@ public final class HybridAquaticContinentalnessDensityFunction implements Densit
             }
             int lx = Math.max(0, Math.min(tile.width - 1, x - startX));
             int lz = Math.max(0, Math.min(tile.height - 1, z - startZ));
-            return HeightConverter.convertToMinecraftHeight(tile.heightmap[lz][lx]);
+            return HeightConverter.convertToMinecraftHeight(tile.heightmap[lz][lx], scale, terrainProfile);
         }
     }
 

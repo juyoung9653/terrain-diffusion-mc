@@ -4,12 +4,13 @@
       "type": "terrain-diffusion-mc:underground_scale_2",
       "generator": {
         "type": "minecraft:noise",
-        "settings": "terrain-diffusion-mc:underground",
+        "settings": "terrain-diffusion-mc:underground_v2",
         "biome_source": {
           "type": "terrain-diffusion-mc:terrain_diffusion",
           "underground": true,
           "underground_rivers": true,
-          "underground_river_version": 2
+          "underground_river_version": 3,
+          "underground_profile_version": 2
         }
       }
     },

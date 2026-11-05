@@ -1181,7 +1181,9 @@ underground vegetation, at the intended world scale.
 
 ## Underground geology (new worlds)
 
-New Terrain Diffusion worlds use the `underground` generation profile. The TD
+New Terrain Diffusion worlds use the `underground_v2` noise settings and saved
+`underground_profile_version: 2`. Existing sources without the version retain
+profile 1 and the unchanged `underground` settings. The TD
 scale setting enlarges the added strata, faults, conduits, chambers and vein
 shapes in all three axes. Coordinates are `x / scale`, `(y - 63) / scale` and
 `z / scale`: sea level stays at 63. Fine mineral grains remain individual blocks.
@@ -1233,7 +1235,80 @@ Legacy `terrain_diffusion` noise and dimension types remain unchanged. The
 `underground` flag defaults to false for existing saves. Use a **new world** for
 this experimental profile; replacing dimensions in an existing save leaves old
 chunks with incompatible floors and geological patterns. The regenerated optional
-Terralith pack supplies both legacy and underground surface rules.
+Terralith pack supplies legacy, underground V1 and underground V2 surface rules.
+Update that pack together with the mod when creating a V2 world: an older pack's
+world preset can still select V1. The server rejects a saved source/profile and
+noise-settings key mismatch before generation.
+
+### Deep-world profile 2
+
+Bathymetry now has a continuous shelf/slope/basin curve. Land elevations and the
+first 200 model meters below sea level retain the exact legacy conversion;
+deeper water scales with the chosen TD scale. Sea level remains Y=63. These are
+conversion boundary heights, not a measured global ocean minimum (the highest
+solid block can be one block lower).
+
+| Raw model elevation | Legacy boundary Y | V2 boundary Y, scale 2 |
+| --- | ---: | ---: |
+| -1,000 m | 34 | -33 |
+| -4,000 m | 2 | -177 |
+| -10,000 m | -34 | -297 |
+| -16,000 m and deeper | continues decreasing | -377 |
+
+V2 caps ocean depth at `220 * scale` blocks below sea level, leaving underground
+space above the existing dimension floor even at scale 6. V2's native fluid picker
+uses lava only below the actual dimension floor plus eight blocks, so the ocean
+stays water below vanilla's Y=-54 lava threshold. Both chunk filling and base-column
+queries use the supplied height accessor; the shared noise settings' maximum span
+is not the selected dimension floor. Legacy profiles keep the vanilla picker.
+Its regional geology
+selects sedimentary, carbonate, crystalline and old-basin rock sequences, with
+warped contacts and intrusive lenses. Low-frequency cave potential varies
+branching, dead ends, passage width and chambers. A regional water-table field
+produces wet and dry cave zones; this is not a pressure or drainage simulation.
+The local analytic column pass and bounded passage cache remain in use. Chunks
+still generate their underground blocks before becoming FULL; no lazy excavation
+or additional AI inference was introduced.
+
+Conceptual references for V2 are
+[TerraFirmaCraft's regional rock layers](https://github.com/TerraFirmaCraft/Documentation/blob/main/1.21.x/worldgen/world-preset.md),
+[WorldEngine's separated terrain/climate fields](https://github.com/Mindwerks/worldengine),
+and [Godot Voxel's cave generation](https://github.com/Zylann/godot_voxel/blob/master/doc/source/procedural_generation.md).
+[ReTerraForged](https://github.com/Vladeezyy/reterraforged) informed the large-world
+terrain comparison; [CubicChunks](https://github.com/OpenCubicChunks/CubicChunks)
+was considered as an architectural comparison, not adopted as a dependency.
+No external generator source or whole-world simulation was imported.
+
+Focused checks: `tools/geology/test_ocean_depth.py` exhaustively checks all short
+model elevations at scales 1–6; `test_geology_v2.py` and `test_river_v3.py` pin
+legacy geometry fingerprints and exercise the new deterministic models. Native
+checks must use full generation, matching raw model files and fresh river caches.
+Prepared fixtures with only model JSON metadata need the actual selected ONNX
+models, including `decoder_model_fp16.onnx` when `inference.decoder_precision`
+is `fp16`; hash copied models into the fixture manifest before launching.
+Choose deep-ocean fixtures from raw model elevations, not just an ocean biome or
+the minimum post-carver ocean-floor height: a hole below shallow coastal water can
+otherwise masquerade as a deep ocean. The density audit records bounded raw/profile
+samples alongside the actual saved floor for this reason.
+
+The 2026-11-05 scale-2 native comparison used seed `6187795302574383407`,
+Streams 2.16.2, Terralith 2.6.2, Lithostitched, identical model/config inputs and
+fresh V11 river caches. In 64 deep-ocean chunks centered at `(-225,253)`, the
+lowest sampled physical floor changed from Y=-5 to Y=-204; all 1,024 sampled
+columns retained sea-level water and bottom bedrock, with zero lava above the
+ocean floor. Saved MCA blocks independently matched the floor/water diagnostic.
+Separate coastal chunks exercise V3 physical streams and dry cave evidence.
+All 205 planned coastal wet columns had water and supported beds; 32 downstream
+current samples, eight native item-push checks and eight marker serialization
+checks passed. The final deep-ocean restart preserved physical blocks, water,
+material bands, saved profile and its freshly recomputed base-height fingerprint.
+See `build/deep-world-v2-review/ocean-comparison.json`, `saved-ocean-checks.json`
+and the archived native receipts. These ocean-only runs do not establish native
+land-decoration parity or full RPG-modpack compatibility; land height identity
+is covered by the exhaustive pure conversion check. Timings are one matched pair,
+not evidence of a speedup. Saved-block restart checks and freshly recomputed AI
+base-height fingerprints are separate: an earlier coastal restart preserved its
+blocks/materials/river checks while its fresh base-height hash differed.
 
 Design references are [TerraFirmaCraft's veins](https://terrafirmacraft.github.io/Documentation/1.21.x/worldgen/features/veins/),
 [GemPy's structural geology](https://docs.gempy.org/) and
@@ -1243,11 +1318,17 @@ geometry are a gameplay approximation, not a reconstruction of surveyed geology.
 
 ### Subterranean streams
 
-New presets enable `underground_rivers` and `underground_river_version: 2`.
+New presets enable `underground_rivers` and `underground_river_version: 3`.
 The river flag defaults to false; the version defaults to 1 when absent, so
 existing saves retain their original geometry. Changing the preset does not
 upgrade saved chunks or a saved biome source. Use a fresh disposable world to
-evaluate version 2. Route distances and depth use the sea-level-anchored TD
+evaluate version 3. Version 3 requires deep-world profile 2; saved river versions
+1 and 2 retain profile 1. V3 samples regional rock and fractures to vary basin
+occurrence, tributaries and route direction, with downhill head profiles and rare
+karst terminal pools. Route radii are bounded before section shaping; the final
+wet radius retains the `3.1 * (1 + 0.10 * (scale - 1))` physical-block cap.
+The channel protections described below still apply.
+Route distances and depth use the sea-level-anchored TD
 scale, while channel width increases only 10% per additional scale step and
 headroom stays in physical blocks. The pass runs
 after native AIR carvers, preserves roof/floor margins and structure pieces,
