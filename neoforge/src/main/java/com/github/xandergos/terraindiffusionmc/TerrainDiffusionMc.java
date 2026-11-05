@@ -32,7 +32,10 @@ public class TerrainDiffusionMc {
                 net.neoforged.fml.loading.FMLLoader.getLoadingModList().getMods().stream()
                         .anyMatch(mod -> "streamsreflowing".equals(mod.getModId())
                                 && com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin
-                                .isAuditedVersion(mod.getVersion().toString())));
+                                .isAuditedVersion(mod.getVersion().toString())),
+                com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin.hasPlanformAdapter()
+                        ? com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile.VERSION
+                        : com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile.LEGACY_ADAPTER_VERSION);
         modEventBus.addListener(this::onRegister);
         modEventBus.addListener(this::onAddPacks);
         TerrainDiffusionLifecycle.bootstrap(FMLPaths.CONFIGDIR.get(), FMLPaths.GAMEDIR.get());

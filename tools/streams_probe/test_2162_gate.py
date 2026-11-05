@@ -25,6 +25,9 @@ public interface IMixinConfigPlugin {void onLoad(String s);String getRefMapperCo
 public class GateHarness { static final String P="com.github.xandergos.terraindiffusionmc.mixin."; static StreamsStructureShieldMixinPlugin g=new StreamsStructureShieldMixinPlugin();
  static void ok(boolean b,String s){if(!b)throw new AssertionError(s);} static boolean a(String n){return g.shouldApplyMixin("",P+n);}
  static void v(String... x){FMLLoader.set(x);} public static void main(String[] z){
+ for(String version:new String[]{"2.13.1","2.13.5","2.13.8","2.15.2","2.16.2","2.16.3"}) {
+ v("streamsreflowing@"+version);ok(StreamsStructureShieldMixinPlugin.hasPlanformAdapter()==version.equals("2.16.2"),"planform version gate "+version); }
+ v();ok(!StreamsStructureShieldMixinPlugin.hasPlanformAdapter(),"no planform without Streams");
  v("streamsreflowing@2.16.2"); for(String n:new String[]{"StreamsStartup2162Mixin","StreamsWorldgenScale2162Mixin","StreamsNaturalRiver2162Mixin","StreamsNaturalNetwork2162Mixin","StreamsBankMaterial2162Mixin","StreamsSeagrassFeature2162Mixin"})ok(a(n),"2162 "+n);
  for(String n:new String[]{"StreamsWorldgenPrefetchMixin","StreamsDemandPriorityMixin","StreamsSamplerPriorityMixin","StreamsBankMaterial2152Mixin","StreamsShallowBanks2152Mixin","StreamsStartupMixin","StreamsStructureShieldMixin","StreamsWorldgenScaleMixin","StreamsNaturalRiverMixin","StreamsNaturalNetworkMixin","StreamsRiverBanksMixin","StreamsShallowBanksMixin","StreamsRiverRasterMixin","StreamsPlayerPrefetchMixin","StreamsLakeLevelsMixin","StreamsBankMaterialMixin","StreamsBankMaterial2138Mixin"})ok(!a(n),"2162 blocks old "+n);
  v("streamsreflowing@2.15.2"); ok(a("StreamsWorldgenPrefetchMixin"),"2152 legacy hook");ok(a("StreamsBankMaterial2152Mixin"),"2152 bank hook");ok(!a("StreamsStartup2162Mixin"),"2152 blocks new");

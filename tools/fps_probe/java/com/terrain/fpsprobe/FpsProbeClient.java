@@ -58,6 +58,8 @@ public final class FpsProbeClient {
     private static final long MAX_EXTRA_SETTLE_NS = 120_000_000_000L;
     private final boolean wantedVsync = Boolean.parseBoolean(System.getProperty("fpsprobe.vsync", "true"));
     private final boolean renderLivingEntities = Boolean.parseBoolean(System.getProperty("fpsprobe.entities", "true"));
+    private final boolean liveWorld = Boolean.parseBoolean(System.getProperty("fpsprobe.liveWorld", "false"));
+    private final double yawSweep = decimal("fpsprobe.yawSweep", 0);
     private final boolean spectator = Boolean.parseBoolean(System.getProperty("fpsprobe.spectator", "false"));
     private final boolean nightVision = Boolean.parseBoolean(System.getProperty("fpsprobe.nightVision", "false"));
     private final int wantedCap = integer("fpsprobe.cap", 70, 10, 260);
@@ -97,12 +99,14 @@ public final class FpsProbeClient {
     /** ServerStarted runs before the first normal integrated-server tick after open. */
     private void serverStarted(ServerStartedEvent event) {
         MinecraftServer server=event.getServer();
-        if (!requested || !server.isSingleplayer()) return;
+        if (!requested || !server.isSingleplayer() || liveWorld) return;
         ServerLevel level=server.overworld();
         level.getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(false, null);
         level.getGameRules().getRule(GameRules.RULE_WEATHER_CYCLE).set(false, null);
-        level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING).set(false, null);
-        level.getGameRules().getRule(GameRules.RULE_RANDOMTICKING).set(0, null);
+        if (!liveWorld) {
+            level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING).set(false, null);
+            level.getGameRules().getRule(GameRules.RULE_RANDOMTICKING).set(0, null);
+        }
         level.setDayTime(6000L); level.setWeatherParameters(0, 0, false, false);
         loadedNs=System.nanoTime(); server.tickRateManager().setFrozen(true); frozen=true; serverPreFrozen=true;
         LOG.info("FPS probe froze integrated server at ServerStartedEvent");
@@ -151,31 +155,37 @@ public final class FpsProbeClient {
     private void stabilize(ServerLevel level, ServerPlayer player) {
         level.getGameRules().getRule(GameRules.RULE_DAYLIGHT).set(false, null);
         level.getGameRules().getRule(GameRules.RULE_WEATHER_CYCLE).set(false, null);
-        level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING).set(false, null);
-        level.getGameRules().getRule(GameRules.RULE_RANDOMTICKING).set(0, null);
+        if (!liveWorld) {
+            level.getGameRules().getRule(GameRules.RULE_DOMOBSPAWNING).set(false, null);
+            level.getGameRules().getRule(GameRules.RULE_RANDOMTICKING).set(0, null);
+        }
         level.setDayTime(6000L); level.setWeatherParameters(0, 0, false, false);
         if (player != null) { if(spectator) player.setGameMode(GameType.SPECTATOR); if(nightVision) player.addEffect(new MobEffectInstance(MobEffects.NIGHT_VISION, Integer.MAX_VALUE, 0, false, false)); player.teleportTo(level, x, y, z, yaw, pitch); player.getAbilities().mayfly=true; player.getAbilities().flying=true; player.onUpdateAbilities(); }
-        level.getServer().tickRateManager().setFrozen(true);
-        loadedNs=System.nanoTime(); frozen=true; sceneConfigured=true;
+        level.getServer().tickRateManager().setFrozen(!liveWorld);
+        loadedNs=System.nanoTime(); frozen=!liveWorld; sceneConfigured=true;
     }
     private void keepCamera(Minecraft mc) {
         var p=mc.player; p.getAbilities().mayfly=true; p.getAbilities().flying=true; p.setDeltaMovement(0,0,0);
-        p.setPos(x,y,z); p.setYRot(yaw); p.setXRot(pitch); p.yRotO=yaw; p.xRotO=pitch;
+        float viewYaw = yaw + (measuring ? (float)(yawSweep * Math.min(1.0, (System.nanoTime()-measureNs)/(double)sampleNs)) : 0);
+        p.setPos(x,y,z); p.setYRot(viewYaw); p.setXRot(pitch); p.yRotO=viewYaw; p.xRotO=pitch;
     }
     private void pre() {
+        RenderStageProfiler.frameStart(measuring);
         preWallNs=System.nanoTime(); preCpuNs=cpu();
-        if (measuring) beginGpu();
+        if (measuring) { if (yawSweep != 0) keepCamera(Minecraft.getInstance()); beginGpu(); }
     }
     /** Called at the exact verified glfwSwapBuffers invocation, not inferred from frame residuals. */
     public static void swapBefore() { if (INSTANCE != null && INSTANCE.measuring) { INSTANCE.swapWallStart=System.nanoTime(); INSTANCE.swapCpuStart=cpu(); } }
     public static void swapAfter() { if (INSTANCE != null && INSTANCE.swapWallStart >= 0) { long wall=System.nanoTime()-INSTANCE.swapWallStart, after=cpu(); INSTANCE.swapWallNs.add(wall); INSTANCE.swapCpuNs.add(INSTANCE.swapCpuStart<0||after<INSTANCE.swapCpuStart?-1:after-INSTANCE.swapCpuStart); INSTANCE.swapWallStart=-1; } }
     private void post() {
+        RenderStageProfiler.frameEnd();
+        if (configured) RenderPipelineState.sample(measuring);
         Minecraft mc=Minecraft.getInstance(); long now=System.nanoTime(); endGpu();
         if (finished || !configured) return;
         if (!measuring) {
             long warmupElapsed=now-loadedNs;
             if(sceneConfigured&&!warmupScreenshotRequested&&warmupElapsed>=warmupNs/2L){warmupScreenshotRequested=true;Screenshot.grab(mc.gameDirectory,"warmup-scene.png",mc.getMainRenderTarget(),message->LOG.info("FPS probe warmup screenshot: {}",message.getString()));}
-            if(sceneConfigured&&frozen&&warmupElapsed>=warmupNs){
+            if(sceneConfigured&&(frozen||liveWorld)&&warmupElapsed>=warmupNs){
                 if(mc.levelRenderer.hasRenderedAllSections()){if(sectionsTrueSinceNs<0L)sectionsTrueSinceNs=now;if(now-sectionsTrueSinceNs>=SECTIONS_STABLE_NS)startSample(mc,now,warmupElapsed);}else sectionsTrueSinceNs=-1L;
                 if(!measuring&&warmupElapsed>=warmupNs+MAX_EXTRA_SETTLE_NS){failure="render_sections_unsettled_timeout";finish();}
             }
@@ -199,7 +209,7 @@ public final class FpsProbeClient {
     private void initGpu() { if(gpuInit)return; gpuInit=true; try { if(!GL.getCapabilities().OpenGL33)return; for(int i=0;i<RING;i++){qStart[i]=GL15.glGenQueries();qEnd[i]=GL15.glGenQueries();} gpuSupported=true; }catch(Throwable t){gpuErrors++;cleanupGpu();} }
     private void pollGpu() { if(!gpuSupported)return; for(int i=0;i<RING;i++) if(pending[i]&&GL15.glGetQueryObjecti(qEnd[i],GL15.GL_QUERY_RESULT_AVAILABLE)==GL11.GL_TRUE){try{long a=GL33.glGetQueryObjecti64(qStart[i],GL15.GL_QUERY_RESULT),b=GL33.glGetQueryObjecti64(qEnd[i],GL15.GL_QUERY_RESULT);pending[i]=false; Row target=row(queryFrame[i]); if(b>=a&&target!=null)target.gpuNs=b-a;else if(b<a)gpuErrors++;}catch(Throwable t){pending[i]=false;gpuErrors++;}} }
     private Row row(long n){ for(int i=rows.size()-1;i>=0;i--)if(rows.get(i).frame==n)return rows.get(i); return null; }
-    private void finish() { if(finished)return; finished=true; measuring=false; pollGpu(); while(swapWallNs.size()>rows.size()){swapWallNs.removeLast();swapCpuNs.removeLast();} snapshotServer(Minecraft.getInstance().getSingleplayerServer(), "end"); try { write(); } catch(IOException e){LOG.error("FPS probe receipt write failed",e);} try{cleanupGpu();}catch(Throwable ignored){} Minecraft.getInstance().stop(); }
+    private void finish() { if(finished)return; finished=true; measuring=false; pollGpu(); RenderStageProfiler.finish(output.toAbsolutePath().getParent()); RenderPipelineState.finish(output.toAbsolutePath().getParent()); while(swapWallNs.size()>rows.size()){swapWallNs.removeLast();swapCpuNs.removeLast();} snapshotServer(Minecraft.getInstance().getSingleplayerServer(), "end"); try { write(); } catch(IOException e){LOG.error("FPS probe receipt write failed",e);} try{cleanupGpu();}catch(Throwable ignored){} Minecraft.getInstance().stop(); }
     private void fail(String why){failure=why;finished=true;try{write();}catch(IOException ignored){}LOG.error("FPS probe failed: {}",why);Minecraft.getInstance().stop();}
     private void write() throws IOException {
         Minecraft mc=Minecraft.getInstance(); Window w=mc.getWindow(); Path parent=output.toAbsolutePath().getParent();if(parent!=null)Files.createDirectories(parent);
@@ -207,7 +217,7 @@ public final class FpsProbeClient {
         Path swapCsv=output.toAbsolutePath().resolveSibling("swap-times.csv"); try(BufferedWriter b=Files.newBufferedWriter(swapCsv,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING)){b.write("swap_wall_ms,swap_thread_cpu_ms\n");for(int i=0;i<swapWallNs.size();i++)b.write(String.format(Locale.ROOT,"%.6f,%s%n",swapWallNs.get(i)/1e6,swapCpuNs.get(i)<0?"":String.format(Locale.ROOT,"%.6f",swapCpuNs.get(i)/1e6)));}
         Path shot=output.toAbsolutePath().resolveSibling("fps-probe.png"); Screenshot.grab(mc.gameDirectory,shot.getFileName().toString(),mc.getMainRenderTarget(),m->{});
         try(BufferedWriter b=Files.newBufferedWriter(output,StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING)){
-            b.write("{\n"); f(b,"success",failure.isEmpty()&&rows.size()>30&&invalid==0&&inactive==0&&frozen&&serverPreFrozen&&sceneConfigured); f(b,"failure",q(failure)); f(b,"created_utc",q(Instant.now().toString())); f(b,"sample_start_utc",sampleStartUtc==null?"null":q(sampleStartUtc.toString())); f(b,"entity_snapshot_start_sha256",q(entitySnapshotStartSha)); f(b,"entity_snapshot_end_sha256",q(entitySnapshotEndSha)); f(b,"entity_snapshot_start_count",entitySnapshotStartCount); f(b,"entity_snapshot_end_count",entitySnapshotEndCount); f(b,"scope",q("existing cloned world; fixed camera; Photon and installed resource packs retained")); f(b,"world",q(world));f(b,"vsync",wantedVsync);f(b,"fps_cap",wantedCap);f(b,"effective_vsync",mc.options.enableVsync().get());f(b,"effective_fps_cap",mc.options.framerateLimit().get());f(b,"effective_window_cap",mc.getWindow().getFramerateLimit());f(b,"native_swap_interval_before_apply",nativeIntervalBefore);f(b,"native_swap_interval_after_apply",nativeIntervalAfter);f(b,"native_swap_interval_at_end",nativeSwapInterval());f(b,"living_entities_rendered",renderLivingEntities);f(b,"world_tick_frozen",frozen);f(b,"server_pre_frozen",serverPreFrozen);f(b,"warmup_seconds",warmupNs/1_000_000_000L); f(b,"render_sections_settled",sectionsSettled); f(b,"render_sections_stable_required_seconds",SECTIONS_STABLE_NS/1_000_000_000L); f(b,"render_sections_max_extra_wait_seconds",MAX_EXTRA_SETTLE_NS/1_000_000_000L); f(b,"warmup_elapsed_at_sample_seconds",warmupElapsedAtSampleNs<0?-1:warmupElapsedAtSampleNs/1_000_000_000.0); f(b,"warmup_screenshot_requested",warmupScreenshotRequested); f(b,"warmup_screenshot_name",q("warmup-scene.png"));f(b,"sample_seconds",sampleNs/1_000_000_000L);f(b,"frame_count",rows.size());f(b,"invalid_frames",invalid);f(b,"inactive_frames",inactive);f(b,"menu_frames",menu);f(b,"framebuffer",q(mc.getMainRenderTarget().width+"x"+mc.getMainRenderTarget().height));f(b,"window",q(w.getScreenWidth()+"x"+w.getScreenHeight()));f(b,"requested_camera",q(x+","+y+","+z+","+yaw+","+pitch));f(b,"actual_camera",q(mc.player==null?"unavailable":mc.player.getX()+","+mc.player.getY()+","+mc.player.getZ()+","+mc.player.getYRot()+","+mc.player.getXRot()));f(b,"world_time",mc.level==null?-1:mc.level.getDayTime());f(b,"raining",mc.level!=null&&mc.level.isRaining());f(b,"loaded_entity_count",mc.level==null?-1:count(mc.level.entitiesForRendering()));f(b,"gpu_timestamp_supported",gpuSupported);f(b,"gpu_timestamp_completed",rows.stream().filter(r->r.gpuNs>=0).count());f(b,"gpu_pending_queries",pendingCount());f(b,"gpu_query_errors",gpuErrors);f(b,"gpu_query_dropped",gpuDropped);f(b,"gpu_elapsed_definition",q("OpenGL timestamp elapsed over the frame-event interval; timeline elapsed, not a GPU-busy counter"));f(b,"swap_present_samples",swapWallNs.size()); f(b,"swap_wall_mean_ms",meanLong(swapWallNs)); f(b,"swap_wall_sum_ms",sumLong(swapWallNs)); f(b,"swap_cpu_valid_samples",swapCpuNs.stream().filter(n->n>=0).count()); f(b,"swap_cpu_mean_ms",meanLong(swapCpuNs)); f(b,"swap_cpu_sum_ms",sumLong(swapCpuNs)); f(b,"swap_cpu_clock_caveat",q("Windows CPU-time granularity can be about 15.625 ms; per-call wall-CPU subtraction is retained but not individually reliable")); f(b,"swap_csv",q(swapCsv.toString()));f(b,"swap_wall_p95_ms",pLong(swapWallNs));f(b,"swap_thread_cpu_p95_ms",pLong(swapCpuNs));f(b,"swap_non_cpu_p95_ms",pDifference(swapWallNs,swapCpuNs));f(b,"swap_present_measurement",q("exact GLFW glfwSwapBuffers wall and render-thread CPU duration; non-CPU includes blocking and OS scheduling"));f(b,"frame_p95_ms",p(rows, r->r.frameNs));f(b,"render_wall_p95_ms",p(rows,r->r.renderNs));f(b,"render_thread_cpu_p95_ms",p(rows,r->r.cpuNs));f(b,"gpu_elapsed_p95_ms",p(rows.stream().filter(r->r.gpuNs>=0).toList(),r->r.gpuNs)); b.write("  \"frames_csv\": "+q(csv.toString())+"\n}\n"); }
+            b.write("{\n"); f(b,"success",failure.isEmpty()&&rows.size()>30&&invalid==0&&inactive==0&&(liveWorld||frozen&&serverPreFrozen)&&sceneConfigured&&sectionsSettled); f(b,"failure",q(failure)); f(b,"created_utc",q(Instant.now().toString())); f(b,"sample_start_utc",sampleStartUtc==null?"null":q(sampleStartUtc.toString())); f(b,"entity_snapshot_start_sha256",q(entitySnapshotStartSha)); f(b,"entity_snapshot_end_sha256",q(entitySnapshotEndSha)); f(b,"entity_snapshot_start_count",entitySnapshotStartCount); f(b,"entity_snapshot_end_count",entitySnapshotEndCount); f(b,"live_world",liveWorld); f(b,"yaw_sweep_degrees",yawSweep); f(b,"scope",q(liveWorld?"live cloned world with entity/random ticks; fixed position; controlled clear noon; optional camera sweep":"frozen cloned world; fixed position; optional camera sweep")); f(b,"world",q(world));f(b,"vsync",wantedVsync);f(b,"fps_cap",wantedCap);f(b,"effective_vsync",mc.options.enableVsync().get());f(b,"effective_fps_cap",mc.options.framerateLimit().get());f(b,"effective_window_cap",mc.getWindow().getFramerateLimit());f(b,"native_swap_interval_before_apply",nativeIntervalBefore);f(b,"native_swap_interval_after_apply",nativeIntervalAfter);f(b,"native_swap_interval_at_end",nativeSwapInterval());f(b,"living_entities_rendered",renderLivingEntities);f(b,"world_tick_frozen",frozen);f(b,"server_pre_frozen",serverPreFrozen);f(b,"warmup_seconds",warmupNs/1_000_000_000L); f(b,"render_sections_settled",sectionsSettled); f(b,"render_sections_stable_required_seconds",SECTIONS_STABLE_NS/1_000_000_000L); f(b,"render_sections_max_extra_wait_seconds",MAX_EXTRA_SETTLE_NS/1_000_000_000L); f(b,"warmup_elapsed_at_sample_seconds",warmupElapsedAtSampleNs<0?-1:warmupElapsedAtSampleNs/1_000_000_000.0); f(b,"warmup_screenshot_requested",warmupScreenshotRequested); f(b,"warmup_screenshot_name",q("warmup-scene.png"));f(b,"sample_seconds",sampleNs/1_000_000_000L);f(b,"frame_count",rows.size());f(b,"invalid_frames",invalid);f(b,"inactive_frames",inactive);f(b,"menu_frames",menu);f(b,"framebuffer",q(mc.getMainRenderTarget().width+"x"+mc.getMainRenderTarget().height));f(b,"window",q(w.getScreenWidth()+"x"+w.getScreenHeight()));f(b,"requested_camera",q(x+","+y+","+z+","+yaw+","+pitch));f(b,"actual_camera",q(mc.player==null?"unavailable":mc.player.getX()+","+mc.player.getY()+","+mc.player.getZ()+","+mc.player.getYRot()+","+mc.player.getXRot()));f(b,"world_time",mc.level==null?-1:mc.level.getDayTime());f(b,"raining",mc.level!=null&&mc.level.isRaining());f(b,"loaded_entity_count",mc.level==null?-1:count(mc.level.entitiesForRendering()));f(b,"gpu_timestamp_supported",gpuSupported);f(b,"gpu_timestamp_completed",rows.stream().filter(r->r.gpuNs>=0).count());f(b,"gpu_pending_queries",pendingCount());f(b,"gpu_query_errors",gpuErrors);f(b,"gpu_query_dropped",gpuDropped);f(b,"gpu_elapsed_definition",q("OpenGL timestamp elapsed over the frame-event interval; timeline elapsed, not a GPU-busy counter"));f(b,"swap_present_samples",swapWallNs.size()); f(b,"swap_wall_mean_ms",meanLong(swapWallNs)); f(b,"swap_wall_sum_ms",sumLong(swapWallNs)); f(b,"swap_cpu_valid_samples",swapCpuNs.stream().filter(n->n>=0).count()); f(b,"swap_cpu_mean_ms",meanLong(swapCpuNs)); f(b,"swap_cpu_sum_ms",sumLong(swapCpuNs)); f(b,"swap_cpu_clock_caveat",q("Windows CPU-time granularity can be about 15.625 ms; per-call wall-CPU subtraction is retained but not individually reliable")); f(b,"swap_csv",q(swapCsv.toString()));f(b,"swap_wall_p95_ms",pLong(swapWallNs));f(b,"swap_thread_cpu_p95_ms",pLong(swapCpuNs));f(b,"swap_non_cpu_p95_ms",pDifference(swapWallNs,swapCpuNs));f(b,"swap_present_measurement",q("exact GLFW glfwSwapBuffers wall and render-thread CPU duration; non-CPU includes blocking and OS scheduling"));f(b,"frame_p95_ms",p(rows, r->r.frameNs));f(b,"render_wall_p95_ms",p(rows,r->r.renderNs));f(b,"render_thread_cpu_p95_ms",p(rows,r->r.cpuNs));f(b,"gpu_elapsed_p95_ms",p(rows.stream().filter(r->r.gpuNs>=0).toList(),r->r.gpuNs)); b.write("  \"frames_csv\": "+q(csv.toString())+"\n}\n"); }
     }
     private void cleanupGpu(){for(int i=0;i<RING;i++){if(qStart[i]!=0)GL15.glDeleteQueries(qStart[i]);if(qEnd[i]!=0)GL15.glDeleteQueries(qEnd[i]);pending[i]=false;}}
     private int pendingCount(){int n=0;for(boolean v:pending)if(v)n++;return n;}

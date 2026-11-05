@@ -36,9 +36,20 @@ public final class WorldNaturalRiverState extends SavedData {
     private static final Settings DISABLED = new Settings(false, 0, 0L, WorldScaleManager.DEFAULT_SCALE);
     private static final Map<ServerLevel, Settings> SETTINGS = new ConcurrentHashMap<>();
     private static volatile boolean adapterAvailable;
+    private static volatile int adapterVersion = NaturalRiverProfile.LEGACY_ADAPTER_VERSION;
 
     /** Loader bootstrap advertises an installed, audited native adapter before any world loads. */
-    public static void setAdapterAvailable(boolean available) { adapterAvailable = available; }
+    public static void setAdapterAvailable(boolean available) {
+        setAdapterAvailable(available, NaturalRiverProfile.LEGACY_ADAPTER_VERSION);
+    }
+
+    public static void setAdapterAvailable(boolean available, int supportedVersion) {
+        if (supportedVersion < 1 || supportedVersion > VERSION) {
+            throw new IllegalArgumentException("Unsupported adapter profile " + supportedVersion);
+        }
+        adapterVersion = supportedVersion;
+        adapterAvailable = available;
+    }
 
     public static final SavedData.Factory<WorldNaturalRiverState> TYPE = new SavedData.Factory<>(
             WorldNaturalRiverState::createDefault,
@@ -112,14 +123,10 @@ public final class WorldNaturalRiverState extends SavedData {
         var worldPath = level.getServer().getWorldPath(net.minecraft.world.level.storage.LevelResource.ROOT);
         var marker = worldPath.resolve("data").resolve(DATA_NAME + ".dat");
         boolean markerExists = Files.exists(marker);
-        boolean nativeCacheExists = Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v1"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v2"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v3"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v4"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v5"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v6"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v7"))
-                || Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v8"));
+        boolean nativeCacheExists = false;
+        for (int version = 1; version <= VERSION; version++) {
+            nativeCacheExists |= Files.exists(worldPath.resolve("streamsreflowing/minecraft_overworld/td-natural-v" + version));
+        }
         WorldNaturalRiverState state = level.getDataStorage().computeIfAbsent(TYPE, DATA_NAME);
         if (state.settings.version == 0) {
             // DimensionDataStorage logs and swallows malformed NBT/load failures. Do not
@@ -130,7 +137,7 @@ public final class WorldNaturalRiverState extends SavedData {
             boolean enabled = newWorld && adapterAvailable
                     && !WorldRiverPreviewState.settings(level).enabled()
                     && Boolean.parseBoolean(System.getProperty("td.rivers.natural", "true"));
-            state.settings = new Settings(enabled, VERSION, level.getSeed(), WorldScaleManager.getCurrentScale());
+            state.settings = new Settings(enabled, adapterVersion, level.getSeed(), WorldScaleManager.getCurrentScale());
             // C2ME can defer DimensionDataStorage.save(), and SavedData swallows write errors.
             // Publish this first immutable marker ourselves, atomically, before generation.
             try {
@@ -160,6 +167,10 @@ public final class WorldNaturalRiverState extends SavedData {
         }
         if (state.settings.enabled && !adapterAvailable) {
             throw new IllegalStateException("This world requires the audited NeoForge Streams natural-river adapter before terrain generation");
+        }
+        if (state.settings.enabled && state.settings.version > adapterVersion) {
+            throw new IllegalStateException("Natural river profile " + state.settings.version
+                    + " requires a newer Streams adapter; this adapter supports through " + adapterVersion);
         }
         if (state.settings.enabled && state.settings.seed != level.getSeed()) {
             throw new IllegalStateException("Persisted natural river seed does not match this world");

@@ -19,8 +19,10 @@ public final class StreamsNaturalConfigTest {
             Config v8 = (Config) StreamsNaturalConfig.apply(original, scale, 8);
             Config v9 = (Config) StreamsNaturalConfig.apply(original, scale, 9);
             Config v10 = (Config) StreamsNaturalConfig.apply(original, scale, 10);
+            Config v11 = (Config) StreamsNaturalConfig.apply(original, scale, 11);
             require(v9.equals(v8), "V9 bank/slab fix must preserve V8 routing at scale " + scale);
             require(v10.equals(v9), "V10 biome bank fix must preserve V9 routing at scale " + scale);
+            require(v11.equals(v10), "V11 planform pass must preserve V10 native configuration at scale " + scale);
             require(v9.minRiverAccumulation == Math.max(24, accumulation), "source threshold");
             require(original.minRiverAccumulation == accumulation && original.plateScale == 1024,
                     "native input must remain immutable");

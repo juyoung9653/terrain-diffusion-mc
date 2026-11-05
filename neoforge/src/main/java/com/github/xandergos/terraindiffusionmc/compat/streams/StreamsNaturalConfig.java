@@ -37,7 +37,7 @@ public final class StreamsNaturalConfig {
         if (version == 5) return watershedProfile(config, scale);
         if (version == 6) return watershedProfile(config, scale);
         if (version == 7) return watershedProfile(config, scale);
-        if (version == 8 || version == 9 || version == 10) {
+        if (version == 8 || version == 9 || version == 10 || version == 11) {
             // Admit fewer weak native sources before the conservative border and
             // connector guards run. Keep every other v7 routing setting frozen.
             return StreamsRecordAccess.copy(watershedProfile(config, scale), Map.of(

@@ -2,5 +2,5 @@
   "required": true,
   "package": "com.terrain.fpsprobe.mixin",
   "compatibilityLevel": "JAVA_21",
-  "client": ["RenderSystemFlipMixin"]
+  "client": ["RenderSystemFlipMixin", "StageCompositeMixin", "StageFinalPassMixin", "StageShadowMixin", "StageFullscreenQuadMixin", "StageProgramUniformsMixin", "StageProgramBuilderMixin", "StageClassicNativeMixin", "StageOpenGLFGMixin", "StagePhotonBridgeMixin", "StageSodiumMixin", "StageVoxyMixin", "StageLevelMixin", "StageDLSSGStateMixin"]
 }

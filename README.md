@@ -292,6 +292,14 @@ previous profile; installing the JAR does not rewrite saved rivers. See the
 [Streams integration setup and validation](tools/streams_probe/README.md).
 The Streams mod is installed separately.
 
+New TD worlds with Streams **2.16.2** use natural river profile **V11**.
+It gently bends narrow straight runs of at least 32 blocks, with at most four
+blocks of lateral movement. Junctions, source/outlet endpoints and water grades
+remain pinned; terrain, lake and watershed-border checks can leave a run unchanged.
+Other audited Streams versions still create V10 worlds. Saved V1–V10 worlds retain
+their existing geometry and cache namespace, including newly generated chunks.
+V11 worlds require the 2.16.2 adapter and must not be downgraded to older adapters.
+
 V9 keeps V8 routing, narrows dry sediment aprons according to planned channel
 width, and checks nearby lakes per column instead of vetoing an entire chunk.
 Bank eligibility uses planned water rather than whichever neighboring chunks have

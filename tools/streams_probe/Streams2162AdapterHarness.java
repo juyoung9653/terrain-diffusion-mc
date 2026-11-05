@@ -50,7 +50,7 @@ public final class Streams2162AdapterHarness {
         roundTrip(none, COLUMN, "ColumnPlan");
         verifySingleFieldCopies(none, COLUMN, "ColumnPlan");
 
-        for (int version = 1; version <= 10; version++) {
+        for (int version = 1; version <= 11; version++) {
             Object adapted = StreamsNaturalConfig.apply(config, 2, version);
             for (String field : List.of("terrainFit", "lakeSampleSpacing", "legacyShaping", "adaptiveGridRead")) {
                 require(Objects.equals(StreamsRecordAccess.read(adapted, field), before.get(field)),
@@ -60,7 +60,9 @@ public final class Streams2162AdapterHarness {
         requireFails(() -> StreamsRecordAccess.copy(config, Map.of("notAStreamsField", 1)));
         requireFails(() -> StreamsRecordAccess.copy(hydraulics, Map.of("notAStreamsField", 1)));
         requireFails(() -> StreamsRecordAccess.copy(none, Map.of("notAStreamsField", 1)));
-        System.out.println("Streams2162AdapterHarness: PASS config44 hydraulic7 column23 profiles1-10");
+        require(StreamsNaturalConfig.apply(config, 2, 10).equals(StreamsNaturalConfig.apply(config, 2, 11)),
+                "V11 must preserve V10 native routing configuration");
+        System.out.println("Streams2162AdapterHarness: PASS config44 hydraulic7 column23 profiles1-11");
     }
 
     private static void roundTrip(Object value, List<String> fields, String label) {

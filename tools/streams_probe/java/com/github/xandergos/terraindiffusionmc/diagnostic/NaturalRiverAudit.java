@@ -3,6 +3,7 @@ package com.github.xandergos.terraindiffusionmc.diagnostic;
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfile;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
+import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess;
 import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
 import java.nio.file.Files;
 import java.util.Comparator;
@@ -31,7 +32,7 @@ final class NaturalRiverAudit {
         Map<String, Edge> edges = new HashMap<>();
         for (Object plate : plates) {
             Object network = engine.getClass().getMethod("networkFor", plate.getClass()).invoke(engine, plate);
-            for (Object segment : (List<?>) network.getClass().getMethod("segments").invoke(network)) {
+            for (Object segment : segments(network)) {
                 Edge edge = Edge.read(segment);
                 edges.putIfAbsent(edge.key(), edge);
             }
@@ -47,13 +48,23 @@ final class NaturalRiverAudit {
         for (String field : List.of("plateScale", "gridSpacing", "minRiverAccumulation", "minSeaChainNodes", "minLengthScope",
                 "growDensity", "growFromWater", "baseWidth", "widthScale", "wetnessMultiplier", "confineToBanks",
                 "meanderStrength", "streamDepth", "maxWidth", "hydraulics")) {
-            profile.append(field).append('=').append(config.getClass().getMethod(field).invoke(config)).append('\n');
+            profile.append(field).append('=').append(StreamsRecordAccess.read(config, field)).append('\n');
         }
         profile.append(String.format(Locale.ROOT, "bounds=%d,%d,%d,%d%n", x-radius,z-radius,x+radius,z+radius));
         profile.append("coastTerminalMeaning=marine-adjacent planned terminals; not proven physical outlets\n");
         Files.writeString(root.resolve("td-natural-river-profile.txt"), profile);
         if (Boolean.getBoolean("td.streamsProbe.naturalCoastAudit")) {
             exportMarineAdjacentTerminals(level, ordered, x, z, radius, root);
+        }
+    }
+
+    /** The 2.16.2 RiverNetwork preserves the public type but renames its segment accessor. */
+    @SuppressWarnings("unchecked")
+    private static List<?> segments(Object network) throws ReflectiveOperationException {
+        try {
+            return (List<?>) network.getClass().getMethod("segments").invoke(network);
+        } catch (NoSuchMethodException legacyAbsent) {
+            return (List<?>) network.getClass().getMethod("sourceGivenToAuthorizedOnly1").invoke(network);
         }
     }
 
@@ -133,15 +144,12 @@ final class NaturalRiverAudit {
     }
     private record Edge(Node start, Node end) {
         static final Comparator<Edge> ORDER = Comparator.comparing(Edge::start, Node.ORDER).thenComparing(Edge::end, Node.ORDER);
-        static Edge read(Object segment) throws Exception {
-            Class<?> type = segment.getClass();
-            return new Edge(node(type, segment, "x1", "z1", "y1", "w1"), node(type, segment, "x2", "z2", "y2", "w2"));
+        static Edge read(Object segment) {
+            return new Edge(node(segment, "x1", "z1", "y1", "w1"), node(segment, "x2", "z2", "y2", "w2"));
         }
-        private static Node node(Class<?> type, Object segment, String x, String z, String y, String width) throws Exception {
-            return new Node(readNumber(type, segment, x), readNumber(type, segment, z), readNumber(type, segment, y), readNumber(type, segment, width));
-        }
-        private static double readNumber(Class<?> type, Object segment, String field) throws Exception {
-            return ((Number) type.getMethod(field).invoke(segment)).doubleValue();
+        private static Node node(Object segment, String x, String z, String y, String width) {
+            return new Node(StreamsRecordAccess.number(segment, x), StreamsRecordAccess.number(segment, z),
+                    StreamsRecordAccess.number(segment, y), StreamsRecordAccess.number(segment, width));
         }
         /** Preserve parallel geometry with distinct grades/widths; only byte-identical exported segment values deduplicate. */
         String key() { return csv(); }

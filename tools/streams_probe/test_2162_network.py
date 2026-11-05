@@ -11,9 +11,11 @@ ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build" / "streams-2162-review" / "network-test"
 SOURCES = (
     ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/river/NaturalRiverMorphology.java",
+    ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/river/NaturalRiverPlanform.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsRecordAccess.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/Streams2162NetworkAccess.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsNaturalNetwork.java",
+    ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsPlanformNetwork.java",
     ROOT / "tools/streams_probe/Streams2162NetworkHarness.java",
 )
 

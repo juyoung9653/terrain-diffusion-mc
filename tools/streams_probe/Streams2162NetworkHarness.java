@@ -17,6 +17,7 @@ public final class Streams2162NetworkHarness {
     public static void main(String[] args) {
         StreamsConfig config = StreamsConfig.proprietary1();
         verifySegmentRecordAccess();
+        verifyPlanformSegments();
         LicensedCodeNotForAnalysis_001 retained = segment(0, 0, 10, 0);
         LicensedCodeNotForAnalysis_001 removed = segment(10, 0, 20, 0);
         Lake lake = new Lake(62, 1, 1, 0, 0, 1, 1, new long[] {1L});
@@ -79,6 +80,40 @@ public final class Streams2162NetworkHarness {
 
     private static LicensedCodeNotForAnalysis_001 segment(double x1, double z1, double x2, double z2) {
         return new LicensedCodeNotForAnalysis_001(x1, z1, 70, 4, x2, z2, 69, 4, .2, .3);
+    }
+
+    private static void verifyPlanformSegments() {
+        var original = segment(0, 0, 64, 0);
+        var output = StreamsPlanformNetwork.reshapeSegments(List.of(original), (x, z) -> 72,
+                (x, z, radius) -> true, 12345L, 63);
+        require(output.size() > 1, "long native reach must be subdivided into a curve");
+        require(StreamsRecordAccess.number(output.get(0), "x1") == 0
+                && StreamsRecordAccess.number(output.get(0), "z1") == 0,
+                "planform changed source endpoint");
+        Object last = output.get(output.size() - 1);
+        require(StreamsRecordAccess.number(last, "x2") == 64
+                && StreamsRecordAccess.number(last, "z2") == 0, "planform changed terminal endpoint");
+        boolean curved = false;
+        for (int i = 0; i < output.size(); i++) {
+            Object piece = output.get(i);
+            curved |= Math.abs(StreamsRecordAccess.number(piece, "z2")) > 1;
+            require(StreamsRecordAccess.number(piece, "y1") >= StreamsRecordAccess.number(piece, "y2"),
+                    "subdivision reverses downstream grade");
+            require(StreamsRecordAccess.number(piece, "w1") == 4 && StreamsRecordAccess.number(piece, "w2") == 4,
+                    "subdivision changes width");
+            if (i > 0) for (String axis : List.of("x", "z", "y", "w")) {
+                require(StreamsRecordAccess.number(output.get(i - 1), axis + "2")
+                        == StreamsRecordAccess.number(piece, axis + "1"), "native pieces disconnected on " + axis);
+            }
+        }
+        require(curved, "native copied coordinates must include the bend");
+        Object sentinel = new Object();
+        require(StreamsPlanformNetwork.refine(sentinel, null, null, null, 1L, 10) == sentinel,
+                "V10 must not enter the new native adapter");
+        RiverNetwork graph = new RiverNetwork(new PlateKey(0, 0), List.of(original), null, List.of(), List.of(), null);
+        RiverNetwork rebuilt = (RiverNetwork) Streams2162NetworkAccess.reassemble(graph, output,
+                StreamsConfig.proprietary1(), false);
+        require(Streams2162NetworkAccess.segments(rebuilt).equals(output), "native reassembly lost curved pieces");
     }
 
     private static void require(boolean value, String message) {

@@ -37,7 +37,7 @@ public final class StreamsNaturalRiverAdapter {
     public static int version(Object config) { return CONFIGS.getOrDefault(config, 0); }
 
     /** Uncarved TD density boundary, independent of native grade calibration/filtering. */
-    static com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverMorphology.Ground originalTerrain(Object config) {
+    public static com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverMorphology.Ground originalTerrain(Object config) {
         ServerLevel level = TERRAIN_LEVELS.get(config);
         if (level == null) throw new IllegalStateException("Missing v6 terrain binding");
         var generator = level.getChunkSource().getGenerator();

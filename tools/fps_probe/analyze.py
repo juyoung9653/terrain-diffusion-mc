@@ -44,7 +44,7 @@ def analyze(directory):
         errors.append('foreground/validity failure')
     start_identity = receipt.get('entity_snapshot_start_sha256')
     end_identity = receipt.get('entity_snapshot_end_sha256')
-    if start_identity and end_identity and start_identity != end_identity:
+    if not receipt.get("live_world", False) and start_identity and end_identity and start_identity != end_identity:
         errors.append('server entity state changed during sampling')
     gpu = columns.get('gpu_elapsed_ms', [])
     if receipt.get('gpu_query_errors', 0) or receipt.get('gpu_query_dropped', 0):
@@ -58,7 +58,7 @@ def analyze(directory):
             'spark_background_disabled', 'respawn_recap_disabled', 'max_heap_mib', 'min_heap_mib',
             'jfr', 'presentmon', 'warmup_seconds')},
         'scene': {k: receipt.get(k) for k in ('requested_camera', 'actual_camera', 'world_time', 'raining',
-                   'world_tick_frozen', 'loaded_entity_count', 'framebuffer',
+                   'world_tick_frozen', 'live_world', 'yaw_sweep_degrees', 'loaded_entity_count', 'framebuffer',
                    'entity_snapshot_start_sha256', 'entity_snapshot_end_sha256')},
         'metrics': {key: metric(values) for key, values in columns.items()},
         'swap': {k: receipt.get(k) for k in ('swap_present_samples', 'swap_wall_mean_ms',
@@ -66,7 +66,7 @@ def analyze(directory):
                     'swap_thread_cpu_p95_ms', 'swap_non_cpu_p95_ms')},
         'cpu_caveat': 'Windows thread CPU counters in these recordings have 15.625ms steps; use aggregate mean, not per-frame CPU percentiles or per-frame wall-minus-CPU as precise wait time',
         'gpu_caveat': 'GPU timeline elapsed includes idle; not GPU busy time',
-        'sample_caveat': 'Frozen scene isolates stationary rendering; does not establish travel/animation performance'}
+        'sample_caveat': ('Live world at fixed position; controlled clear noon, optional camera sweep; does not establish travel or fresh chunk generation performance' if receipt.get('live_world', False) else 'Frozen scene isolates stationary rendering; does not establish travel/animation performance')}
     if frames:
         swap_path = directory / 'swap-times.csv'
         swaps = list(csv.DictReader(swap_path.open(newline=''))) if swap_path.exists() else []
@@ -85,6 +85,12 @@ def analyze(directory):
             'over_33_333_ms_percent': 100 * sum(x > 1000/30 for x in frames) / len(frames),
             'over_25_ms_frames': sum(x > 25 for x in frames),
             'over_50_ms_frames': sum(x > 50 for x in frames)})
+    controls = inputs.get('declared_controls', {})
+    diagnostic = bool(controls.get('render_stages') or controls.get('external_profiler_preparation'))
+    result['measurement_kind'] = 'render diagnostic' if diagnostic else 'FPS benchmark'
+    result['performance_acceptance_eligible'] = not diagnostic and not errors
+    if diagnostic:
+        result['sample_caveat'] += '; stage instrumentation adds overhead: do not use this run as evidence of achieved target FPS'
     return result
 
 
@@ -94,7 +100,7 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     runs = [analyze(path) for path in args.runs]
-    scene_keys = ('actual_camera', 'world_time', 'raining', 'world_tick_frozen',
+    scene_keys = ('actual_camera', 'world_time', 'raining', 'world_tick_frozen', 'live_world', 'yaw_sweep_degrees',
                   'loaded_entity_count', 'framebuffer', 'entity_snapshot_start_sha256')
     mismatched = [key for key in scene_keys if len({str(run['scene'].get(key)) for run in runs}) > 1]
     identity_available = all(run['scene'].get('entity_snapshot_start_sha256') for run in runs)

@@ -1,0 +1,10 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="td_leaf_occlusion"
+version="1.0.0"
+displayName="TD Leaf Occlusion"
+description="Fail-closed interior culling for verified opaque TD leaf models."
+[[mixins]]
+config="td-leaf-occlusion.mixins.json"

@@ -7,6 +7,31 @@ with `probe.init.gradle` enabled.
 
 For 2.16.2, run the static hook audit, `test_2162_adapter.py`,
 `test_2162_network.py` and `test_2162_gate.py` before the native suite.
+For V11 planform changes also run `python tools/river_planner/test_natural_planform.py`.
+V11 bends only eligible long straight runs before native graph indexing/caching;
+new 2.16.2 worlds select V11 while saved profiles and older adapters retain V10
+or earlier. Use a fresh, uninitialized fixture without a natural-profile marker
+to test selection, then verify its persisted V11 marker and repeat the same fixture
+to check saved-graph restart. Do not upgrade a player save's marker or reuse a
+V10 native graph as evidence of V11 generation. Compare saved surface water;
+total water also includes underground rivers.
+
+The 2.16.2 graph contains valid zero-width source records and half-block
+segments with quantized grade steps. Preserve those records without rejecting
+unrelated runs; evaluate the whole run's slope. Graph grade is above physical
+water by `ditchInset`, so V11 bank checks must account for that inset and use
+the original TD terrain sampler. Fetch that sampler only inside the V11 gate:
+saved profiles before V6 have no terrain binding.
+
+The screenshot-region regression (seed `-1865570798092571362`, X704–783,
+Z912–943) reduced the longest constant-width surface-water edge from 52 blocks
+on V10/2.16.2 to 10 on V11/2.16.2 (V10/2.15.2: 15). The corrected water remained
+one connected component. Native topology and 100-tick checks passed on first
+generation and restart; all four saved graph hashes and the sampled surface
+grid were unchanged after restart. Evidence is in
+`build/straight-river-nov05-analysis/`; this small fresh fixture is not a
+whole-modpack gameplay or performance benchmark.
+
 Prepare with `--streams-version 2.16.2`; this requires the current
 `streamsreflowing.properties`. The selected FP16 decoder must be copied and
 hashed with the other model assets when `decoder_precision=fp16`; missing it

@@ -102,6 +102,10 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
         return hasStreamsVersion(version -> hasModernHooks(version) || is2162(version));
     }
 
+    public static boolean hasPlanformAdapter() {
+        return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2162);
+    }
+
     public static boolean isAuditedVersion(String version) {
         return isLegacyBankMaterialVersion(version) || hasModernHooks(version) || is2162(version);
     }
