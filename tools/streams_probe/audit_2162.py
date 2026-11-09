@@ -35,6 +35,12 @@ TOP_HELPER = (
     "Lnet/minecraft/core/BlockPos$MutableBlockPos;III"
     "Lnet/minecraft/world/level/block/state/BlockState;I)V"
 )
+CONTAINMENT_FILL = (
+    "(Lnet/minecraft/world/level/WorldGenLevel;Ldev/streamsreflowing/core/RiverEngine;"
+    "Lnet/minecraft/core/BlockPos$MutableBlockPos;Ldev/streamsreflowing/core/compose/ColumnPlan;"
+    "IIIIIZII)V"
+)
+PLACE_TOP_HELPER_OFFSETS = ["2323", "4594", "11258", "13308", "14071"]
 SEAGRASS_COLUMN = (
     "(Lnet/minecraft/world/level/WorldGenLevel;Lnet/minecraft/util/RandomSource;"
     "Lnet/minecraft/core/BlockPos$MutableBlockPos;IIII)Z"
@@ -123,6 +129,20 @@ def audit_2162(java_home: Path, jar: Path) -> dict[str, object]:
     _require(bool(bank), "2.16.2 bank helper descriptor missing", failures)
     _require(bank.count(RING_PICK) == 1, "bank ring selection call count changed", failures)
     _require(bank.count(TOP_HELPER) == 1, "bank exposed-top helper call count changed", failures)
+    containment = _method_for_descriptor(text["carver"], CONTAINMENT_FILL)
+    _require(bool(containment), "2.16.2 containment fill helper descriptor missing", failures)
+    _require(containment.count(TOP_HELPER) == 2,
+             "containment fill/lip write paths changed", failures)
+    _require('@WrapOperation(method = NATIVE_BANK_FILL' in bank_source
+             and 'target = TOP_HELPER, ordinal = 1' in bank_source
+             and 'StreamsNativeBankFill.allowsLip(level, engine, x, y, z)' in bank_source,
+             "native optional lip hook contract drifted", failures)
+    _require("@Inject(method = NATIVE_BANK_FILL" in bank_source
+             and "ColumnPlan;IIIIIZII)V" in bank_source
+             and "StreamsNativeBankFill.allows(level, targetX, targetZ, crestY, minY, mayAddLip)" in bank_source,
+             "native containment admission handler contract drifted", failures)
+    _require(re.search(r"127: iload\s+13\s+129: iload\s+8\s+131: iconst_4\s+132: isub", containment) is not None,
+             "containment fill no longer uses the audited crest argument 8 and five-block cap", failures)
     # The metrics fed to the pick must still select point-bar vs. non-point-bar
     # from argument 22, then pass that computed metrics local and ring index to
     # the sole native pick.  This pins the @Local(argsOnly = true, index = 22)
@@ -173,6 +193,18 @@ def audit_2162(java_home: Path, jar: Path) -> dict[str, object]:
              "recap writes no longer consume grass/tall-grass state locals", failures)
     for ordinal in (12, 13, 14, 15):
         _require(f"ordinal = {ordinal}" in bank_source, f"bank recap hook ordinal {ordinal} missing", failures)
+    place_top_helpers = re.findall(
+        r"(?m)^\s*(\d+): invokestatic .*Method proprietary1:"
+        r"\(Lnet/minecraft/world/level/WorldGenLevel;"
+        r"Lnet/minecraft/core/BlockPos\$MutableBlockPos;III"
+        r"Lnet/minecraft/world/level/block/state/BlockState;I\)V",
+        place)
+    _require(place_top_helpers == PLACE_TOP_HELPER_OFFSETS,
+             f"place exposed-top helper calls moved: {place_top_helpers}", failures)
+    _require("terrainDiffusion$climateRaisedCap" in bank_source
+             and "at = @At(value = \"INVOKE\", target = TOP_HELPER)" in bank_source
+             and "require = 5" in bank_source,
+             "place exposed-top helper climate hook missing", failures)
 
     grass = _method_for_descriptor(text["seagrass"], SEAGRASS_COLUMN)
     _require(bool(grass), "2.16.2 seagrass column helper descriptor missing", failures)
@@ -253,12 +285,15 @@ def audit_2162(java_home: Path, jar: Path) -> dict[str, object]:
 
     evidence = {
         "bankHelper": BANK_HELPER,
+        "containmentFillHelper": CONTAINMENT_FILL,
+        "containmentFillAndLipCalls": containment.count(TOP_HELPER),
         "ringPickCalls": bank.count(RING_PICK),
         "topHelperCalls": bank.count(TOP_HELPER),
         "pointBarArgument22": re.search(point_bar_metrics, compact_bank) is not None,
         "ringPickArgumentStack": re.search(ring_stack, compact_bank) is not None,
         "recapOrdinals": {str(i): recap_offsets[n] for n, i in enumerate((12, 13, 14, 15))},
         "recapStateFlow": re.search(recap_writes, compact_place) is not None,
+        "placeTopHelperOffsets": place_top_helpers,
         "fastcalExactBranch": re.search(exact_branch, " ".join(selector.split())) is not None,
         "appearanceMaxWidthArgument": 2,
         "seagrassTallCalls": grass.count("DoublePlantBlock.placeAt:(Lnet/minecraft/world/level/LevelAccessor;"),

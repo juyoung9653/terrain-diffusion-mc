@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Predicate;
 
 public final class StructurePlacementRuntime {
+    public static final int CURRENT_TERRAIN_POLICY = 5;
     private static final Map<ChunkGeneratorStructureState, StructureReservations> PLANNERS = Collections.synchronizedMap(new WeakHashMap<>());
     private static final Map<StructureStart, StructureTerrain.Plan> PLANS = Collections.synchronizedMap(new WeakHashMap<>());
     private static final Set<String> DIAGNOSTICS = ConcurrentHashMap.newKeySet();
@@ -116,7 +117,7 @@ public final class StructurePlacementRuntime {
         }
         StructureStart start=assembled.start();
         if (assembled.plan()!=null) PLANS.put(start,assembled.plan());
-        ((PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion(3);
+        ((PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion(CURRENT_TERRAIN_POLICY);
         // Native/modded assembly can drift after bounded preflight cache eviction. Commit
         // actual geometry atomically; an unsuccessful later chunk write leaves a conservative
         // session reservation until lifecycle clear, rather than risking a conflicting start.
@@ -165,7 +166,7 @@ public final class StructurePlacementRuntime {
             if (attempt.foreignOrigin) diagnostic(id,"foreign jigsaw origin preserved; alternate assembly unavailable");
             if (!start.isValid()) count(id,"native generation returned invalid start");
             if (start.isValid()) {
-                ((PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion(3);
+                ((PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion(CURRENT_TERRAIN_POLICY);
                 StructureTerrain.Plan acceptedPlan=null;
                 boolean shaped=StructureTerrain.shapes(start,policy,access);
                 boolean accepted = footprintEnvelope.contains(StructureTerrain.rect(start.getBoundingBox()))
@@ -284,7 +285,26 @@ public final class StructurePlacementRuntime {
 
     private static boolean managedTerrain(StructureStart start) {
         int version = ((PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion();
-        return version == 1 || version == 2 || version == 3;
+        return version >= 1 && version <= CURRENT_TERRAIN_POLICY;
+    }
+
+    public static void finishFoundation(WorldGenLevel level,ChunkGenerator generator,StructureStart start,
+                                        BoundingBox box,ChunkPos chunk) {
+        if (!(level instanceof WorldGenRegion)
+                || ((PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion()<4
+                || !TerrainDiffusionBiomeSources.isTerrainDiffusion(generator.getBiomeSource())
+                || !shapes(start,level.registryAccess())) return;
+        var registry=level.registryAccess().registryOrThrow(Registries.STRUCTURE);
+        String id=String.valueOf(registry.getKey(start.getStructure()));
+        var policy=StructurePlacementConfig.snapshotFor(registry).resolve(id);
+        var plan=PLANS.get(start);
+        if (plan==null) {
+            plan=StructureTerrain.plan(start,policy,generator,level.getLevel().getChunkSource().randomState(),level);
+            if (plan==null) return;
+            PLANS.put(start,plan);
+        }
+        int filled=StructureFoundationSupport.restore(level,start,box,chunk,plan,policy);
+        if (filled>0) add(id,"post-placement soil support blocks",filled);
     }
 
     public static void surface(WorldGenRegion region, ChunkGenerator generator, RandomState random, ChunkAccess chunk) {

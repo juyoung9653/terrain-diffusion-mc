@@ -30,6 +30,11 @@ public class GateHarness { static final String P="com.github.xandergos.terraindi
  v();ok(!StreamsStructureShieldMixinPlugin.hasPlanformAdapter(),"no planform without Streams");
  v("streamsreflowing@2.16.2"); for(String n:new String[]{"StreamsStartup2162Mixin","StreamsWorldgenScale2162Mixin","StreamsNaturalRiver2162Mixin","StreamsNaturalNetwork2162Mixin","StreamsBankMaterial2162Mixin","StreamsSeagrassFeature2162Mixin"})ok(a(n),"2162 "+n);
  for(String n:new String[]{"StreamsWorldgenPrefetchMixin","StreamsDemandPriorityMixin","StreamsSamplerPriorityMixin","StreamsBankMaterial2152Mixin","StreamsShallowBanks2152Mixin","StreamsStartupMixin","StreamsStructureShieldMixin","StreamsWorldgenScaleMixin","StreamsNaturalRiverMixin","StreamsNaturalNetworkMixin","StreamsRiverBanksMixin","StreamsShallowBanksMixin","StreamsRiverRasterMixin","StreamsPlayerPrefetchMixin","StreamsLakeLevelsMixin","StreamsBankMaterialMixin","StreamsBankMaterial2138Mixin"})ok(!a(n),"2162 blocks old "+n);
+ for(String n:new String[]{"StreamsShortRiverTunnel2162Mixin","ShortRiverTunnelWorldGenRegionMixin","StreamsShallowBed2162Mixin"}){
+   v("streamsreflowing@2.16.2");ok(a(n),"2162 tunnel "+n);
+   for(String version:new String[]{"2.13.8","2.15.2","2.16.3"}){v("streamsreflowing@"+version);ok(!a(n),"unsupported tunnel "+version);}
+   v();ok(!a(n),"no streams tunnel "+n);
+ }
  v("streamsreflowing@2.15.2"); ok(a("StreamsWorldgenPrefetchMixin"),"2152 legacy hook");ok(a("StreamsBankMaterial2152Mixin"),"2152 bank hook");ok(!a("StreamsStartup2162Mixin"),"2152 blocks new");
  v("streamsreflowing@2.14.9");ok(!a("StreamsStartup2162Mixin"),"unknown blocks new");ok(!a("StreamsWorldgenPrefetchMixin"),"unknown blocks old");
  v();ok(!a("StreamsStartup2162Mixin"),"no streams blocks new"); v("streamsreflowing@2.16.2","terrain_slabs@3.1.2");ok(a("TerrainSlabRiverFeatureMixin"),"2162 slab guard"); v("streamsreflowing@2.16.2","terrain_slabs@3.1.1");ok(!a("TerrainSlabRiverFeatureMixin"),"wrong slab version"); System.out.println("GateHarness: PASS"); }}''',

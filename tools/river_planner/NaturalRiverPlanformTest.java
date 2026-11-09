@@ -18,6 +18,7 @@ public final class NaturalRiverPlanformTest {
         triesOppositeBankBeforeGivingUp();
         rejectsAnUnrelatedCrossing();
         handlesNativeHalfBlockTerracesAndZeroWidthSources();
+        bendsRunAfterAttachedZeroWidthSource();
         System.out.println("NaturalRiverPlanformTest: passed");
     }
 
@@ -126,6 +127,20 @@ public final class NaturalRiverPlanformTest {
                 && Math.abs(p.reach().z1())>1),"native half-block terrace run must bend");
         for(int i=1;i<out.size();i++) check(out.get(i-1).sourceIndex()<=out.get(i).sourceIndex(),"native record order stable");
         check(out.stream().allMatch(p->p.reach().y1()>=p.reach().y2()),"native terrace grades remain downstream");
+    }
+
+    private static void bendsRunAfterAttachedZeroWidthSource() {
+        List<Reach> input = List.of(
+                r(0,0,80,0,0,.5,80,.01,1,1),
+                r(0,.5,80,2,0,60.5,78,2,1,1));
+        List<Piece> out = NaturalRiverPlanform.refine(input, HIGH, OPEN, 19, 63);
+        check(out.getFirst().sourceIndex() == 0 && out.getFirst().reach().equals(input.getFirst()),
+                "attached zero-width source remains byte-for-byte intact");
+        check(out.stream().filter(piece -> piece.sourceIndex() == 1).count() > 1,
+                "first usable reach after zero-width source is inspected and subdivided");
+        check(out.stream().filter(piece -> piece.sourceIndex() == 1)
+                        .anyMatch(piece -> Math.abs(piece.reach().x1()) > .2 || Math.abs(piece.reach().x2()) > .2),
+                "attached-source long straight run bends");
     }
 
     private static List<Piece> identity(List<Reach> input) { java.util.ArrayList<Piece> out=new java.util.ArrayList<>(); for(int i=0;i<input.size();i++) out.add(new Piece(i,input.get(i))); return List.copyOf(out); }

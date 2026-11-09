@@ -57,7 +57,8 @@ public final class ColdWeatherAudit {
             float temperature = data.ecology.sample(dx, dz).temperature();
             boolean snow = EcologyClassifier.naturalSnowCover(region.pos.getX(), region.pos.getZ(),
                     data.heightmap[dz][dx], temperature, data.ecology.snowRetention(dx, dz));
-            boolean ice = EcologyClassifier.coldState(temperature) >= .65f;
+            boolean ice = EcologyClassifier.naturalIceCover(region.pos.getX(), region.pos.getZ(),
+                    data.heightmap[dz][dx], temperature, data.ecology.snowRetention(dx, dz));
             if (snow) coldColumns++; else warmColumns++;
             for (Holder<Biome> biome : java.util.List.of(cold, warm)) {
                 region.biome = biome; region.light = 0;

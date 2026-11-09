@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsBankMaterialPolicy;
+import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNativeBankFill;
 import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
 import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
 import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
@@ -15,11 +16,14 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Coerce;
+import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * Streams 2.16.2 retains the one native bank-material choice and its separate
  * exposed-top helper, but changes the implementation classes. The hooks retain
- * native ring selection, depth filling and random draws.
+ * native ring selection and random draws. V13 separately bounds native
+ * containment fills before they can build detached soil walls.
  */
 @Pseudo
 @Mixin(targets = "dev.streamsreflowing.worldgen.RiverCarverFeature", remap = false)
@@ -32,6 +36,42 @@ public abstract class StreamsBankMaterial2162Mixin {
                     + "IZLjava/util/List;Ljava/util/List;Ljava/util/Map;"
                     + "Ldev/streamsreflowing/worldgen/ProprietaryNiceJohn_003;II"
                     + "Ljava/lang/String;ZZLdev/streamsreflowing/core/compose/ColumnPlan;)V";
+    private static final String TOP_HELPER =
+            "Ldev/streamsreflowing/worldgen/RiverCarverFeature;"
+                    + "proprietary1(Lnet/minecraft/world/level/WorldGenLevel;"
+                    + "Lnet/minecraft/core/BlockPos$MutableBlockPos;III"
+                    + "Lnet/minecraft/world/level/block/state/BlockState;I)V";
+    private static final String NATIVE_BANK_FILL =
+            "proprietary1(Lnet/minecraft/world/level/WorldGenLevel;"
+                    + "Ldev/streamsreflowing/core/RiverEngine;"
+                    + "Lnet/minecraft/core/BlockPos$MutableBlockPos;"
+                    + "Ldev/streamsreflowing/core/compose/ColumnPlan;IIIIIZII)V";
+
+    @Inject(method = NATIVE_BANK_FILL, at = @At("HEAD"), cancellable = true,
+            require = 1, remap = false)
+    private static void terrainDiffusion$guardNativeBankFill(WorldGenLevel level,
+            @Coerce Object engine, BlockPos.MutableBlockPos mutable, @Coerce Object plan,
+            int ignored4, int ignored5, int targetX, int targetZ, int crestY,
+            boolean mayAddLip, int minY, int ignored11, CallbackInfo ci) {
+        if (!StreamsNativeBankFill.allows(level, targetX, targetZ, crestY, minY, mayAddLip)) {
+            ci.cancel();
+        }
+    }
+
+    // Ordinal 0 restores the containing crest; ordinal 1 adds the optional raised lip.
+    @WrapOperation(method = NATIVE_BANK_FILL,
+            at = @At(value = "INVOKE", target = TOP_HELPER, ordinal = 1),
+            require = 1, remap = false)
+    private static void terrainDiffusion$guardRaisedBankLip(WorldGenLevel level,
+            BlockPos.MutableBlockPos mutable, int x, int y, int z, BlockState proposed, int minY,
+            Operation<Void> original, WorldGenLevel enclosingLevel, @Coerce Object engine,
+            BlockPos.MutableBlockPos enclosingMutable, @Coerce Object plan,
+            int ignored4, int ignored5, int targetX, int targetZ, int crestY,
+            boolean mayAddLip, int enclosingMinY, int seaLevel) {
+        if (StreamsNativeBankFill.allowsLip(level, engine, x, y, z)) {
+            original.call(level, mutable, x, y, z, proposed, minY);
+        }
+    }
 
     /**
      * 2.16.2 writes the exposed recap at ordinal 12, then its short/tall grass
@@ -76,6 +116,25 @@ public abstract class StreamsBankMaterial2162Mixin {
         return original.call(level, pos, proposed, flags);
     }
 
+    /**
+     * The 2.16.2 carver also raises exposed caps through its private top helper.
+     * Those five direct calls in {@code place} bypass the recap setBlock ordinal,
+     * so route the proposed cap through the same original-climate policy before
+     * the helper writes it.
+     */
+    @WrapOperation(method = "place(Lnet/minecraft/world/level/levelgen/feature/"
+                    + "FeaturePlaceContext;)Z",
+            at = @At(value = "INVOKE", target = TOP_HELPER),
+            require = 5, remap = false)
+    private void terrainDiffusion$climateRaisedCap(WorldGenLevel level,
+            BlockPos.MutableBlockPos mutable, int x, int y, int z, BlockState proposed, int minY,
+            Operation<Void> original) {
+        BlockState material = WorldNaturalRiverState.version(level.getLevel()) >= 10
+                ? StreamsBankMaterialPolicy.climateBankTop(level, x, y, z, proposed)
+                : proposed;
+        original.call(level, mutable, x, y, z, material, minY);
+    }
+
     @WrapOperation(
             method = BANK_HELPER,
             at = @At(value = "INVOKE", target =
@@ -101,11 +160,7 @@ public abstract class StreamsBankMaterial2162Mixin {
 
     @WrapOperation(
             method = BANK_HELPER,
-            at = @At(value = "INVOKE", target =
-                    "Ldev/streamsreflowing/worldgen/RiverCarverFeature;"
-                            + "proprietary1(Lnet/minecraft/world/level/WorldGenLevel;"
-                            + "Lnet/minecraft/core/BlockPos$MutableBlockPos;III"
-                            + "Lnet/minecraft/world/level/block/state/BlockState;I)V"),
+            at = @At(value = "INVOKE", target = TOP_HELPER),
             require = 1,
             remap = false)
     private static void terrainDiffusion$climateBankTop(WorldGenLevel level,

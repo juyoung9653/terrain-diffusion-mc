@@ -292,13 +292,74 @@ previous profile; installing the JAR does not rewrite saved rivers. See the
 [Streams integration setup and validation](tools/streams_probe/README.md).
 The Streams mod is installed separately.
 
-New TD worlds with Streams **2.16.2** use natural river profile **V11**.
-It gently bends narrow straight runs of at least 32 blocks, with at most four
+New TD worlds with Streams **2.16.2** use natural river profile **V13**.
+It retains V11's gentle bends in narrow straight runs of at least 32 blocks, with at most four
 blocks of lateral movement. Junctions, source/outlet endpoints and water grades
 remain pinned; terrain, lake and watershed-border checks can leave a run unchanged.
-Other audited Streams versions still create V10 worlds. Saved V1–V10 worlds retain
+Zero-width native source records remain pinned too; they delimit the following
+usable run rather than preventing that entire downstream branch from being bent.
+Other audited Streams versions still create V10 worlds. Saved V1–V12 worlds retain
 their existing geometry and cache namespace, including newly generated chunks.
-V11 worlds require the 2.16.2 adapter and must not be downgraded to older adapters.
+V11–V13 worlds require the 2.16.2 adapter and must not be downgraded to older adapters.
+
+V13 limits bank-gap soil repairs to at most two blocks, beside exactly one channel
+and an existing dry bank at both the new cap and the level below it. A low riverbed
+alone is not lateral support: isolated soil posts and cross-channel soil walls are
+not valid bank repairs. Saved V12 worlds retain their previous bank policy.
+The same two-block budget includes the optional lip in Streams 2.16.2's native
+containment helper. It requires a dry natural footing two blocks thick and an
+existing natural bank at crest height. The guard runs before native writes;
+it does not remove existing terrain or alter river-network grades.
+The optional extra lip is skipped outside channel columns when its containing
+crest is already above the planned water. This decision uses the immutable plan,
+not neighboring blocks whose state depends on generation order. Channel columns
+and water-level containment remain unchanged; the containing crest is retained.
+Resolve the lip's target through `engine.plan(x,z)`: the containment helper's
+incoming plan can describe the source channel rather than the target bank.
+For bank regressions, generate both sides of a chunk boundary and settle water
+for 100 ticks (`run_suite.py --settle-water`). A missing neighbor in a saved MCA
+snapshot is unavailable evidence, not an air column. `--bank-write-trace=X,Z`
+and `--plan-audit` distinguish native containment writes from TD's later repairs.
+
+V12 cannot rely on pre-existing deep cuts: it finds two endpoints on an existing,
+unbranched native detour and replaces only its strictly internal reaches with a
+direct chord of at most 512 blocks. The native graph is then reassembled and
+persisted. A thin roof, lake/border domain, another stream crossing, missing
+surface portals or a non-descending outlet rejects the candidate. The chord must
+pass the same shared approved masks and direct native-column water checks before
+it is published or used at runtime; `ShortRiverTunnelPlanner` remains the shared
+roof/portal authority. Streams still owns carving, water, bed and flow, while TD
+retains only the roof where that approved native channel passes under the hill.
+This is independent of optional deep geology and works with the Y=-64 floor.
+One continuous roof must cover the replacement chord, leaving at most 16 blocks
+of open approach at each end. Portal gaps and native roof trimming share that
+budget; admission checks it again after native water-column fitting. A short
+buried patch cannot justify replacing a long surface detour with a straight cut.
+
+The 512-block limit is a TD design choice. It is not a port of
+[Tectonic 1.21](https://github.com/Apollounknowndev/tectonic/blob/0d3478e0062941a4f0bd9384f13659f10f88558f/common/src/main/resources/resourcepacks/tectonic/data/tectonic/worldgen/density_function/overworld/underground_river/total.json),
+whose density fields determine their own connected lengths. Pure shortcut cases
+are covered by `python -B tools/river_planner/test_shortcuts.py` and
+`python -B tools/river_planner/test_short_tunnels.py`. Earlier roof-only native
+audits accepted a 195.68-block route with just 30.84 blocks of covered centreline.
+Those receipts establish roof retention, but do not validate the corrected
+shortcut admission: acceptance must also check the exposed length of the entire
+replacement chord, not only the enclosed tunnel core.
+V12 applies only to new 2.16.2 worlds, leaving V11 and older saved networks untouched.
+
+For native acceptance, run `tools/streams_probe/run_suite.py` with
+`--short-tunnel-audit --short-tunnel-center 0,0 --short-tunnel-radius 768`
+and the populated `--gradle-user-home .gradle`. FULL generation in one server task
+does not advance fluid ticks: shallow descending stream cells can initially be
+disconnected. The audit records that state, forces the generated chunks to tick,
+then waits 100 actual ticks for native scheduled water updates before requiring
+six-face water connectivity, open descending portals, headroom and a solid roof.
+It never schedules extra water updates or places water itself. The suite rejects
+a `passed` label without the pre-tick record, at least 100 settled ticks, nonempty
+physical checks, and matching saved plan/sample hashes. Older receipts without
+this evidence are not sufficient for this gate. Its negative cases run with
+`python -B -m unittest tools.test_probe_suite`. Preserve the first run's log before
+restarting because the suite overwrites `launcher-output.txt`.
 
 V9 keeps V8 routing, narrows dry sediment aprons according to planned channel
 width, and checks nearby lakes per column instead of vetoing an entire chunk.
@@ -492,6 +553,23 @@ exact terrain sampler, scale, natural river profiles 1–10, graph cache namespa
 climate bank materials, recap vegetation and submerged-plant limits. Native record
 copies preserve all 44 config components and the new trailing ColumnPlan component.
 The old private hooks are not enabled by widening their version gates.
+The 2.16.2 exposed-top helper has five direct callers in `place`, in addition
+to the bank-material helper and recap write. All three paths need the climate
+material correction: a raised cap can otherwise retain grass above the old
+world-generation heightmap even after the soil below becomes sand. The binary
+audit pins those five calls. Dry vanilla-beach columns over original arid land
+also receive sand; checking only the original shore ID misses quart/dithered
+biome boundaries. Interior land ecotones keep their existing moisture blending.
+Where the existing ecology policy selects sand, the bounded three-layer pass
+also accepts Immersive Weathering's `sandy_dirt` and `grassy_sandy_dirt`. Its
+raw-generation soil patches can still run in retained vanilla beaches and span
+adjacent desert columns, outside the ecology-biome removal list. Both surface
+admission and the layer walk must recognise these two soils; gating them only
+by the current beach biome leaves the desert side green. Other material choices
+retain their existing modded-soil handling.
+The local riparian moisture bonus also preserves an originally sandy column when
+it would otherwise become grass; already grassy margins and non-grass sediment
+choices retain their usual policy.
 
 On 2.16.2, Streams owns bank containment, mouth/lake shaping, raster repair,
 per-piece structure shields and scheduling/prefetch. The older TD dry-bank,
@@ -650,6 +728,11 @@ another broad noise mask. Cold terrain uses exposed gravel/stone and sparse low
 vegetation; Greeneries and Lush retain their native warm-climate behavior.
 Cold surface boundaries retain their own column climate instead of borrowing
 a warm soil donor. Floor scans pass through branch tiers (at most 96 blocks).
+
+Freezing now uses the same continuous local cold transition and deterministic
+small patches as snow, instead of a binary temperature cutoff. Deep-cold water
+still freezes completely; marginal water keeps openings without depending on
+chunk boundaries. Light, fluid and cache-only weather guards remain unchanged.
 
 Vanilla snow/freezing, Snow Under Trees 1.5.1, Simple Snowy Fix 2.2.1 and Snow!
 Real Magic! 12.2.3 weather use the shared eligibility while retaining their light,
@@ -842,14 +925,35 @@ native structures (up to 512); surface shaping must remain inside the existing
 eight-chunk generation dependency. For audited candidates the radius limits accepted
 extent and bounds the neighbor search; small buildings no longer occupy that entire
 radius. Conservative custom candidates still reserve the full envelope.
-New accepted starts store terrain policy 3: grade intervals use the same integer
+New accepted starts store terrain policy 5. For audited rigid template contact
+masks of at least 16 columns, a candidate is rejected if more than half of a
+piece's actual contacts need two or more blocks of cutting/filling. The existing
+local retry sequence then tries another layout/site. Small decorations, paths
+and unaudited whole-box fallbacks are not scored this way. This favors land that
+already fits each building over broad raised platforms; it can reduce accepted
+structures on difficult terrain. The rounded contour may extend two cells beyond
+the nominal axis-aligned radius, and two additional untouched cells are sampled
+to validate its join to the surrounding terrain. Saved policies 1–4 retain their
+existing planning behavior.
+
+As in policy 4, after native placement, audited rigid,
+unprocessed `SinglePoolElement` templates may repair up to `maxFillBlocks` of AIR
+or dry replaceable ground plants
+immediately under their actual bottom-layer soil. Repairs require an accepted TD
+foundation column, an unchanged template soil state and two natural footing blocks;
+they never replace fluids, other materials or another component's interior. Roofs,
+terrain-matching roads, legacy templates and saved policies 1–3 are unchanged.
+This addresses shallow voids below soil platforms without raising arbitrary terrain
+or retroactively repairing saved structures.
+
+As in terrain policy 3, grade intervals use the same integer
 1:2 rounding as the final slope check, avoiding false rejection of adjacent
 foundations one block apart in height. Saved policies 1/2 retain their original
 plans. Cut/fill, support, and one-/two-column slope checks remain mandatory.
 As in policy 2, audited template contact columns
 replace rectangular roof/air footprints, and terrace contours have rounded corners
 with gentle world-coordinate variation. Every edited contour remains inside the
-blend radius with a two-column grade-validation halo. Saved policy-one starts
+varied rounded blend distance with a two-column grade-validation halo. Saved policy-one starts
 retain their original rectangular terrain plan when remaining chunks generate.
 Native moss rules are audited by their complete codec semantics: replacing only
 cobblestone with mossy cobblestone preserves a template's contact mask. Merely
@@ -1007,6 +1111,59 @@ not replace visual acceptance in a client. Fresh fixtures prepared with
 omitting the admission marker from an initialized world correctly disables the
 marine adapter and invalidates the fixture.
 
+Vanilla `minecraft:kelp_cold` and `minecraft:kelp_warm` need a separate fix:
+the Hybrid Aquatic adapter does not affect them. Their original chunk-origin
+noise count is replaced with 64 candidates and seed/species-specific continuous
+world-coordinate thinning in natural-biome TD Overworlds. The original
+120/80 or 80/80 noise count, `in_square`, `OCEAN_FLOOR_WG`, `biome` chain must
+match; custom chains retain their rules. Native water, support and biome checks
+still apply. At depths 1/2/3/4, the normal placement probability is multiplied by
+0.08/0.18/0.40/0.70; five or more water blocks keep the original deep-water
+probability. Only the candidate column is inspected, at most five blocks upward.
+This changes density and new generation only, not saved kelp.
+
+Streams 2.16.2 can carve a two-block water column where its immutable plan calls
+for a one-block bed, leaving small river-floor pockets. The V12+ natural-river
+depth hook limits that extra cut before carving, only for non-source,
+non-terminal channel columns with matching planned/carver water levels.
+Planned deeper beds and native cuts of three or more blocks retain their depth.
+This is a carving correction, not a routing/profile migration; existing blocks
+and saved river graphs are not rewritten.
+
+Run `tools/vanilla_kelp/test_policy.py`, `tools/river_planner/test_shallow_bed.py`
+and `tools/streams_probe/test_2162_bed_hook.py` for focused checks. For the
+reported seed/scale/profile fixture, use
+`tools/streams_probe/run_water_appearance_suite.py <fresh-fixture-name> --gradle-user-home .gradle --generate-ocean`.
+Before any Gradle/Minecraft launch, this entry point runs the receipt-format
+regression tests, then checks the depth helper and logical record accessors
+against each fixture's actual active Streams 2.16.2 JAR. All selected fixtures
+must pass before the first server starts. `--check-only` runs the same preflight
+without launching Gradle or Minecraft. These checks do not replace native
+generation or the subsequent receipt validation.
+It requires native kelp placement/guard evidence and zero isolated one-cell
+river-bed dips after 100 actual ticks in forced chunks, with a fresh
+physical-column CSV and successful terminal receipt.
+`--baseline` records the original dips without accepting them as a fix.
+The runner expects new-world river profile 13 by default; use
+`--expected-natural-profile 12` explicitly for a prepared historical V12 fixture.
+The fixed appearance regression also requires seed `-8990126270512117809` and an
+explicit scale-1 `terrain_diffusion_world_settings.dat` input (record its hash as
+`freshScaleMarker` in the fixture manifest). A scale-1 biome preset alone does not
+set the runtime scale: an unmarked server world defaults to scale 2.
+`tools/streams_probe/audit_water_appearance.py` reads saved FULL chunks without
+editing them; kelp edge/count statistics are descriptive, not client visual
+acceptance. Fixtures may copy the player's river graph to reproduce the routing,
+but must start without region/entity/POI files. Streams 2.16.2 plan `source` and
+`terminal` flags must use `StreamsRecordAccess`'s audited logical mapping rather
+than guessed record accessor names.
+
+The November 6 screenshot reproduction compared 2,304 river columns with the
+same copied river graph and 100 ticking updates: isolated bed pockets fell from
+7 to 0; all planned columns and water-surface heights matched. Only 27 bed
+columns rose one block to their planned bed. The fixed fixture also retained
+identical physical columns after save/restart. Native cold/warm kelp checks and
+72 saved ocean chunks were verified; no client visual check is implied.
+
 `_WG` heightmaps stop updating after CARVERS, so neighbor decoration can exist
 above the ground when the later ecology surface pass converts it to sand. That
 conversion explicitly clears only grass/ferns and a matching double-plant upper
@@ -1071,6 +1228,15 @@ then select the **Terrain Diffusion** world type. The pack supplies the surface
 rules and enables `terralith: true` and `natural_biomes: true` in the preset's biome-source settings. Put it
 above the source packs in the data-pack priority list. Terralith and Lithostitched
 remain required: the compatibility pack does not bundle their biomes or features.
+
+Terralith cave biomes and their decoration do not enable Terralith's original
+cave-density/aquifer router. TD selects its own noise-settings key, with
+`aquifers_enabled: false` and TD final density. The mountain-crossing river
+feature described by [Tectonic](https://modrinth.com/mod/tectonic) and the separate
+[Underground Rivers](https://modrinth.com/mod/underground-rivers) project is distinct
+from both Terralith cave decoration and TD's optional deep subterranean streams.
+TD V12's bounded native-detour shortcut is its own implementation, not an import
+of either project's density or river code.
 
 Both options are saved in the world's biome-source codec and default to false
 when absent. Existing Terralith-enabled saves keep their legacy biome selection;
@@ -1179,11 +1345,20 @@ actual biome. Searches can be expensive because they request diffusion terrain.
 Visual acceptance should cover coasts, dry/wet transitions, snowy mountains and
 underground vegetation, at the intended world scale.
 
-## Underground geology (new worlds)
+## Underground geology (optional deep worlds)
 
-New Terrain Diffusion worlds use the `underground_v2` noise settings and saved
-`underground_profile_version: 2`. Existing sources without the version retain
-profile 1 and the unchanged `underground` settings. The TD
+The default preset and Terralith compatibility preset use the original
+`terrain_diffusion` noise settings and `terrain_diffusion_scale_N` dimensions:
+the floor remains Y=-64, and custom underground geology/rivers are disabled.
+This also selects the original ocean-depth curve; deep V2 ocean basins require
+the expanded floor. World Scale still changes surface height and horizontal scale.
+Existing deep worlds retain their saved settings; installing a new preset does
+not shrink their dimensions or change their generated chunks.
+
+The optional deep profile uses `underground_v2` noise settings and saved
+`underground: true`, `underground_profile_version: 2`, with an
+`underground_scale_N` dimension. Existing deep sources without the profile version
+retain profile 1 and the unchanged `underground` settings. In deep worlds the TD
 scale setting enlarges the added strata, faults, conduits, chambers and vein
 shapes in all three axes. Coordinates are `x / scale`, `(y - 63) / scale` and
 `z / scale`: sea level stays at 63. Fine mineral grains remain individual blocks.
@@ -1201,9 +1376,9 @@ Minecraft requires 16-block alignment, hence the one-block difference below.
 
 The maximum noise span is -1968..1967. Minecraft 1.21.1 clamps it to the selected
 dimension through `NoiseSettings.clampToHeightAccessor` and
-`WorldGenerationContext`, as with the legacy TD generator. The scale-2 preset
-now matches the default TD scale. The creation screen selects the matching
-`underground_scale_N` dimension. The source binds `underground_scale` on world
+`WorldGenerationContext`, as with the legacy TD generator. For a deep preset,
+the creation screen selects the matching `underground_scale_N` dimension;
+ordinary presets select `terrain_diffusion_scale_N`. The source binds `underground_scale` on world
 load and serializes it in its biome-source codec; an existing deep world's scale
 cannot be changed through the runtime scale setter. No worldgen worker reads or
 mutates SavedData to obtain its scale.
@@ -1318,7 +1493,8 @@ geometry are a gameplay approximation, not a reconstruction of surveyed geology.
 
 ### Subterranean streams
 
-New presets enable `underground_rivers` and `underground_river_version: 3`.
+Default presets leave subterranean streams disabled. Optional V2 deep presets
+can enable `underground_rivers` with `underground_river_version: 3`.
 The river flag defaults to false; the version defaults to 1 when absent, so
 existing saves retain their original geometry. Changing the preset does not
 upgrade saved chunks or a saved biome source. Use a fresh disposable world to
@@ -1654,6 +1830,41 @@ temporary file that must be inspected before retrying; normal copy failures clea
 up their temporary file. Hashing still reads input bytes, so reuse reduces writes,
 not all preparation cost.
 
+For isolated Streams material reproductions, copied TD markers belong under
+`world/data` and native river graphs under `world/streamsreflowing`, never at
+the run-directory root. Verify those locations and hashes before launch. Fresh
+chunks with a copied graph test material changes against old routing; they do
+not validate a routing fix. Use a separate fixture without that graph for it.
+The Streams suite checks this layout before launching any job, under the shared
+lock. It verifies declared mod hashes, and unrun fixtures' declared config and
+copied-state hashes. Use `--expect-river-cache fresh` for an unrun world without
+graphs, or `present` to require saved graphs. Omit it for ordinary runs that do
+not constrain cache state. `--preflight-only` performs these checks without Java.
+
+For coordinate reproductions, `--block-sites=-1713,-1745;-2148,-1722` derives
+chunks using floor division, including negative coordinates. If `--chunks` is
+also supplied, every block site must lie in those chunks; order is preserved.
+`--max-chunks` must cover the resulting unique chunks. A fixed-chunk
+`--surface-audit` requires all 256 columns per chunk and a fresh river export.
+The first run and restart must use the same chunks and export bounds:
+
+```text
+python tools/streams_probe/run_suite.py trial --gradle-user-home .gradle '--block-sites=-1713,-1745;-2148,-1722' --surface-audit --natural-center=-1750,-1750 --natural-radius 512 --preflight-only
+python tools/streams_probe/run_suite.py trial --gradle-user-home .gradle '--block-sites=-1713,-1745;-2148,-1722' --surface-audit --natural-center=-1750,-1750 --natural-radius 512
+python tools/streams_probe/run_suite.py trial --gradle-user-home .gradle '--block-sites=-1713,-1745;-2148,-1722' --verify-restart --natural-center=-1750,-1750 --natural-radius 512
+```
+
+Quote semicolon-separated arguments in PowerShell. `--verify-restart` checks the
+prior successful surface evidence before launching one restart. It preserves
+before/after snapshots and the prior receipt/log under the run's
+`restart-checks/<id>/`, and publishes the comparison with the suite verdict.
+Saved graphs, TD `.dat` markers, surface coordinates, actual blocks, heights, water and
+saved biomes must match. Only `ecoTemperature`, `ecoMoisture`, `ecoSlope` and
+`originalGroundY` are reported as recomputed diagnostics; their differences do
+not establish a saved-world change. Other changed or missing fields fail. This
+check covers sampled surface columns, not every block in the world. Malformed
+receipt checks become failed suite results rather than leaving an active status.
+
 ```text
 python tools/structure_placement/run_suite.py --gradle-user-home .gradle --prefetch 8 build/structure-density/before build/structure-density/after
 python tools/structure_placement/run_suite.py --gradle-user-home .gradle --shore-audit --verify-support build/structure-density/trial
@@ -1727,6 +1938,15 @@ benchmarks. `--daemon` is opt-in for repeated Gradle launches; it cannot remove
 Minecraft startup costs. Reuse a populated Gradle user home and avoid routine
 clean builds. Inspect the final release JAR for diagnostic classes/resources after
 using an init script.
+
+For the local Windows NeoForge CUDA disk-library build, use
+`python -B tools/build_neoforge.py`. It sets `JAVA_HOME` to the local JDK 21 and
+`GRADLE_USER_HOME` to the repository `.gradle`, passes NeoForge `21.1.249` as one
+argument, and shares the probe lock. Explicit `--java-home` and
+`--gradle-user-home` overrides are supported; invalid paths and unsafe Windows
+batch arguments stop before Gradle. Add `--check-only` to inspect the resolved
+command and paths without building. This entry point builds artifacts only;
+installation and final JAR inspection remain separate steps.
 
 For repeated **structure-only** iterations, record the terrain inputs once and
 replay them in a separate fresh fixture:

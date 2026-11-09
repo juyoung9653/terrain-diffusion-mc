@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.diagnostic;
 
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNaturalConfig;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile;
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -50,7 +51,7 @@ public final class Streams2162AdapterHarness {
         roundTrip(none, COLUMN, "ColumnPlan");
         verifySingleFieldCopies(none, COLUMN, "ColumnPlan");
 
-        for (int version = 1; version <= 11; version++) {
+        for (int version = 1; version <= NaturalRiverProfile.VERSION; version++) {
             Object adapted = StreamsNaturalConfig.apply(config, 2, version);
             for (String field : List.of("terrainFit", "lakeSampleSpacing", "legacyShaping", "adaptiveGridRead")) {
                 require(Objects.equals(StreamsRecordAccess.read(adapted, field), before.get(field)),
@@ -62,7 +63,11 @@ public final class Streams2162AdapterHarness {
         requireFails(() -> StreamsRecordAccess.copy(none, Map.of("notAStreamsField", 1)));
         require(StreamsNaturalConfig.apply(config, 2, 10).equals(StreamsNaturalConfig.apply(config, 2, 11)),
                 "V11 must preserve V10 native routing configuration");
-        System.out.println("Streams2162AdapterHarness: PASS config44 hydraulic7 column23 profiles1-11");
+        require(StreamsNaturalConfig.apply(config, 2, 11).equals(StreamsNaturalConfig.apply(config, 2, 12))
+                        && StreamsNaturalConfig.apply(config, 2, 12).equals(StreamsNaturalConfig.apply(config, 2, 13)),
+                "V12/V13 terrain guards must preserve V11 native routing configuration");
+        System.out.println("Streams2162AdapterHarness: PASS config44 hydraulic7 column23 profiles1-"
+                + NaturalRiverProfile.VERSION);
     }
 
     private static void roundTrip(Object value, List<String> fields, String label) {

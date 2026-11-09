@@ -40,6 +40,26 @@ def evaluate_surface(rule, biome_id, stone_depth_offset):
 
 
 class GenerateCompatTest(unittest.TestCase):
+    def test_checked_in_default_presets_keep_the_legacy_height_range(self):
+        repo = SCRIPT.parents[2]
+        source = json.loads((repo / MODULE.TD_WORLD_PRESET).read_text(encoding="utf-8"))
+        compat = json.loads((repo / "compat/terralith/terrain-diffusion-terralith-surface/data/"
+                                   "terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json")
+                            .read_text(encoding="utf-8"))
+        source_overworld = source["dimensions"]["minecraft:overworld"]
+        compat_overworld = compat["dimensions"]["minecraft:overworld"]
+        self.assertEqual("terrain-diffusion-mc:terrain_diffusion_scale_2", source_overworld["type"])
+        self.assertEqual(source_overworld["type"], compat_overworld["type"])
+        self.assertEqual("terrain-diffusion-mc:terrain_diffusion",
+                         source_overworld["generator"]["settings"])
+        self.assertEqual(source_overworld["generator"]["settings"],
+                         compat_overworld["generator"]["settings"])
+        for biome_source in (source_overworld["generator"]["biome_source"],
+                             compat_overworld["generator"]["biome_source"]):
+            for field in ("underground", "underground_rivers", "underground_profile_version",
+                          "underground_river_version"):
+                self.assertNotIn(field, biome_source)
+
     def make_fixture(self, root: Path) -> tuple[Path, Path]:
         repo = root / "repo"
         noise = repo / MODULE.TD_NOISE_SETTINGS
@@ -62,7 +82,7 @@ class GenerateCompatTest(unittest.TestCase):
         underground_v2["noise_router"]["initial_density_without_jaggedness"]["terrain_profile"] = 2
         underground_v2["noise_router"]["final_density"]["terrain_profile"] = 2
         underground_v2_noise.write_text(json.dumps(underground_v2))
-        preset.write_text(json.dumps({"dimensions": {"minecraft:overworld": {"type": "terrain-diffusion-mc:underground_scale_2", "generator": {"settings": "terrain-diffusion-mc:underground", "biome_source": {"type": "terrain-diffusion-mc:terrain_diffusion", "underground": True}}}, "minecraft:the_end": {"generator": {}}}}))
+        preset.write_text(json.dumps({"dimensions": {"minecraft:overworld": {"type": "terrain-diffusion-mc:terrain_diffusion_scale_2", "generator": {"settings": "terrain-diffusion-mc:terrain_diffusion", "biome_source": {"type": "terrain-diffusion-mc:terrain_diffusion"}}}, "minecraft:the_end": {"generator": {}}}}))
         jar = root / "terralith.jar"
         source_base = {"type": "minecraft:condition", "if_true": {"type": "minecraft:vertical_gradient", "random_name": "minecraft:bedrock_floor"}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:bedrock"}}}
         source_deep = {"type": "minecraft:condition", "if_true": {"type": "minecraft:vertical_gradient", "random_name": "minecraft:deepslate"}, "then_run": {"type": "minecraft:block", "result_state": {"Name": "minecraft:deepslate"}}}
@@ -117,11 +137,17 @@ class GenerateCompatTest(unittest.TestCase):
             self.assertEqual("minecraft:deepslate", noise["surface_rule"]["sequence"][2]["then_run"]["result_state"]["Name"])
             self.assertTrue(preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["terralith"])
             self.assertTrue(preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["natural_biomes"])
-            self.assertTrue(preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["underground"])
-            self.assertEqual("terrain-diffusion-mc:underground_v2", preset["dimensions"]["minecraft:overworld"]["generator"]["settings"])
-            self.assertEqual(2, preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["underground_profile_version"])
-            self.assertEqual(3, preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]["underground_river_version"])
-            self.assertEqual("terrain-diffusion-mc:underground_scale_2", preset["dimensions"]["minecraft:overworld"]["type"])
+            source = preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]
+            self.assertNotIn("underground", source)
+            self.assertNotIn("underground_rivers", source)
+            self.assertNotIn("underground_profile_version", source)
+            self.assertNotIn("underground_river_version", source)
+            self.assertEqual("terrain-diffusion-mc:terrain_diffusion", preset["dimensions"]["minecraft:overworld"]["generator"]["settings"])
+            self.assertEqual("terrain-diffusion-mc:terrain_diffusion_scale_2", preset["dimensions"]["minecraft:overworld"]["type"])
+            self.assertFalse(manifest["validation"]["world_preset_underground"])
+            self.assertFalse(manifest["validation"]["world_preset_underground_rivers"])
+            self.assertEqual(1, manifest["validation"]["world_preset_underground_profile_version"])
+            self.assertEqual(1, manifest["validation"]["world_preset_underground_river_version"])
             self.assertNotIn("terralith", preset["dimensions"]["minecraft:the_end"])
             self.assertEqual(
                 "deep_cave",

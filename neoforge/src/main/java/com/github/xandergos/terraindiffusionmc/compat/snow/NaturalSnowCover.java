@@ -69,7 +69,9 @@ public final class NaturalSnowCover {
             return freezing ? existing.is(Blocks.ICE) : isSnow(existing)
                     || reader.getBlockState(pos.below()).is(Blocks.SNOW_BLOCK);
         }
-        return freezing ? EcologyClassifier.coldState(surface.climate().temperature()) >= .65f
+        return freezing
+                ? EcologyClassifier.naturalIceCover(pos.getX(), pos.getZ(), surface.elevation(),
+                        surface.climate().temperature(), surface.snowRetention())
                 : EcologyClassifier.naturalSnowCover(pos.getX(), pos.getZ(), surface.elevation(),
                         surface.climate().temperature(), surface.snowRetention());
     }

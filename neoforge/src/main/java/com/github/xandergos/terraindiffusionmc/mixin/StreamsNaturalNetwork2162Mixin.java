@@ -5,6 +5,7 @@ import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNaturalNetw
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsNaturalRiverAdapter;
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsShallowNetwork;
 import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsPlanformNetwork;
+import com.github.xandergos.terraindiffusionmc.compat.streams.StreamsShortRiverShortcutNetwork;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
@@ -37,6 +38,10 @@ public final class StreamsNaturalNetwork2162Mixin {
         if (profile >= 11) {
             network = StreamsPlanformNetwork.refine(network, domain,
                     StreamsNaturalRiverAdapter.originalTerrain(config), config, seed, profile);
+        }
+        if (profile >= 12) {
+            network = StreamsShortRiverShortcutNetwork.refine(network, domain,
+                    StreamsNaturalRiverAdapter.originalTerrain(config), config, profile);
         }
         cir.setReturnValue(network);
     }

@@ -13,7 +13,8 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
     private static final Set<String> MIXINS_2162 = Set.of(
             "StreamsStartup2162Mixin", "StreamsWorldgenScale2162Mixin",
             "StreamsNaturalRiver2162Mixin", "StreamsNaturalNetwork2162Mixin",
-            "StreamsBankMaterial2162Mixin", "StreamsSeagrassFeature2162Mixin");
+            "StreamsBankMaterial2162Mixin", "StreamsSeagrassFeature2162Mixin", "StreamsShallowBed2162Mixin",
+            "StreamsShortRiverTunnel2162Mixin", "ShortRiverTunnelWorldGenRegionMixin");
     private static final Set<String> AUDITED_MIXINS = Set.of(
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsStructureShieldMixin",
             "com.github.xandergos.terraindiffusionmc.mixin.StreamsWorldgenPrefetchMixin",

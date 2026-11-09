@@ -63,6 +63,7 @@ public final class StructureTerrain {
                             RandomState random, LevelHeightAccessor height, Map<Long,int[]> sampledHeights,
                             StructureHeightCache sharedHeights, BiConsumer<String,String> rejected) {
         List<Pad> pads = new ArrayList<>();
+        Set<StructurePiece> auditedFoundations=Collections.newSetFromMap(new IdentityHashMap<>());
         int terrainVersion = ((PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion();
         boolean rounded = terrainVersion >= 2;
         List<PlacementGeometry.Rect> paths = new ArrayList<>();
@@ -79,12 +80,16 @@ public final class StructureTerrain {
                 int grade=box.minY()+pool.getGroundLevelDelta()-1;
                 var mask=rounded ? StructurePieceOccupancy.groundMask(pool) : null;
                 if (mask==null) pads.add(new Pad(rect(box),grade,piece));
-                else for (var contact:mask) pads.add(new Pad(contact,grade,piece));
+                else {
+                    auditedFoundations.add(piece);
+                    for (var contact:mask) pads.add(new Pad(contact,grade,piece));
+                }
             } else pads.add(new Pad(rect(box), box.minY() - 1,piece));
         }
         Map<Long, Column> columns = new HashMap<>();
         List<PlacementGeometry.Rect> samplingAreas=new ArrayList<>();
-        for (Pad pad:pads) samplingAreas.add(pad.rect.inflate(policy.blendRadiusBlocks()+2));
+        // Policy 5's contour can reach radius+2; retain two untouched validation cells beyond it.
+        for (Pad pad:pads) samplingAreas.add(pad.rect.inflate(policy.blendRadiusBlocks()+(terrainVersion>=5 ? 4 : 2)));
         for (var path:paths) samplingAreas.add(path.inflate(2));
         for (var area:samplingAreas) {
             long areaSize = ((long)area.maxX() - area.minX() + 1) * ((long)area.maxZ() - area.minZ() + 1);
@@ -113,10 +118,9 @@ public final class StructureTerrain {
                 int lower=Integer.MIN_VALUE,upper=Integer.MAX_VALUE;
                 Pad lowerPad=null,upperPad=null;
                 for (Pad candidate : pads) {
-                    // Keep the full two-column validation halo outside all editable contours.
-                    if (candidate.rect.distance(x, z) > policy.blendRadiusBlocks()) continue;
-                    int distance = rounded ? candidate.rect.terrainDistance(x, z) : candidate.rect.distance(x, z);
-                    if (distance > policy.blendRadiusBlocks()) continue;
+                    int distance = PlacementGeometry.terrainBlendDistance(candidate.rect,x,z,
+                            policy.blendRadiusBlocks(),terrainVersion);
+                    if (distance == Integer.MAX_VALUE) continue;
                     int limit = PlacementGeometry.gradeAllowance(distance, terrainVersion);
                     if (candidate.y-limit>lower) lowerPad=candidate;
                     if (candidate.y+limit<upper) upperPad=candidate;
@@ -153,6 +157,26 @@ public final class StructureTerrain {
                     if (sample[2]<0) return reject(rejected,"non-natural support",x+","+z+" original="+original);
                 }
                 columns.put(key, new Column(original, target, nearest==0, nearest==0 || pathColumn));
+            }
+        }
+        if (terrainVersion >= 5) {
+            // Ground masks partition actual contact cells into disjoint rectangles.
+            // Do not score whole-box fallbacks: their roof overhangs and air are unaudited.
+            Map<StructurePiece,long[]> earthwork=new IdentityHashMap<>();
+            for (Pad pad:pads) {
+                if (!auditedFoundations.contains(pad.source)) continue;
+                long[] counts=earthwork.computeIfAbsent(pad.source,ignored -> new long[2]);
+                for (int x=pad.rect.minX();x<=pad.rect.maxX();x++) for (int z=pad.rect.minZ();z<=pad.rect.maxZ();z++) {
+                    Column column=columns.get(key(x,z));
+                    counts[0]++;
+                    if (Math.abs((long)column.target-column.original)>=2) counts[1]++;
+                }
+            }
+            for (long[] counts:earthwork.values()) {
+                if (!PlacementGeometry.naturalFoundation(counts[0],counts[1],terrainVersion)) {
+                    return reject(rejected,"foundation earthwork coverage",
+                            "contactColumns="+counts[0]+" deepCutOrFillColumns="+counts[1]);
+                }
             }
         }
         // Check every one- and two-column neighborhood (including unchanged outer rim).
@@ -198,7 +222,7 @@ public final class StructureTerrain {
         return null;
     }
 
-    private static boolean natural(BlockState state) {
+    static boolean natural(BlockState state) {
         return state.getFluidState().isEmpty() && !state.hasBlockEntity()
                 && (state.is(BlockTags.DIRT) || state.is(BlockTags.BASE_STONE_OVERWORLD)
                     || state.is(Blocks.SAND) || state.is(Blocks.RED_SAND) || state.is(Blocks.GRAVEL)

@@ -125,3 +125,9 @@ bin/
 .cursor/
 .vscode/
 libs/
+
+# Machine-local tooling, scratch files, and instance backups
+.codex/
+.local/
+.tmp/
+instance-backups/

@@ -57,7 +57,7 @@ def main() -> None:
         parser.error("missing config/terrain-diffusion-mc.properties")
     model_names = ["base_model.onnx", "coarse_model.onnx", "decoder_model.onnx",
                    "pipeline_data.json", "world_pipeline_config.json"]
-    precision = re.search(r"(?mi)^\s*decoder_precision\s*=\s*([^\s#;]+)",
+    precision = re.search(r"(?mi)^\s*(?:inference\.)?decoder_precision\s*=\s*([^\s#;]+)",
                           td_config.read_text(encoding="utf-8"))
     if precision and precision.group(1).strip('"\\\'').lower() == "fp16":
         model_names.append("decoder_model_fp16.onnx")

@@ -80,6 +80,19 @@ public final class EcologyClassifier {
         return threshold < coverage;
     }
 
+    /**
+     * Water follows the same local cold transition as exposed land.  Keeping a
+     * separate name makes the freeze contract explicit: a marginal climate must
+     * not turn every water column in a model/tile region into one hard ice slab.
+     */
+    public static boolean naturalIceCover(int x, int z, float elevation, float temperature, float retention) {
+        return naturalSnowCover(x, z, elevation, temperature, retention);
+    }
+
+    public static boolean naturalIceCover(int x, int z, float elevation, float temperature) {
+        return naturalIceCover(x, z, elevation, temperature, 0);
+    }
+
     /** Signed coverage margin retained for diagnostics; elevation never independently enables snow. */
     public static float naturalSnowMargin(float elevation, float temperature, float retention) {
         return naturalSnowCoverage(temperature, retention) - .5f;

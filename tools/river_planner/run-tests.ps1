@@ -9,6 +9,7 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\RiverPreviewCache.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverBankShape.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverBankMargin.java') `
+  (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverBankFillPolicy.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalLakeLevels.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverBankSurface.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\ecology\FeatureEcologyMath.java') `

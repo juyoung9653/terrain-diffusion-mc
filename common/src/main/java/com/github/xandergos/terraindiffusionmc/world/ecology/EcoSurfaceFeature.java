@@ -8,6 +8,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
@@ -34,6 +35,10 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
             ResourceLocation.fromNamespaceAndPath("greeneries", "grass"));
     private static final TagKey<Block> FERN = TagKey.create(Registries.BLOCK,
             ResourceLocation.fromNamespaceAndPath("greeneries", "fern"));
+    private static final ResourceLocation IW_SANDY_DIRT =
+            ResourceLocation.fromNamespaceAndPath("immersive_weathering", "sandy_dirt");
+    private static final ResourceLocation IW_GRASSY_SANDY_DIRT =
+            ResourceLocation.fromNamespaceAndPath("immersive_weathering", "grassy_sandy_dirt");
     public EcoSurfaceFeature() {
         super(NoneFeatureConfiguration.CODEC);
     }
@@ -64,26 +69,39 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         && surfaceSample.terrainBiomeId() == GRAVEL_BEACH
                         && FeatureEcologyMath.dryMineralShore(sample.temperature(), sample.moisture());
                 ResourceLocation currentBiome = biomeId(level, top);
+                // Quart biome assignment and boundary dithering can select a beach
+                // over a column whose original climate is arid land. Keep this
+                // exact beach mineral without reclassifying inland ecotones.
+                boolean dryOriginalLandBeach = surfaceSample.terrainBiomeId() == 0
+                        && sample.biomeId() != 0
+                        && net.minecraft.world.level.biome.Biomes.BEACH.location().equals(currentBiome)
+                        && FeatureEcologyMath.dryMineralShore(sample.temperature(), sample.moisture());
                 // River biomes occupy quart cells and can cover adjacent dry land.
                 // Resolve those columns from their original land climate, without
                 // repainting retained ocean/shore biomes or any submerged surface.
                 boolean riverOverlay = com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.version(level.getLevel()) >= 10
                         && surfaceSample.terrainBiomeId() == 0 && sample.biomeId() != 0
                         && level.getBiome(top).is(net.minecraft.tags.BiomeTags.IS_RIVER);
-                if (!dryShore && !dryGravelShore && !riverOverlay && (currentBiome == null || !isEcologyBiomeId(currentBiome))) continue;
+                if (!dryShore && !dryGravelShore && !dryOriginalLandBeach && !riverOverlay
+                        && (currentBiome == null || !isEcologyBiomeId(currentBiome))) continue;
                 BlockState surface = level.getBlockState(top);
-                if (!isExposedSoil(surface)) continue;
-                if (!dryShore && !riverOverlay && surfaceSample.terrainBiomeId() == 0) {
+                if (!isExposedSoil(surface, true)) continue;
+                if (!dryShore && !dryOriginalLandBeach && !riverOverlay && surfaceSample.terrainBiomeId() == 0) {
                     sample = boundaryClimate(level, top, currentBiome, surfaceSample,
                             boundarySamples, level.getSeed());
                 }
                 FeatureEcologyMath.SurfaceMaterial material = dryGravelShore ? FeatureEcologyMath.SurfaceMaterial.GRAVEL
-                        : dryShore ? FeatureEcologyMath.SurfaceMaterial.SAND
+                        : (dryShore || dryOriginalLandBeach) ? FeatureEcologyMath.SurfaceMaterial.SAND
                         : FeatureEcologyMath.surfaceMaterial(
                         sample.temperature(), sample.moisture(), sample.slope(), sample.treeCover(), surfaceSample.elevation(),
                         level.getSeed(), x, z, WorldScaleManager.getCurrentScale());
+                // IW raw soil can occur on either side of the beach quart
+                // boundary. Only admit it where the existing ecology policy
+                // itself selects the mineral sandy surface.
+                boolean allowImmersiveWeatheringSandySoil = material == FeatureEcologyMath.SurfaceMaterial.SAND;
+                if (!isExposedSoil(surface, allowImmersiveWeatheringSandySoil)) continue;
                 if (material == FeatureEcologyMath.SurfaceMaterial.SAND) {
-                    changed |= placeSupportedSand(level, top);
+                    changed |= placeSupportedSand(level, top, allowImmersiveWeatheringSandySoil);
                 } else if (dryGravelShore) {
                     changed |= placeSupportedMineral(level, top, Blocks.GRAVEL.defaultBlockState(), Blocks.STONE.defaultBlockState());
                 } else {
@@ -159,14 +177,22 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         }
     }
 
-    private static boolean placeSupportedSand(WorldGenLevel level, BlockPos top) {
-        return placeSupportedMineral(level, top, Blocks.SAND.defaultBlockState(), Blocks.SANDSTONE.defaultBlockState());
+    private static boolean placeSupportedSand(WorldGenLevel level, BlockPos top,
+                                              boolean allowImmersiveWeatheringSandySoil) {
+        return placeSupportedMineral(level, top, Blocks.SAND.defaultBlockState(),
+                Blocks.SANDSTONE.defaultBlockState(), allowImmersiveWeatheringSandySoil);
     }
 
     private static boolean placeSupportedMineral(WorldGenLevel level, BlockPos top, BlockState mineral, BlockState rock) {
+        return placeSupportedMineral(level, top, mineral, rock, false);
+    }
+
+    private static boolean placeSupportedMineral(WorldGenLevel level, BlockPos top, BlockState mineral,
+                                                  BlockState rock, boolean allowImmersiveWeatheringSandySoil) {
         int layers = 0;
         BlockPos cursor = top;
-        while (layers < 3 && isExposedSoil(level.getBlockState(cursor)) && level.getFluidState(cursor).isEmpty()) {
+        while (layers < 3 && isExposedSoil(level.getBlockState(cursor), allowImmersiveWeatheringSandySoil)
+                && level.getFluidState(cursor).isEmpty()) {
             layers++;
             cursor = cursor.below();
         }
@@ -209,8 +235,18 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
     }
 
     private static boolean isExposedSoil(BlockState state) {
+        return isExposedSoil(state, false);
+    }
+
+    private static boolean isExposedSoil(BlockState state, boolean allowImmersiveWeatheringSandySoil) {
         return state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT) || state.is(Blocks.COARSE_DIRT)
-                || state.is(Blocks.PODZOL) || state.is(Blocks.SAND);
+                || state.is(Blocks.PODZOL) || state.is(Blocks.SAND)
+                || allowImmersiveWeatheringSandySoil && isImmersiveWeatheringSandySoil(state);
+    }
+
+    private static boolean isImmersiveWeatheringSandySoil(BlockState state) {
+        ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
+        return IW_SANDY_DIRT.equals(id) || IW_GRASSY_SANDY_DIRT.equals(id);
     }
 
     private static boolean replace(WorldGenLevel level, BlockPos pos, BlockState state) {

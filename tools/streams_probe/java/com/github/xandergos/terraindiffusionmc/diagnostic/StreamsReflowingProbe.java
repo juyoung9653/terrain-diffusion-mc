@@ -104,6 +104,38 @@ public final class StreamsReflowingProbe {
         TerrainCpuProfile cpuProfile = null;
         try {
             ServerLevel level = server.overworld();
+            if (Boolean.getBoolean("td.streamsProbe.vanillaKelpAudit"))
+                emit(receipts, server.submit(() -> VanillaKelpAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+            if (Boolean.getBoolean("td.streamsProbe.waterAppearanceAudit")) {
+                List<ChunkPos> bedChunks = server.submit(() -> RiverBedAppearanceAudit.prepare(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                tickAuditForcedChunks.addAll(server.submit(() -> forceTickAuditPositions(level, bedChunks))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+                // Forced tickets can promote additional neighbouring terrain on a cold fixture.
+                Tickability ready = awaitTickablePositions(server, level, bedChunks, 180_000L);
+                if (ready.tickableCount != bedChunks.size())
+                    throw new IllegalStateException("River bed cohort is not tickable");
+                Tickability settled = awaitServerTicksPositions(server, level, bedChunks,
+                        ready.tick + 100, 30_000L);
+                if (settled.tick < ready.tick + 100 || settled.tickableCount != bedChunks.size())
+                    throw new IllegalStateException("River bed settlement did not reach 100 actual ticks");
+                emit(receipts, json("appearance_water_settled", "gameTicks", settled.tick - ready.tick,
+                        "tickableChunks", settled.tickableCount));
+                emit(receipts, RiverBedAppearanceAudit.run(level));
+                if (Boolean.getBoolean("td.streamsProbe.generateAppearanceOcean")) {
+                    List<ChunkPos> oceanChunks = new ArrayList<>();
+                    for (int z = 74; z <= 81; z++) for (int x = -13; x <= -5; x++)
+                        oceanChunks.add(new ChunkPos(x, z));
+                    if (Boolean.getBoolean("td.streamsProbe.appearanceReverseOrder"))
+                        java.util.Collections.reverse(oceanChunks);
+                    for (ChunkPos pos : oceanChunks)
+                        server.submit(() -> level.getChunk(pos.x, pos.z))
+                                .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                    emit(receipts, json("appearance_ocean_generated", "fullChunks", oceanChunks.size()));
+                }
+                return;
+            }
             if (Boolean.getBoolean("td.streamsProbe.hybridAquaticAudit"))
                 emit(receipts, server.submit(() -> HybridAquaticAudit.run(level))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
@@ -114,6 +146,40 @@ public final class StreamsReflowingProbe {
             if (Boolean.getBoolean("td.streamsProbe.terrainSlabAudit")) {
                 TerrainSlabPlacementAudit.run(level);
                 emit(receipts, json("terrain_slab_audit", "status", "passed"));
+                return;
+            }
+            if (Boolean.getBoolean("td.streamsProbe.shortTunnelAudit")) {
+                // Generation runs on the server thread.  The physical read waits for
+                // forced FULL chunks and scheduled water to receive actual game ticks.
+                ShortRiverTunnelAudit.Prepared tunnel = server.submit(() -> {
+                    try { return ShortRiverTunnelAudit.prepare(level); }
+                    catch (Exception failure) {
+                        LOG.error("Short river tunnel preparation failed", failure);
+                        throw new IllegalStateException("Short river tunnel preparation failed: " + failure, failure);
+                    }
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                List<ChunkPos> tunnelChunks = tunnel.chunks;
+                emit(receipts, server.submit(() -> {
+                    try { return ShortRiverTunnelAudit.capturePreTick(level, tunnel); }
+                    catch (Exception failure) { throw new IllegalStateException("Tunnel pre-tick capture failed", failure); }
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS));
+                tickAuditForcedChunks.addAll(server.submit(() -> forceTickAuditPositions(level, tunnelChunks))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+                Tickability tickable = awaitTickablePositions(server, level, tunnelChunks, 60_000L);
+                if (tickable.tickableCount != tunnelChunks.size())
+                    throw new IllegalStateException("Short tunnel chunk cohort is not tickable");
+                long startTick = server.submit(() -> (long) server.getTickCount())
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                Tickability settled = awaitServerTicksPositions(server, level, tunnelChunks, startTick + 100, 30_000L);
+                if (settled.tick < startTick + 100 || settled.tickableCount != tunnelChunks.size())
+                    throw new IllegalStateException("Short tunnel water settlement did not reach 100 actual ticks");
+                emit(receipts, server.submit(() -> {
+                    try { return ShortRiverTunnelAudit.inspect(level, tunnel, settled.tick - startTick); }
+                    catch (Exception failure) {
+                        LOG.error("Short river tunnel audit failed", failure);
+                        throw new IllegalStateException("Short river tunnel audit failed: " + failure, failure);
+                    }
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS));
                 return;
             }
             if (Boolean.getBoolean("td.streamsProbe.riverScreenshotAudit")) {
@@ -537,6 +603,30 @@ public final class StreamsReflowingProbe {
                     marine = server.submit(() -> evaluateMarineConnectivity(level, plannedMarine)).get(config.timeoutSeconds, TimeUnit.SECONDS);
                 }
                 emit(receipts, marine.json());
+            }
+            if (Boolean.getBoolean("td.streamsProbe.settleWater")) {
+                if (completed.isEmpty()) throw new IllegalStateException("No generated chunks to settle");
+                List<ChunkPos> selected = completed.stream().map(r -> new ChunkPos(r.chunkX, r.chunkZ)).toList();
+                tickAuditForcedChunks.addAll(server.submit(() -> forceTickAuditPositions(level, selected))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS));
+                Tickability ready = awaitTickablePositions(server, level, selected, 180_000L);
+                if (ready.tickableCount != selected.size())
+                    throw new IllegalStateException("Native water cohort is not tickable");
+                long startTick = server.submit(() -> {
+                    for (ChunkReceipt receipt : completed) for (ColumnSnapshot column : receipt.columns) {
+                        if (column.topWaterY < level.getMinBuildHeight()) continue;
+                        BlockPos pos = new BlockPos(column.x, column.topWaterY, column.z);
+                        var fluid = level.getFluidState(pos);
+                        if (fluid.is(FluidTags.WATER)) level.scheduleTick(pos, fluid.getType(), 1);
+                    }
+                    return (long) server.getTickCount();
+                }).get(config.timeoutSeconds, TimeUnit.SECONDS);
+                Tickability settled = awaitServerTicksPositions(server, level, selected, startTick + 100, 30_000L);
+                if (settled.tick < startTick + 100 || settled.tickableCount != selected.size())
+                    throw new IllegalStateException("Native water settlement did not reach 100 actual ticks");
+                emit(receipts, json("native_water_settled", "status", "passed", "startTick", startTick,
+                        "endTick", settled.tick, "tickableChunks", settled.tickableCount,
+                        "selectedChunks", selected.size()));
             }
             if (riverPreview) {
                 // Run only after every requested FULL chunk is complete, so neighboring generation order is settled.
@@ -1892,6 +1982,45 @@ public final class StreamsReflowingProbe {
             if (level.setChunkForced(receipt.chunkX, receipt.chunkZ, true)) added.add(new ChunkPos(receipt.chunkX, receipt.chunkZ));
         }
         return added;
+    }
+
+    private static List<ChunkPos> forceTickAuditPositions(ServerLevel level, List<ChunkPos> positions) {
+        List<ChunkPos> added = new ArrayList<>();
+        for (ChunkPos pos : positions) if (level.setChunkForced(pos.x, pos.z, true)) added.add(pos);
+        return added;
+    }
+
+    private static Tickability awaitTickablePositions(MinecraftServer server, ServerLevel level,
+                                                       List<ChunkPos> positions, long timeoutMillis) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            Tickability status = server.submit(() -> tickabilityPositions(level, positions)).get(10, TimeUnit.SECONDS);
+            if (status.tickableCount == positions.size()) return status;
+            Thread.sleep(50L);
+        }
+        return server.submit(() -> tickabilityPositions(level, positions)).get(10, TimeUnit.SECONDS);
+    }
+
+    private static Tickability awaitServerTicksPositions(MinecraftServer server, ServerLevel level,
+                                                          List<ChunkPos> positions, long targetTick,
+                                                          long timeoutMillis) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        while (System.nanoTime() < deadline) {
+            Tickability status = server.submit(() -> tickabilityPositions(level, positions)).get(10, TimeUnit.SECONDS);
+            if (status.tick >= targetTick && status.tickableCount == positions.size()) return status;
+            Thread.sleep(50L);
+        }
+        return server.submit(() -> tickabilityPositions(level, positions)).get(10, TimeUnit.SECONDS);
+    }
+
+    private static Tickability tickabilityPositions(ServerLevel level, List<ChunkPos> positions) {
+        int tickable = 0;
+        for (ChunkPos pos : positions) {
+            BlockPos center = new BlockPos((pos.x << 4) + 8, level.getMinBuildHeight(), (pos.z << 4) + 8);
+            if (level.isPositionEntityTicking(center) && level.getChunkSource().isPositionTicking(ChunkPos.asLong(pos.x, pos.z)))
+                tickable++;
+        }
+        return new Tickability(level.getServer().getTickCount(), tickable);
     }
 
     private static int unforceTickAuditChunks(ServerLevel level, List<ChunkPos> chunks) {

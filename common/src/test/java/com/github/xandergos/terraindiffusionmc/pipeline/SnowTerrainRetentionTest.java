@@ -51,6 +51,9 @@ public final class SnowTerrainRetentionTest {
                 require(EcologyClassifier.naturalSnowCover(px, pz, 1450, -1, cached)
                         == EcologyClassifier.naturalSnowCover(px, pz, 1450, -1, independent[z * w + x]),
                         "cropping changed final snow eligibility at negative/chunk coordinates");
+                require(EcologyClassifier.naturalIceCover(px, pz, 1450, -1, cached)
+                        == EcologyClassifier.naturalIceCover(px, pz, 1450, -1, independent[z * w + x]),
+                        "cropping changed final ice eligibility at negative/chunk coordinates");
             }
         }
     }

@@ -43,6 +43,21 @@ public final class PlacementGeometry {
         }
     }
 
+    /** The varied rounded contour can extend two cells beyond its axis-aligned radius. */
+    public static int terrainBlendDistance(Rect rect, int x, int z, int radius, int terrainVersion) {
+        if (rect.distance(x,z) > (long)radius + (terrainVersion >= 5 ? 2 : 0)) return Integer.MAX_VALUE;
+        int distance=terrainVersion >= 2 ? rect.terrainDistance(x,z) : rect.distance(x,z);
+        return distance <= radius ? distance : Integer.MAX_VALUE;
+    }
+
+    /** Broad foundations should mostly fit the existing land within one block. */
+    public static boolean naturalFoundation(long columns, long deepColumns, int terrainVersion) {
+        if (terrainVersion < 5) return true;
+        if (columns < 0 || deepColumns < 0 || deepColumns > columns) return false;
+        // Small contacts include fences, stairs and decorations, not broad earth platforms.
+        return columns < 16 || deepColumns <= columns / 2;
+    }
+
     public record Candidate(String id, int chunkX, int chunkZ, int radius, int gap, long priority, int tier) {
         public Candidate(String id,int chunkX,int chunkZ,int radius,int gap,long priority) {
             this(id,chunkX,chunkZ,radius,gap,priority,1);

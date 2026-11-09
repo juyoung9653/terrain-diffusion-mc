@@ -35,6 +35,10 @@ in [README.md](README.md#repeatable-local-validation).
   workflow uses the repository `.gradle` directory as its user home. Do not switch
   cache directories or run `clean` routinely. Clean the diagnostic source outputs
   only when needed to ensure a release JAR contains no probe classes/resources.
+- For the local NeoForge CUDA disk-library build, use `python -B tools/build_neoforge.py`
+  instead of composing a PowerShell Gradle command. It supplies the JDK/cache
+  environment and exact version argument under the shared probe lock;
+  `--check-only` validates the invocation without building.
 
 ## Reproducible measurements
 

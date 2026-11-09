@@ -250,7 +250,9 @@
     "vanilla_stony_shore": "minecraft:stony_shore",
     "world_preset_natural_biomes_flag": true,
     "world_preset_terralith_flag": true,
-    "world_preset_underground_profile_version": 2,
-    "world_preset_underground_river_version": 3
+    "world_preset_underground": false,
+    "world_preset_underground_profile_version": 1,
+    "world_preset_underground_river_version": 1,
+    "world_preset_underground_rivers": false
   }
 }

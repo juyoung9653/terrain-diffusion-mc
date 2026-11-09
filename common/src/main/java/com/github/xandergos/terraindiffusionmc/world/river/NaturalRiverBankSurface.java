@@ -24,7 +24,13 @@ public final class NaturalRiverBankSurface {
         if (terrain == ShoreClassifier.BEACH
                 && FeatureEcologyMath.dryMineralShore(climate.temperature(), climate.moisture()))
             return SurfaceMaterial.SAND;
-        return FeatureEcologyMath.bankSurfaceMaterial(climate.temperature(), climate.moisture(),
+        SurfaceMaterial riparian = FeatureEcologyMath.bankSurfaceMaterial(climate.temperature(), climate.moisture(),
                 climate.slope(), climate.treeCover(), elevation, waterDistance, seed, x, z, scale);
+        // The bounded water bonus may support an existing grass bank, but must
+        // not turn a locally mineral arid surface green.
+        if (riparian != SurfaceMaterial.GRASS) return riparian;
+        SurfaceMaterial original = FeatureEcologyMath.surfaceMaterial(climate.temperature(), climate.moisture(),
+                climate.slope(), climate.treeCover(), elevation, seed, x, z, scale);
+        return original == SurfaceMaterial.SAND ? original : riparian;
     }
 }

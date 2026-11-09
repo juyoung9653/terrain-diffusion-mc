@@ -1,7 +1,9 @@
 import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankMargin;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankFillPolicy;
 
 public final class NaturalRiverBankMarginTest {
     public static void main(String[] args) {
+        bankGapAdmission();
         // Same edge distance remains riparian farther from a wide river than a tributary.
         double narrow = NaturalRiverBankMargin.width(1, -841, -1020);
         double wide = NaturalRiverBankMargin.width(12, -841, -1020);
@@ -64,6 +66,48 @@ public final class NaturalRiverBankMarginTest {
         }
         System.out.println("NaturalRiverBankMarginTest: passed width, invalid-plan, seam, and containment checks; "
                 + "dry sediment samples narrow=" + narrowSediment + " wide=" + wideSediment);
+    }
+
+    private static void bankGapAdmission() {
+        require(NaturalRiverBankFillPolicy.allows(12, 2, 0, 5),
+                "frozen V12 bank behavior changed");
+        require(NaturalRiverBankFillPolicy.allows(13, 1, 1, 2),
+                "shallow bank-attached gap rejected");
+        require(!NaturalRiverBankFillPolicy.allows(13, 2, 2, 1),
+                "two-sided channel gap could build a dam");
+        require(!NaturalRiverBankFillPolicy.allows(13, 1, 0, 1),
+                "isolated bank fill could build a pillar");
+        require(!NaturalRiverBankFillPolicy.allows(13, 1, 1, 3),
+                "deep bank fill could build a dirt wall");
+
+        require(NaturalRiverBankFillPolicy.allowsNative(12, 6, true, 0),
+                "frozen legacy native bank behavior changed");
+        require(!NaturalRiverBankFillPolicy.allowsNative(13, 6, false, 1),
+                "six-high native wall was admitted");
+        require(NaturalRiverBankFillPolicy.allowsNative(13, 1, true, 1),
+                "attached one-block native gap with lip rejected");
+        require(!NaturalRiverBankFillPolicy.allowsNative(13, 2, true, 1),
+                "native lip escaped the two-block budget");
+        require(NaturalRiverBankFillPolicy.allowsNative(13, 2, false, 1),
+                "attached two-block native gap rejected");
+        require(!NaturalRiverBankFillPolicy.allowsNative(13, 1, false, 0),
+                "isolated native post was admitted");
+
+        // At 844,-910 the native carver saw water Y=80 and a crest at 81, so
+        // its optional lip would land at Y=82. That elevated, detached lip is
+        // the narrow case this guard rejects without changing channel fills.
+        require(NaturalRiverBankFillPolicy.allowsNativeLip(12, false, 82, 80),
+                "legacy native lip behavior changed");
+        require(NaturalRiverBankFillPolicy.allowsNativeLip(13, false, 81, 80),
+                "lip at the water-height boundary rejected");
+        require(NaturalRiverBankFillPolicy.allowsNativeLip(13, true, 82, 80),
+                "in-channel lip rejected");
+        require(!NaturalRiverBankFillPolicy.allowsNativeLip(13, false, 82, 80),
+                "isolated elevated lip was admitted");
+        require(NaturalRiverBankFillPolicy.allowsNativeLip(13, false,
+                Integer.MAX_VALUE, Integer.MAX_VALUE), "maximum height overflow rejected lip");
+        require(!NaturalRiverBankFillPolicy.allowsNativeLip(13, false,
+                Integer.MIN_VALUE + 2, Integer.MIN_VALUE), "minimum height overflow admitted lip");
     }
 
     private static void require(boolean condition, String message) {

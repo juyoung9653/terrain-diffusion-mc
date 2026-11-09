@@ -3,6 +3,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfile;
 import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier;
+import com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMath;
 import com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMath.SurfaceMaterial;
 import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankSurface;
 
@@ -44,6 +45,7 @@ public final class NaturalRiverBankSurfaceTest {
         require(coldMineral > 4000, "glacial bank lost its mineral exposure");
         allEcologyClimates();
         climateDomainAndShoreOverrides(gravel);
+        riparianBonusRetainsOriginalMineral();
         System.out.println("NaturalRiverBankSurfaceTest: passed desert, gravel, snowy/rock shore, retained terrain; "
                 + "temperate grass=" + grass + " boreal podzol=" + podzol + " glacial stone=" + coldMineral);
     }
@@ -114,6 +116,37 @@ public final class NaturalRiverBankSurfaceTest {
                         samples++;
                     }
         System.out.println("  Climate domain and all shore overrides: " + samples + " samples passed");
+    }
+
+    /** Regression for a V12 desert bank where the small water bonus alone made grass. */
+    private static void riparianBonusRetainsOriginalMineral() {
+        long seed = 8784066738937376209L;
+        int x = -1713, z = -1745;
+        float waterDistance = .5684422F;
+        Sample desert = new Sample(11, 0, 23.298769F, .15472086F, .06773444F);
+        SurfaceMaterial base = FeatureEcologyMath.surfaceMaterial(desert.temperature(), desert.moisture(),
+                desert.slope(), desert.treeCover(), 234, seed, x, z, 2);
+        SurfaceMaterial promoted = FeatureEcologyMath.bankSurfaceMaterial(desert.temperature(), desert.moisture(),
+                desert.slope(), desert.treeCover(), 234, waterDistance, seed, x, z, 2);
+        require(base == SurfaceMaterial.SAND && promoted == SurfaceMaterial.GRASS,
+                "fixture must isolate the riparian mineral-to-grass promotion");
+        require(NaturalRiverBankSurface.material(desert, (short) 0, 234, waterDistance, seed, x, z, 2)
+                        == SurfaceMaterial.SAND,
+                "riparian bonus greened a naturally sandy desert bank");
+
+        Sample temperate = new Sample(1, .4F, 15, .72F, .05F);
+        require(FeatureEcologyMath.surfaceMaterial(temperate.temperature(), temperate.moisture(),
+                        temperate.slope(), temperate.treeCover(), 150, seed, 17, -19, 2)
+                        == SurfaceMaterial.GRASS,
+                "temperate positive fixture must be grass");
+        require(NaturalRiverBankSurface.material(temperate, (short) 0, 150, waterDistance, seed, 17, -19, 2)
+                        == SurfaceMaterial.GRASS,
+                "already grassy riparian ecotone lost grass");
+
+        Sample cold = new Sample(12, .8F, -8, .9F, .8F);
+        require(NaturalRiverBankSurface.material(cold, (short) 0, 150, waterDistance, seed, 17, -19, 2)
+                        == SurfaceMaterial.STONE,
+                "non-grass mineral bank changed by arid clamp");
     }
 
     private static SurfaceMaterial material(Sample sample, short terrain, float waterDistance, int x, int z) {

@@ -11,8 +11,10 @@ import java.util.*;
 
 /** Entity/jigsaw marker templates are components, but are not buildings or foundations. */
 public final class StructurePieceOccupancy {
+    public record SoilFloor(int x,int z,Set<net.minecraft.world.level.block.state.BlockState> states) {}
     private record Templates(ComponentGeometry.Footprint legacy,ComponentGeometry.Footprint single,
-                             Map<Integer,Optional<List<PlacementGeometry.Rect>>> groundMasks) {}
+                             Map<Integer,Optional<List<PlacementGeometry.Rect>>> groundMasks,
+                             List<SoilFloor> soilFloor) {}
     private static final Map<StructureTemplate,Templates> CACHE=Collections.synchronizedMap(new WeakHashMap<>());
     private static final Map<Class<?>,Boolean> AUDITED=new java.util.concurrent.ConcurrentHashMap<>();
     private static final Map<net.minecraft.world.level.levelgen.structure.templatesystem.StructureProcessorList,Boolean>
@@ -33,6 +35,25 @@ public final class StructurePieceOccupancy {
     public static boolean requiresTerrainSupport(StructurePiece piece) {
         if (!(piece instanceof PoolElementStructurePiece pool)) return true;
         return hasBlocks(pool.getElement(),((PoolElementPieceAccess)pool).terrainDiffusion$templates(),true);
+    }
+    /** Exact, unprocessed bottom-layer soil only; never infer a floor from a roof or a road. */
+    public static List<SoilFloor> soilFloor(PoolElementStructurePiece pool) {
+        if (pool.getClass()!=PoolElementStructurePiece.class
+                || pool.getElement().getClass()!=SinglePoolElement.class
+                || pool.getElement().getProjection()!=StructureTemplatePool.Projection.RIGID
+                || pool.getGroundLevelDelta()!=1 || pool.getPosition().getY()!=pool.getBoundingBox().minY()
+                || !((SinglePoolTemplateAccess)pool.getElement()).terrainDiffusion$processors().value().list().isEmpty())
+            return List.of();
+        var data=templateData(pool.getElement(),((PoolElementPieceAccess)pool).terrainDiffusion$templates());
+        return data==null ? List.of() : data.soilFloor();
+    }
+
+    private static boolean soil(net.minecraft.world.level.block.state.BlockState state) {
+        return state.getFluidState().isEmpty() && !state.hasBlockEntity()
+                && (state.is(net.minecraft.tags.BlockTags.DIRT)
+                    || state.is(net.minecraft.world.level.block.Blocks.SAND)
+                    || state.is(net.minecraft.world.level.block.Blocks.RED_SAND)
+                    || state.is(net.minecraft.world.level.block.Blocks.GRAVEL));
     }
     public static boolean buriedWellBottom(StructurePiece piece,List<StructurePiece> pieces) {
         if(piece.getClass()!=PoolElementStructurePiece.class) return false;
@@ -164,11 +185,15 @@ public final class StructurePieceOccupancy {
                 var legacySolid=new HashSet<PlacementGeometry.Voxel>();
                 var singleSolid=new HashSet<PlacementGeometry.Voxel>();
                 var singleAir=new HashSet<PlacementGeometry.Voxel>();
+                var soilFloor=new TreeMap<Long,Set<net.minecraft.world.level.block.state.BlockState>>();
                 // Union all palettes. AIR in a Single (including MMV's wrapper) can destroy a wall.
                 for (var palette:((StructureTemplatePaletteAccess)key).terrainDiffusion$palettes()) for (var block:palette.blocks()) {
                     String state=BuiltInRegistries.BLOCK.getKey(block.state().getBlock()).toString();
                     String replacement=block.nbt()==null ? null : block.nbt().getString("final_state");
                     var voxel=new PlacementGeometry.Voxel(block.pos().getX(),block.pos().getY(),block.pos().getZ());
+                    if (voxel.y()==0 && soil(block.state()))
+                        soilFloor.computeIfAbsent(StructureTerrain.key(voxel.x(),voxel.z()),ignored -> new HashSet<>())
+                                .add(block.state());
                     if (ComponentGeometry.write(state,replacement,true)==ComponentGeometry.Write.SOLID) legacySolid.add(voxel);
                     switch (ComponentGeometry.write(state,replacement,false)) {
                         case SOLID -> singleSolid.add(voxel);
@@ -176,7 +201,9 @@ public final class StructurePieceOccupancy {
                         default -> { }
                     }
                 }
-                return new Templates(new ComponentGeometry.Footprint(legacySolid,Set.of()),new ComponentGeometry.Footprint(singleSolid,singleAir),new HashMap<>());
+                var floors=soilFloor.entrySet().stream().map(entry -> new SoilFloor(
+                        (int)(entry.getKey()>>32),(int)(long)entry.getKey(),Set.copyOf(entry.getValue()))).toList();
+                return new Templates(new ComponentGeometry.Footprint(legacySolid,Set.of()),new ComponentGeometry.Footprint(singleSolid,singleAir),new HashMap<>(),floors);
             });
         }
         return result;

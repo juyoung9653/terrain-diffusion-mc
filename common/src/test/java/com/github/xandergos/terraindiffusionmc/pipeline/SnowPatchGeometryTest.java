@@ -11,7 +11,7 @@ public final class SnowPatchGeometryTest {
     public static void main(String[] args) throws Exception {
         FastNoiseLite oldBroad = noise(82741, 72), warp = noise(62479, 160), edge = noise(91283, 3);
         boolean[] oldMask = new boolean[SIZE * SIZE], newMask = new boolean[SIZE * SIZE];
-        boolean[] terrainMask = new boolean[SIZE * SIZE];
+        boolean[] terrainMask = new boolean[SIZE * SIZE], iceMask = new boolean[SIZE * SIZE];
         float[] padded = new float[(SIZE + 2) * (SIZE + 2)];
         for (int z = -1; z <= SIZE; z++) for (int x = -1; x <= SIZE; x++)
             padded[(z + 1) * (SIZE + 2) + x + 1] = 1300 + x;
@@ -24,6 +24,7 @@ public final class SnowPatchGeometryTest {
             oldMask[index] = .5f > .5f + oldBroad.GetNoise(warpedX, warpedZ) + .035f * edge.GetNoise(px, pz);
             newMask[index] = EcologyClassifier.naturalSnowCover(px, pz, 300, -2);
             terrainMask[index] = EcologyClassifier.naturalSnowCover(px, pz, 1300 + x, -3f * x / SIZE, retention[index]);
+            iceMask[index] = EcologyClassifier.naturalIceCover(px, pz, 1300 + x, -3f * x / SIZE, retention[index]);
             if (x < 150) require(!terrainMask[index], "snow leaked below the terrain snowline");
             if (x > 370) require(terrainMask[index], "coordinate noise punched a hole above the terrain snowline");
             boolean valley = EcologyClassifier.naturalSnowCover(px, pz, 1000, -.5f);
@@ -33,6 +34,10 @@ public final class SnowPatchGeometryTest {
             require(!EcologyClassifier.naturalSnowCover(px, pz, 300, 10), "warm core changed");
             require(EcologyClassifier.naturalSnowCover(px, pz, 300, -8), "cold core changed");
             require(EcologyClassifier.naturalSnowCover(px, pz, 2400, -3), "alpine core changed");
+            require(EcologyClassifier.naturalIceCover(px, pz, 300, 10) == false,
+                    "warm water core changed");
+            require(EcologyClassifier.naturalIceCover(px, pz, 300, -8),
+                    "cold water core changed");
         }
         Metrics old = metrics(invert(oldMask)), current = metrics(invert(newMask));
         System.out.println("Old flat bare components: " + old);
@@ -41,9 +46,13 @@ public final class SnowPatchGeometryTest {
                 "uniform marginal flat retains large connected green holes");
         require(current.snow < SIZE * SIZE * .15, "fine recesses overwhelmed the marginal flat");
         Metrics terrain = metrics(terrainMask);
+        Metrics ice = metrics(iceMask);
         require(terrain.largest > terrain.snow * .90, "terrain snowfield must remain connected");
         require(terrain.edges < SIZE * 80, "fine detail must stay inside the climate transition");
         System.out.println("Terrain snowline: " + terrain);
+        require(ice.edges == terrain.edges && ice.snow == terrain.snow,
+                "water ice must use the same column climate transition as snow");
+        System.out.println("Ice transition: " + ice);
         require(altitudeChanges == 0, "height must not invent an independent snow island");
         System.out.println("Height-only snow changes: " + altitudeChanges);
         if (args.length > 0) {

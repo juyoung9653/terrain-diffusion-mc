@@ -2,6 +2,7 @@ package com.github.xandergos.terraindiffusionmc.compat.streams;
 
 import com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState;
 import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankMargin;
+import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankFillPolicy;
 import com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverBankShape;
 import java.lang.reflect.Method;
 import net.minecraft.core.BlockPos;
@@ -14,6 +15,9 @@ import net.minecraft.world.level.levelgen.Heightmap.Types;
 
 /** Connect raster corners and contain lateral steps; v5 first softens dry narrow-stream banks. */
 public final class StreamsRiverBanks {
+    private static final int[] CARDINAL_X = {-1, 1, 0, 0};
+    private static final int[] CARDINAL_Z = {0, 0, -1, 1};
+
     private StreamsRiverBanks() { }
     public static void finish(WorldGenLevel level, int minX, int minZ) {
         finish(level, minX, minZ, true);
@@ -107,9 +111,14 @@ public final class StreamsRiverBanks {
                 // the preceding wide-river repair outside that guarded scope.
                 if (version >= 6 && p.width < 4.0) continue;
                 int crest = Integer.MIN_VALUE;
-                for (BankPlan n : new BankPlan[]{plans[x-1][z],plans[x+1][z],plans[x][z-1],plans[x][z+1]})
-                    if (n.channel && n.surface <= p.surface+6) crest = Math.max(crest,
-                            NaturalRiverBankMargin.containmentCrest(version, n.surface));
+                int adjacentChannels = 0;
+                for (int direction = 0; direction < CARDINAL_X.length; direction++) {
+                    BankPlan n = plans[x + CARDINAL_X[direction]][z + CARDINAL_Z[direction]];
+                    if (n.channel && n.surface <= p.surface + 6) {
+                        crest = Math.max(crest, NaturalRiverBankMargin.containmentCrest(version, n.surface));
+                        adjacentChannels++;
+                    }
+                }
                 // V7 fills through the highest adjacent water block, retaining
                 // lateral containment at falls without adding a dry one-block parapet.
                 // Frozen older profiles keep their original freeboard.
@@ -129,6 +138,20 @@ public final class StreamsRiverBanks {
                     depth++; ground = level.getBlockState(pos.below(depth));
                 }
                 if (!soil(ground)) continue;
+                int crestSupportNeighbors = 0;
+                for (int direction = 0; direction < CARDINAL_X.length; direction++) {
+                    int dx = CARDINAL_X[direction], dz = CARDINAL_Z[direction];
+                    BankPlan neighbor = plans[x + dx][z + dz];
+                    // A low exposed riverbed is not a bank. Require an existing
+                    // dry soil column beside the cap and immediately below it,
+                    // so every newly filled level attaches to the actual bank.
+                    if (!neighbor.channel && soil(level.getBlockState(pos.offset(dx, 0, dz)))
+                            && soil(level.getBlockState(pos.offset(dx, -1, dz)))) {
+                        crestSupportNeighbors++;
+                    }
+                }
+                if (!NaturalRiverBankFillPolicy.allows(version, adjacentChannels, crestSupportNeighbors, depth))
+                    continue;
                 if ((Boolean) shielded.invoke(null, protection, pos.getX(), pos.getZ(), crest-depth)
                         || (Boolean) blockedBiome.invoke(null, level.getBiome(pos.below(depth)))) continue;
                 for (int dy=1;dy<depth;dy++) level.setBlock(pos.below(dy), Blocks.DIRT.defaultBlockState(), 2);

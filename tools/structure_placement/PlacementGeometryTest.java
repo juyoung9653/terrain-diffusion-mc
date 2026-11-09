@@ -136,8 +136,32 @@ public final class PlacementGeometryTest {
         check(reverseOversized.accept("small","small",distant,distant,100),"small footprint commits before oversized query");
         check(!reverseOversized.accept("huge","huge",left,huge,100),"oversized query checks every existing accepted entry");
     }
+    private static void terrainBlendAndFoundationPolicy() {
+        Rect point=new Rect(0,0,0,0);
+        int radius=12;
+        check(PlacementGeometry.terrainBlendDistance(point,-13,1,radius,4)==Integer.MAX_VALUE,
+                "V4 keeps the axis-distance blend exclusion");
+        check(PlacementGeometry.terrainBlendDistance(point,-13,1,radius,5)==11,
+                "V5 admits the rounded 11-block contour just outside the axis gate");
+        check(PlacementGeometry.terrainBlendDistance(point,-14,1,radius,5)==12,
+                "V5 admits the rounded radius boundary");
+        check(PlacementGeometry.terrainBlendDistance(point,-15,1,radius,5)==Integer.MAX_VALUE,
+                "V5 does not extend the early axis window beyond two blocks");
+        int repeated=PlacementGeometry.terrainBlendDistance(point,-14,1,radius,5);
+        check(repeated==PlacementGeometry.terrainBlendDistance(point,-14,1,radius,5),
+                "rounded blend admission is deterministic");
+
+        check(PlacementGeometry.naturalFoundation(0,99,4),"legacy foundation policy remains unchanged");
+        check(PlacementGeometry.naturalFoundation(0,0,5),"empty small decoration remains exempt");
+        check(PlacementGeometry.naturalFoundation(15,15,5),"small deep decoration remains exempt");
+        check(PlacementGeometry.naturalFoundation(16,8,5),"V5 permits half deep foundation columns");
+        check(!PlacementGeometry.naturalFoundation(16,9,5),"V5 rejects a majority deep foundation");
+        check(!PlacementGeometry.naturalFoundation(16,-1,5),"V5 rejects invalid negative deep count");
+        check(!PlacementGeometry.naturalFoundation(16,17,5),"V5 rejects deep count beyond columns");
+    }
     public static void main(String[] args) {
         occupiedSetContract();
+        terrainBlendAndFoundationPolicy();
         check(PlacementGeometry.layoutSeed(77,"test:a",-8,3,0)==77,"first layout retains native seed");
         Set<Long> layouts=new HashSet<>();
         for (int attempt=1;attempt<9;attempt++) for (String id:List.of("test:a","test:b"))

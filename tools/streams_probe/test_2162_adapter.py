@@ -8,6 +8,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "build" / "streams-2162-review" / "adapter-test"
+PROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 SOURCES = (
     ROOT / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/river/NaturalRiverProfile.java",
     ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsRecordAccess.java",
@@ -17,6 +18,10 @@ SOURCES = (
 
 
 def find_jdk(requested: Path | None) -> Path:
+    if requested is not None:
+        if all((requested / "bin" / (name + ".exe")).is_file() for name in ("java", "javac", "javap")):
+            return requested
+        raise SystemExit(f"requested JDK lacks java/javac/javap: {requested}")
     candidates = ([requested] if requested else []) + [
         Path(os.environ["JAVA_HOME"]) if os.environ.get("JAVA_HOME") else None,
         Path(r"C:\Program Files\Android\Android Studio\jbr"), Path(r"C:\Program Files\Java\jdk-21")]
@@ -28,7 +33,7 @@ def find_jdk(requested: Path | None) -> Path:
 
 def inspect(jdk: Path, jar: Path, name: str) -> str:
     process = subprocess.run([str(jdk / "bin/javap.exe"), "-p", "-s", "-classpath", str(jar), name],
-                             cwd=ROOT, text=True, capture_output=True)
+                             cwd=ROOT, text=True, capture_output=True, creationflags=PROCESS_FLAGS)
     if process.returncode:
         raise RuntimeError(f"javap {name} failed: {process.stderr[-1000:]}")
     return process.stdout
@@ -59,10 +64,13 @@ def main() -> None:
     require("descriptor: (ZZIIDDDDDDDZZDDDDDDDDDD)V" in column, "ColumnPlan 23-component layout changed")
     OUT.mkdir(parents=True, exist_ok=True)
     subprocess.run([str(jdk / "bin/javac.exe"), "--release", "21", "-cp", str(jar),
-                    "-d", str(OUT), *map(str, SOURCES)], cwd=ROOT, check=True)
-    subprocess.run([str(jdk / "bin/java.exe"), "-ea", "-cp", os.pathsep.join((str(OUT), str(jar))),
+                    "-d", str(OUT), *map(str, SOURCES)], cwd=ROOT, check=True, creationflags=PROCESS_FLAGS)
+    result = subprocess.run([str(jdk / "bin/java.exe"), "-ea", "-cp", os.pathsep.join((str(OUT), str(jar))),
                     "com.github.xandergos.terraindiffusionmc.diagnostic.Streams2162AdapterHarness"],
-                   cwd=ROOT, check=True)
+                   cwd=ROOT, check=True, creationflags=PROCESS_FLAGS, capture_output=True, text=True)
+    require("Streams2162AdapterHarness: PASS" in result.stdout,
+            "adapter harness did not emit success: " + result.stdout + result.stderr)
+    print(result.stdout.strip())
 
 
 if __name__ == "__main__":

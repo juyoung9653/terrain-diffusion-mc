@@ -340,10 +340,6 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
     generated_biome_source = generated_preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"]
     generated_biome_source["terralith"] = True
     generated_biome_source["natural_biomes"] = True
-    generated_biome_source["underground_profile_version"] = 2
-    generated_biome_source["underground_river_version"] = 3
-    generated_preset["dimensions"]["minecraft:overworld"]["generator"]["settings"] = (
-            "terrain-diffusion-mc:underground_v2")
 
     noise_output = output / "data/terrain-diffusion-mc/worldgen/noise_settings/terrain_diffusion.json"
     underground_noise_output = output / "data/terrain-diffusion-mc/worldgen/noise_settings/underground.json"
@@ -409,8 +405,10 @@ def build_pack(jar_path: Path, repo_root: Path, output: Path) -> dict[str, Any]:
             "terralith_dimension_override_copied": False,
             "world_preset_terralith_flag": True,
             "world_preset_natural_biomes_flag": True,
-            "world_preset_underground_river_version": generated_biome_source["underground_river_version"],
-            "world_preset_underground_profile_version": generated_biome_source["underground_profile_version"],
+            "world_preset_underground": generated_biome_source.get("underground", False),
+            "world_preset_underground_rivers": generated_biome_source.get("underground_rivers", False),
+            "world_preset_underground_river_version": generated_biome_source.get("underground_river_version", 1),
+            "world_preset_underground_profile_version": generated_biome_source.get("underground_profile_version", 1),
         },
         "surface_dependencies": dependencies,
         "biome_reference_closure": biome_closure,

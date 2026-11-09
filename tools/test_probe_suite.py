@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import importlib.util
 from pathlib import Path
 import subprocess
@@ -20,7 +21,9 @@ from probe_suite import (Job, density_receipt, exclusive_lock, gradle_command,
 
 class ProbeSuiteTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.temp = tempfile.TemporaryDirectory()
+        scratch = Path(__file__).resolve().parents[1] / "build"
+        scratch.mkdir(exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=scratch)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         (self.root / "build/structure-density").mkdir(parents=True)
@@ -101,6 +104,33 @@ class ProbeSuiteTest(unittest.TestCase):
         self.assertIn("launch_error", row["error"])
         self.assertIsNone(row["processExit"])
         self.assertIn("launch_error", (run / "launcher-output.txt").read_text(encoding="utf-8"))
+
+    def test_all_preflight_checks_run_under_lock_before_any_child(self) -> None:
+        one, two = self.make_run("preflight_one"), self.make_run("preflight_two")
+        def fail_preflight():
+            with self.assertRaisesRegex(RuntimeError, "another probe suite"):
+                with exclusive_lock(self.root):
+                    pass
+            raise ValueError("bad fixture")
+        first = self.job(one, '{"success":true}')
+        second = self.job(two, '{"success":true}')
+        second = Job(second.run, second.command, second.receipt, second.check_receipt, fail_preflight)
+        with self.assertRaisesRegex(ValueError, "bad fixture"):
+            run_suite(self.root, "structure-density", [first, second], {})
+        self.assertFalse(first.receipt.exists())
+        self.assertFalse((one / "launcher-output.txt").exists())
+
+    def test_receipt_callback_failure_is_published_and_suite_continues(self) -> None:
+        one, two = self.make_run("callback_bad"), self.make_run("callback_good")
+        def bad_receipt(path):
+            raise ValueError("missing numeric evidence")
+        first = self.job(one, '{"success":true}')
+        first = Job(first.run, first.command, first.receipt, bad_receipt)
+        self.assertEqual(run_suite(self.root, "structure-density", [first, self.job(two, '{"success":true}')], {}), 1)
+        status = json.loads((self.root / "build/structure-density/suite-status.json").read_text())
+        self.assertIsNone(status["active"])
+        self.assertIn("invalid_receipt:ValueError", status["completed"][0]["probeStatus"])
+        self.assertTrue(status["completed"][1]["success"])
 
     def test_paths_and_receipt_shapes(self) -> None:
         run = self.make_run("safe")
@@ -197,9 +227,83 @@ class ProbeSuiteTest(unittest.TestCase):
             self.assertNotEqual(requested_receipt(path, support=True, well=True, shore=True), "success")
         path.write_text(json.dumps({"success": True, "shoreSamples": 3,
                                     "support": {"featureSupport": 12, "wellFloorBlocks": 4}}))
+        self.assertEqual(requested_receipt(path, support=True, well=True, shore=True),
+                         "missing_foundation_repair_evidence")
+        path.write_text(json.dumps({"success": True, "shoreSamples": 3,
+                                    "support": {"featureSupport": 12, "wellFloorBlocks": 4},
+                                    "foundationSupportChecks": {"status": "passed", "restored": 5, "rejected": 6}}))
         self.assertEqual(requested_receipt(path, support=True, well=True, shore=True), "success")
         path.write_text('{"success":false}')
         self.assertEqual(requested_receipt(path, support=True, well=True, shore=True), "not_success")
+
+    def test_tunnel_pass_label_cannot_replace_settlement_and_physical_evidence(self) -> None:
+        from tools.streams_probe.run_suite import short_tunnel_receipt
+        path, rows = self.tunnel_evidence()
+
+        def status(candidate: list[dict]) -> str:
+            path.write_text("\n".join(json.dumps(row) for row in candidate), encoding="utf-8")
+            return short_tunnel_receipt(path)
+
+        self.assertEqual(status(rows), "success")
+        # All of these were accepted by the old status-only tunnel checker.
+        self.assertNotEqual(status([rows[1], rows[2]]), "success")
+        self.assertNotEqual(status([rows[1], rows[0], rows[2]]), "success")
+        self.assertNotEqual(status([rows[0], rows[0], rows[1], rows[2]]), "success")
+        for field, values in {
+            "settledTicks": [None, "99", "100.5", True, "NaN"],
+            "plansInBounds": [None, "0"],
+            "fullChunks": [None, "0"],
+            "interiorColumns": [None, "0"],
+            "method": [None, "planner_only"],
+            "firstGeneration": [None, "unknown"],
+            "retainedWrites": [None, "0"],
+        }.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    self.assertNotEqual(status([rows[0], {**rows[1], field: value}, rows[2]]), "success")
+        restart = {**rows[1], "firstGeneration": "false", "retainedWrites": "0"}
+        self.assertEqual(status([{**rows[0], "connected": "true"}, restart, rows[2]]), "success")
+        # Water may settle into previously dry cells; pre-tick wet count is not
+        # a required lower bound on the final connected channel's wet count.
+        self.assertEqual(status([{**rows[0], "wetColumns": "0"}, rows[1], rows[2]]), "success")
+
+    def test_tunnel_evidence_must_match_saved_artifacts(self) -> None:
+        from tools.streams_probe.run_suite import short_tunnel_receipt
+        path, _ = self.tunnel_evidence()
+        self.assertEqual(short_tunnel_receipt(path), "success")
+        for name in ("td-short-river-tunnel-plan.txt", "td-short-river-tunnel-audit.csv"):
+            with self.subTest(artifact=name):
+                artifact = path.parent / name
+                original = artifact.read_bytes()
+                artifact.write_bytes(original + b"stale or changed\n")
+                self.assertEqual(short_tunnel_receipt(path), "short_river_tunnel_artifact_mismatch")
+                artifact.unlink()
+                self.assertEqual(short_tunnel_receipt(path), "short_river_tunnel_missing_artifact")
+                artifact.write_bytes(original)
+        # Java's CSV writer may use Windows newlines; the receipt hashes joined rows.
+        csv = path.parent / "td-short-river-tunnel-audit.csv"
+        csv.write_bytes(csv.read_bytes().replace(b"\n", b"\r\n"))
+        self.assertEqual(short_tunnel_receipt(path), "success")
+
+    def tunnel_evidence(self) -> tuple[Path, list[dict]]:
+        path = self.make_run("tunnel") / "world/td-streams-probe.jsonl"
+        plan = "40.0\n10.0,30.0\n0.0,0.0,80.0,2.0\n40.0,0.0,78.0,2.0\n"
+        samples = "kind,x,z,wet\nmask_core,20,0,true\n"
+        (path.parent / "td-short-river-tunnel-plan.txt").write_bytes(plan.encode())
+        (path.parent / "td-short-river-tunnel-audit.csv").write_bytes(samples.encode())
+        rows = [
+            {"event": "short_river_tunnel_pre_ticks", "protectedColumns": "10",
+             "wetColumns": "4", "connected": "false"},
+            {"event": "short_river_tunnel_audit", "status": "passed", "settledTicks": "100",
+             "plansInBounds": "1", "fullChunks": "4", "interiorColumns": "2",
+             "firstGeneration": "true", "retainedWrites": "20",
+             "method": "actual_full_chunks_full_mask_connected_water_roof_and_portals",
+             "planHash": hashlib.sha256(plan.encode()).hexdigest(),
+             "physicalSampleHash": hashlib.sha256(samples.rstrip("\n").encode()).hexdigest()},
+            {"event": "complete", "status": "success"},
+        ]
+        path.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+        return path, rows
 
     def test_replay_receipt_requires_identity_hits_and_no_failure(self) -> None:
         from tools.structure_placement.run_suite import requested_receipt

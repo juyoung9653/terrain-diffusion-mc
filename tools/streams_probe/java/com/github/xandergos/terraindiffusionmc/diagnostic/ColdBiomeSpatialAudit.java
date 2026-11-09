@@ -32,9 +32,9 @@ public final class ColdBiomeSpatialAudit {
         var provider = LocalTerrainProvider.getInstance();
         Path output = Path.of(System.getProperty("td.streamsProbe.coldOutput", "cold-biomes.csv"));
         long calls = 0, windows = 0;
-        int samples = 0, snow = 0;
+        int samples = 0, snow = 0, ice = 0;
         try (var writer = Files.newBufferedWriter(output)) {
-            writer.write("x,z,elevation,regionalT,regionalElevation,localT,moisture,slope,treeCover,biomeId,terrainId,coldState,retention,snow,previousHeightMask\n");
+            writer.write("x,z,elevation,regionalT,regionalElevation,localT,moisture,slope,treeCover,biomeId,terrainId,coldState,retention,snow,ice,previousHeightMask\n");
             for (int tz = 0; tz < tiles; tz++) for (int tx = 0; tx < tiles; tx++) {
                 int x = x0 + tx * tile, z = z0 + tz * tile;
                 var data = provider.fetchHeightmap(z, x, z + tile, x + tile);
@@ -48,6 +48,7 @@ public final class ColdBiomeSpatialAudit {
                     float elevation = data.heightmap[dz][dx];
                     float retention = data.ecology.snowRetention(dx, dz);
                     boolean cover = EcologyClassifier.naturalSnowCover(bx, bz, elevation, climate.temperature(), retention);
+                    boolean iceCover = EcologyClassifier.naturalIceCover(bx, bz, elevation, climate.temperature(), retention);
                     float oldT = regional.temperature() - .006f * (Math.max(0, elevation) - Math.max(0, regional.elevation()));
                     float oldMargin = Math.max(-2 - oldT, Math.min((elevation - 1450) / 200, -.5f - oldT));
                     oldMargin += Math.max(-.65f, Math.min(.65f, retention)) * (1 - EcologyClassifier.smooth(1, 2, Math.abs(oldMargin)));
@@ -55,9 +56,10 @@ public final class ColdBiomeSpatialAudit {
                             + "," + climate.temperature() + "," + climate.moisture() + "," + climate.slope() + "," + climate.treeCover()
                             + "," + climate.biomeId() + "," + data.ecology.terrainBiomeId(dx, dz)
                             + "," + EcologyClassifier.coldState(climate.temperature()) + "," + retention + "," + (cover ? 1 : 0)
-                            + "," + (oldMargin >= 0 ? 1 : 0) + "\n");
+                            + "," + (iceCover ? 1 : 0) + "," + (oldMargin >= 0 ? 1 : 0) + "\n");
                     samples++;
                     if (cover) snow++;
+                    if (iceCover) ice++;
                 }
                 var after = provider.performanceSnapshot();
                 calls += after.hits() + after.misses() - before.hits() - before.misses();
@@ -72,6 +74,7 @@ public final class ColdBiomeSpatialAudit {
         receipt.addProperty("scale", scale);
         receipt.addProperty("samples", samples);
         receipt.addProperty("snow", snow);
+        receipt.addProperty("ice", ice);
         receipt.addProperty("decisionProviderCalls", calls);
         receipt.addProperty("decisionComputedWindows", windows);
         receipt.addProperty("csv", output.toAbsolutePath().toString());

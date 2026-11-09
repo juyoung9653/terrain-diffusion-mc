@@ -326,13 +326,13 @@ public final class StructureDensityProbe {
             for(var start:actual) {
                 var tag=start.createTag(serialization,start.getChunkPos());
                 int stored=((com.github.xandergos.terraindiffusionmc.world.structure.PolicyStructureStart)(Object)start).terrainDiffusion$policyVersion();
-                if(stored!=3) throw new AssertionError("Expected new/reloaded policy 3, got "+stored);
-                for(int version=1;version<=3;version++) {
+                if(stored!=StructurePlacementRuntime.CURRENT_TERRAIN_POLICY) throw new AssertionError("Expected new/reloaded policy "+StructurePlacementRuntime.CURRENT_TERRAIN_POLICY+", got "+stored);
+                for(int version=1;version<=StructurePlacementRuntime.CURRENT_TERRAIN_POLICY;version++) {
                     var copy=tag.copy();copy.putInt("TDPlacementPolicy",version);
                     var reloaded=StructureStart.loadStaticStart(serialization,copy,level.getSeed());
                     if(reloaded==null || ((com.github.xandergos.terraindiffusionmc.world.structure.PolicyStructureStart)(Object)reloaded).terrainDiffusion$policyVersion()!=version)
                         throw new AssertionError("Policy NBT round trip failed: "+version);
-                    if(version==3 && StructurePlacementRuntime.shapes(start,level.registryAccess())) {
+                    if(version==StructurePlacementRuntime.CURRENT_TERRAIN_POLICY && StructurePlacementRuntime.shapes(start,level.registryAccess())) {
                         var policy=config.resolve(registry.getKey(start.getStructure()).toString());
                         var before=StructureTerrain.plan(start,policy,generator,randomState,level);
                         var after=StructureTerrain.plan(reloaded,policy,generator,randomState,level);
@@ -342,6 +342,8 @@ public final class StructureDensityProbe {
                 }
             }
             report.put("policyRoundTrips",policyRoundTrips);
+            report.put("terrainPolicyVersion",StructurePlacementRuntime.CURRENT_TERRAIN_POLICY);
+            report.put("foundationSupportChecks",FoundationSupportChecks.run(level,actual));
             phaseSeconds.put("serialization",DensityProbeTelemetry.seconds(System.nanoTime()-phaseBegan));
             if(repeatNative) {
                 nativeRepeats.add(nativeSnapshot(server));

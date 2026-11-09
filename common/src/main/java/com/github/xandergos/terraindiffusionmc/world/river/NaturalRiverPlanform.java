@@ -62,7 +62,7 @@ public final class NaturalRiverPlanform {
         Map<Integer, List<Piece>> replacements = new HashMap<>();
         for (int i = 0; i < input.size(); i++) {
             Node start = nodes.get(key(input.get(i).x1(), input.get(i).z1()));
-            if (!seen[i] && (start.incoming.size() != 1 || start.outgoing.size() != 1)) {
+            if (!seen[i] && starts(input, start)) {
                 appendChain(i, input, nodes, seen, replacements, ground, corridor, seed, seaLevel, waterInset);
             }
         }
@@ -74,6 +74,14 @@ public final class NaturalRiverPlanform {
         // records while doing so.
         for (int i = 0; i < input.size(); i++) result.addAll(replacements.getOrDefault(i, List.of(new Piece(i, input.get(i)))));
         return List.copyOf(result);
+    }
+
+    /** A zero-width native source pins its own record, but not the first real
+     * downstream reach.  Treat that unusable predecessor as a path boundary so
+     * the normal conservative planform checks can inspect the usable run. */
+    private static boolean starts(List<Reach> input, Node start) {
+        if (start.incoming.size() != 1 || start.outgoing.size() != 1) return true;
+        return !usable(input.get(start.incoming.get(0)));
     }
 
     private static void appendChain(int first, List<Reach> input, Map<NodeKey, Node> nodes,
@@ -273,6 +281,7 @@ public final class NaturalRiverPlanform {
     private static Node node(Map<NodeKey, Node> nodes, double x, double z) { return nodes.computeIfAbsent(key(x,z), ignored -> new Node()); }
     private static NodeKey key(double x, double z) { return new NodeKey(x,z); }
     private static boolean finite(Reach r) { return Double.isFinite(r.x1()) && Double.isFinite(r.z1()) && Double.isFinite(r.y1()) && Double.isFinite(r.w1()) && Double.isFinite(r.x2()) && Double.isFinite(r.z2()) && Double.isFinite(r.y2()) && Double.isFinite(r.w2()) && Double.isFinite(r.speed1()) && Double.isFinite(r.speed2()) && r.w1() >= 0 && r.w2() >= 0; }
+    private static boolean usable(Reach r) { return finite(r) && r.w1() > 0 && r.w2() > 0 && length(r) > EPSILON; }
     private static long mix(long value) { value ^= value >>> 33; value *= 0xff51afd7ed558ccdL; value ^= value >>> 33; value *= 0xc4ceb9fe1a85ec53L; return value ^ value >>> 33; }
     private static double distanceToSegmentSquared(double x, double z, double ax, double az, double bx, double bz) { double dx=bx-ax,dz=bz-az; double d=dx*dx+dz*dz; double t=d <= EPSILON ? 0 : Math.max(0,Math.min(1,((x-ax)*dx+(z-az)*dz)/d)); double ex=x-(ax+t*dx), ez=z-(az+t*dz); return ex*ex+ez*ez; }
     private record NodeKey(double x, double z) { }

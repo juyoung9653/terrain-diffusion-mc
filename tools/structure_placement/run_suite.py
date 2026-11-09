@@ -29,6 +29,11 @@ def requested_receipt(path: Path, *, support: bool, well: bool, shore: bool,
         return "missing_support_evidence"
     if well and (not isinstance(evidence, dict) or not positive(evidence.get("wellFloorBlocks"))):
         return "missing_well_evidence"
+    foundation = row.get("foundationSupportChecks")
+    if support and (not isinstance(foundation, dict) or foundation.get("status") != "passed"
+                    or not positive(foundation.get("restored"))
+                    or not positive(foundation.get("rejected"))):
+        return "missing_foundation_repair_evidence"
     if shore and not positive(row.get("shoreSamples")):
         return "missing_shore_evidence"
     evidence = row.get("underground")

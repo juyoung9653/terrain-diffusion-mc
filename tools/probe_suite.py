@@ -178,6 +178,7 @@ class Job:
     command: list[str]
     receipt: Path
     check_receipt: Callable[[Path], str]
+    prepare: Callable[[], None] | None = None
 
 
 def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], heartbeat_seconds: int = 30) -> int:
@@ -190,6 +191,10 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
         raise ValueError(f"refusing symlinked status path: {status}")
     completed: list[dict[str, object]] = []
     with exclusive_lock(root):
+        # Validate every job before launching any child, while fixture state is locked.
+        for job in jobs:
+            if job.prepare is not None:
+                job.prepare()
         suite_started = utc_now()
         suite_begun = time.monotonic()
         for job in jobs:
@@ -235,7 +240,10 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
                 if modified < started_ns or (prior is not None and modified <= prior):
                     receipt_status = "stale_receipt"
                 else:
-                    receipt_status = job.check_receipt(job.receipt)
+                    try:
+                        receipt_status = job.check_receipt(job.receipt)
+                    except (ValueError, OSError, UnicodeError) as exc:
+                        receipt_status = f"invalid_receipt:{type(exc).__name__}: {exc}"
             ok = code == 0 and receipt_status == "success"
             summary: dict[str, object] = {"name": job.run.name, "processExit": code,
                                           "probeStatus": receipt_status, "success": ok,
