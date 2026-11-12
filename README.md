@@ -973,6 +973,9 @@ seed semantics.
 reproduce Structurify's placement-grid spacing changes. The default `1.0` adds no
 thinning; `1.4` retains about 51% of candidates before other checks. Do not migrate a
 Structurify spacing multiplier blindly when normal exploration density is desired.
+All seven vanilla ruined-portal variants default to `2.0`, retaining about 25% of
+their candidates and therefore doubling their typical generation distance. An
+explicit per-structure `spacingMultiplier` overrides this default.
 
 Distance arbitration covers registered structures using standard random-spread or
 concentric-ring placement, plus the inspected Cataclysm random-spread and YUNG
@@ -1000,6 +1003,30 @@ checks. Different-height overlapping foundations still fail the terrain check;
 native underground room/corridor intersections are preserved. Verified entity-only
 legacy templates are not treated as buildings or foundations. This is not a universal
 repair for every mod's custom generator.
+
+Two native template routes need separate handling from TD's foundation shaping.
+Structory's `abandoned_chapel` runs in RAW_GENERATION and writes its own grass/dirt
+pad. For its known rigid, unprocessed chapel templates, TD omits landscaping-only
+columns (including their AIR and plants), retaining the original ground instead.
+Columns containing architecture in any palette keep their buildings, walls and
+gravestones; template soil at an existing natural block inherits that substrate.
+Terrain-matching connectors, custom processors and non-TD worlds retain native
+placement. This is a chapel-specific adapter, not a general template rewriter.
+
+YUNG Better Ocean Monuments converts template AIR below sea level to water. Its
+115-by-126 start envelope can therefore excavate a rectangular hole across a coast.
+Before accepting `betteroceanmonuments:ocean_monument`, TD checks every footprint
+column for continuous sea-level water and a floor no higher than the structure's
+lowest Y plus `maxCutBlocks`. Shallow/land columns or an insufficient sample budget
+reject the entire candidate before block placement. This reduces monument sites
+to sufficiently deep open water and leaves the monument's rooms/processors intact.
+The rule uses native base-height queries, never neighboring chunk generation.
+Existing generated structures/terrain are not repaired by either change.
+
+The `structure-site` fast check covers the full monument envelope and a single
+shallow corner. A density fixture with `verify-structure-sites.txt`, Structory,
+Better Ocean Monuments and YUNG's API also exercises the loaded native templates;
+its template checks use controlled substrate, not a visual screenshot assertion.
 
 Run `python tools/structure_placement/run_tests.py` and
 `python tools/structure_placement/test_config.py` for geometry and config checks.

@@ -15,6 +15,7 @@
     "JigsawStructureOriginMixin",
     "PoolElementPieceAccess",
     "SinglePoolTemplateAccess",
+    "ChapelTemplatePlacementMixin",
     "StructureTemplatePaletteAccess",
     "ListPoolElementsAccess",
     "StructureTerrainSurfaceMixin",

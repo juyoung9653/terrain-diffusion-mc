@@ -26,6 +26,13 @@ public final class StructurePlacementConfig {
     private static final Map<Object, Snapshot> WORLDS = Collections.synchronizedMap(new WeakHashMap<>());
     public static final String FILE_NAME = "terrain-diffusion-structures.json";
     public static final String WORLD_FILE_NAME = "td-structure-placement.json";
+    /** Vanilla registers one generic and six biome-specific ruined-portal structures. */
+    private static final Set<String> RUINED_PORTAL_IDS = Set.of(
+            "minecraft:ruined_portal", "minecraft:ruined_portal_desert",
+            "minecraft:ruined_portal_jungle", "minecraft:ruined_portal_mountain",
+            "minecraft:ruined_portal_nether", "minecraft:ruined_portal_ocean",
+            "minecraft:ruined_portal_swamp");
+    private static final double RUINED_PORTAL_SPACING_MULTIPLIER = 2.0;
 
     private StructurePlacementConfig() { }
 
@@ -222,8 +229,9 @@ public final class StructurePlacementConfig {
         if (document == null || document.version != 1) throw new IllegalArgumentException("Unsupported structure config version");
         if (document.global == null || document.namespaces == null || document.structures == null)
             throw new IllegalArgumentException("global, namespaces and structures must be objects");
-        Policy global = merge(defaults(), document.global);
-        VillageSettings v = document.villageDistribution;
+        Document effective = withRuinedPortalDefaults(document);
+        Policy global = merge(defaults(), effective.global);
+        VillageSettings v = effective.villageDistribution;
         if (v == null) throw new IllegalArgumentException("villageDistribution must be an object");
         range("villageDistribution", "targetMeanNearestNeighborBlocks", v.targetMeanNearestNeighborBlocks, 256, 4096);
         range("villageDistribution", "basicSharePercent", v.basicSharePercent, 0, 100);
@@ -232,14 +240,14 @@ public final class StructurePlacementConfig {
                 v.basicSharePercent, v.algorithmVersion);
         validatePolicy("global", global);
         Map<String, Policy> namespaces = new TreeMap<>();
-        for (var entry : document.namespaces.entrySet()) {
+        for (var entry : effective.namespaces.entrySet()) {
             if (!entry.getKey().matches("[a-z0-9_.-]+")) throw new IllegalArgumentException("Invalid mod namespace: " + entry.getKey());
             Policy value = merge(global, entry.getValue());
             validatePolicy(entry.getKey(), value);
             namespaces.put(entry.getKey(), value);
         }
         Map<String, Policy> structures = new TreeMap<>();
-        for (var entry : document.structures.entrySet()) {
+        for (var entry : effective.structures.entrySet()) {
             String id = entry.getKey();
             if (!id.matches("[a-z0-9_.-]+:[a-z0-9_./-]+")) throw new IllegalArgumentException("Invalid structure ID: " + id);
             Policy parent = namespaces.getOrDefault(id.substring(0, id.indexOf(':')), global);
@@ -247,7 +255,29 @@ public final class StructurePlacementConfig {
             validatePolicy(id, value);
             structures.put(id, value);
         }
-        return new Snapshot(document.enabled, global, namespaces, structures, villages, JSON.toJson(document));
+        return new Snapshot(effective.enabled, global, namespaces, structures, villages, JSON.toJson(effective));
+    }
+
+    /**
+     * Makes the portal-distance default explicit for new and older config files.
+     * A user-supplied portal override always wins, including an explicit 1.0.
+     */
+    private static Document withRuinedPortalDefaults(Document document) {
+        for (var entry : document.structures.entrySet())
+            if (entry.getValue() == null) throw new IllegalArgumentException("Override must be an object: " + entry.getKey());
+        for (var entry : document.namespaces.entrySet())
+            if (entry.getValue() == null) throw new IllegalArgumentException("Override must be an object: " + entry.getKey());
+        Document result = JSON.fromJson(JSON.toJson(document), Document.class);
+        for (String id : RUINED_PORTAL_IDS) {
+            Override override = result.structures.get(id);
+            if (override == null) {
+                override = new Override();
+                result.structures.put(id, override);
+            }
+            if (override.spacingMultiplier == null)
+                override.spacingMultiplier = RUINED_PORTAL_SPACING_MULTIPLIER;
+        }
+        return result;
     }
 
     private static Policy merge(Policy p, Override o) {
@@ -311,7 +341,7 @@ public final class StructurePlacementConfig {
             }
             Document result = JSON.fromJson(tree, Document.class);
             validate(result);
-            return result;
+            return withRuinedPortalDefaults(result);
         } catch (JsonParseException | IllegalArgumentException e) {
             throw new IOException("Invalid structure placement JSON: " + path + ": " + e.getMessage(), e);
         }

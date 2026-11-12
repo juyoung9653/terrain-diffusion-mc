@@ -344,6 +344,9 @@ public final class StructureDensityProbe {
             report.put("policyRoundTrips",policyRoundTrips);
             report.put("terrainPolicyVersion",StructurePlacementRuntime.CURRENT_TERRAIN_POLICY);
             report.put("foundationSupportChecks",FoundationSupportChecks.run(level,actual));
+            report.put("structureSite",StructureSiteChecks.verify(level));
+            if (Files.exists(server.getServerDirectory().resolve("verify-structure-sites.txt")))
+                report.put("chapelTerrain", ChapelTerrainChecks.run(level));
             phaseSeconds.put("serialization",DensityProbeTelemetry.seconds(System.nanoTime()-phaseBegan));
             if(repeatNative) {
                 nativeRepeats.add(nativeSnapshot(server));

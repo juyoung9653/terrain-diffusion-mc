@@ -21,7 +21,7 @@ DIRECTORIES = ("mods", "config", "defaultconfigs", "terrain-diffusion-models")
 CONTROLS = ("server.properties", "eula.txt")
 OPTIONAL_CONTROLS = ("village-census-only.txt", "require-ecology-scale1.txt",
                      "reverse-order.txt", "repeat-native.txt", "verify-support.txt",
-                     "verify-well-support.txt")
+                     "verify-well-support.txt", "verify-structure-sites.txt")
 METADATA = ("level.dat", "data/terrain_diffusion_world_settings.dat",
             "data/terrain_diffusion_natural_rivers.dat",
             "data/terrain_diffusion_streams_exact_v1.txt",

@@ -23,6 +23,25 @@ public final class StructureConfigTest {
         Override structure = new Override(); structure.minGapBlocks = 240;
         d.structures.put("test:village", structure);
         var snapshot = StructurePlacementConfig.validate(d);
+        for (String id : new String[]{"minecraft:ruined_portal", "minecraft:ruined_portal_desert",
+                "minecraft:ruined_portal_jungle", "minecraft:ruined_portal_mountain",
+                "minecraft:ruined_portal_nether", "minecraft:ruined_portal_ocean",
+                "minecraft:ruined_portal_swamp"})
+            check(snapshot.resolve(id).spacingMultiplier() == 2.0,
+                    "every vanilla ruined portal defaults to double spacing: " + id);
+        check(snapshot.resolve("minecraft:village_plains").spacingMultiplier() == 1.0,
+                "ruined-portal default leaves other structures unchanged");
+        Override portalOverride = new Override(); portalOverride.spacingMultiplier = 1.0;
+        d.structures.put("minecraft:ruined_portal", portalOverride);
+        check(StructurePlacementConfig.validate(d).resolve("minecraft:ruined_portal").spacingMultiplier() == 1.0,
+                "explicit ruined-portal setting overrides the default");
+        d.structures.remove("minecraft:ruined_portal");
+        Override portalPartial = new Override(); portalPartial.surfaceMode = StructurePlacementConfig.SurfaceMode.PRESERVE;
+        d.structures.put("minecraft:ruined_portal", portalPartial);
+        var partialPortal = StructurePlacementConfig.validate(d).resolve("minecraft:ruined_portal");
+        check(partialPortal.spacingMultiplier() == 2.0 && partialPortal.surfaceMode() == StructurePlacementConfig.SurfaceMode.PRESERVE,
+                "partial ruined-portal override retains its setting and inherits double spacing");
+        d.structures.remove("minecraft:ruined_portal");
         check(!snapshot.villages().enabled() && snapshot.villages().targetMeanNearestNeighborBlocks()==500
                 && snapshot.villages().basicSharePercent()==70, "legacy config leaves unified villages disabled");
         d.villageDistribution.enabled=true;
@@ -44,10 +63,13 @@ public final class StructureConfigTest {
         d.global.minGapBlocks = 99; invalid(d); d.global.minGapBlocks = 120;
         d.global.spacingMultiplier = Double.NaN; invalid(d); d.global.spacingMultiplier = 1.4;
         d.structures.put("bad", structure); invalid(d); d.structures.remove("bad");
+        d.structures.put("minecraft:ruined_portal", null); invalid(d); d.structures.remove("minecraft:ruined_portal");
         d.global.maxCandidateOffsetBlocks = 8; invalid(d); d.global.maxCandidateOffsetBlocks = 7;
         d.global.maxCandidateAttempts = 10; invalid(d); d.global.maxCandidateAttempts = 9;
         StructurePlacementConfig.save(d);
         check(StructurePlacementConfig.readDocument().global.spacingMultiplier == 1.4, "disk roundtrip");
+        check(StructurePlacementConfig.readDocument().structures.get("minecraft:ruined_portal").spacingMultiplier == 2.0,
+                "older config is upgraded with the ruined-portal distance default");
         Object registry = new Object(); Path world = root.resolve("world");
         StructurePlacementConfig.bindWorld(registry, world);
         String originalPin = Files.readString(world.resolve("data/td-structure-placement.json"));

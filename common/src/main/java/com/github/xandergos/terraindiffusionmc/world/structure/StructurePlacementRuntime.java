@@ -172,6 +172,32 @@ public final class StructurePlacementRuntime {
                 boolean accepted = footprintEnvelope.contains(StructureTerrain.rect(start.getBoundingBox()))
                         && (!shaped || terrainDependency.contains(StructureTerrain.rect(start.getBoundingBox())));
                 if (!accepted) diagnostic(id,"footprint exceeds bounded reservation; rejected");
+                if (accepted && StructureSiteCompatibility.appliesTo(id)) {
+                    var box = start.getBoundingBox();
+                    var bounds = new StructureSiteCompatibility.Bounds(box.minX(), box.minY(), box.minZ(),
+                            box.maxX(), box.maxY(), box.maxZ());
+                    var site = StructureSiteCompatibility.check(id, bounds, policy.maxCutBlocks(),
+                            policy.maxTerrainSamples(), generator.getSeaLevel(), (x,z) -> {
+                                long key = StructureTerrain.key(x,z);
+                                var raw = sharedHeights == null ? null : sharedHeights.get(key);
+                                if (raw == null) {
+                                    if (sharedHeights != null) sharedHeights.recordHeightCall();
+                                    int floor = generator.getFirstOccupiedHeight(x,z,
+                                            net.minecraft.world.level.levelgen.Heightmap.Types.OCEAN_FLOOR_WG,height,random);
+                                    if (sharedHeights != null) sharedHeights.recordHeightCall();
+                                    int surface = generator.getFirstOccupiedHeight(x,z,
+                                            net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE_WG,height,random);
+                                    raw = new StructureHeightCache.Heights(floor,surface);
+                                    if (sharedHeights != null) sharedHeights.put(key,raw);
+                                }
+                                return new StructureSiteCompatibility.Heights(raw.oceanFloor(),raw.worldSurface());
+                            });
+                    if (!site.accepted()) {
+                        accepted = false;
+                        count(id,"ocean site rejected");
+                        diagnostic(id,"ocean site rejected: "+site.reason());
+                    }
+                }
                 List<StructurePiece> pieces = start.getPieces();
                 for (StructurePiece piece:pieces) {
                     if (!footprintEnvelope.contains(StructureTerrain.rect(piece.getBoundingBox()))
