@@ -60,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("runs", nargs="+", help="prepared build/structure-density/<name> directories")
     parser.add_argument("--java-home", default=default_java_home())
     parser.add_argument("--gradle-user-home", default=default_gradle_user_home(ROOT))
+    parser.add_argument("--neoforge-version", default="21.1.249",
+                        help="numeric NeoForge version supplied to the prepared server run")
     parser.add_argument("--daemon", action="store_true", help="opt in to Gradle daemon")
     parser.add_argument("--prefetch", type=int, help="density probe batch size (1-32)")
     parser.add_argument("--shore-audit", action="store_true", help="enable shore diagnostic mixin")
@@ -105,7 +107,8 @@ def main(argv: list[str] | None = None) -> int:
                 options.extend([f"-PtdTerrainMode={terrain_mode}",
                                 f"-PtdTerrainSnapshotDir={snapshot.absolute()}",
                                 f"-PtdTerrainSnapshotId={snapshot_id}"])
-            jobs.append(Job(run, gradle_command(ROOT, options, args.daemon),
+            jobs.append(Job(run, gradle_command(ROOT, options, args.daemon,
+                                                neoforge_version=args.neoforge_version),
                             run / "world/density-audit.json",
                             partial(requested_receipt, support=support, well=well, shore=args.shore_audit,
                                     underground=args.underground_audit,

@@ -253,6 +253,11 @@ public final class StructureDensityProbe {
             report.put("attempted",attempted);report.put("accepted",accepted);report.put("starts",rows);
             phaseSeconds.put("chunkCensus",DensityProbeTelemetry.seconds(System.nanoTime()-phaseBegan));
             report.put("totalStarts",actual.size());report.put("diagnostics",StructurePlacementRuntime.diagnostics());
+            if (Boolean.getBoolean("td.density.choiceTrace")
+                    || Files.exists(server.getServerDirectory().resolve("trace-village-choices.txt"))) {
+                report.put("unifiedVillageChoiceCache",villageChoiceCache(registry));
+                report.put("beachReservationRivals",beachReservationRivals(level.getSeed(),registry));
+            }
             report.put("villages",villages);
             if(undergroundAudit) {
                 phaseBegan=System.nanoTime();
@@ -895,6 +900,163 @@ public final class StructureDensityProbe {
         } catch(RuntimeException | LinkageError unavailable) {
             return null;
         }
+    }
+
+    /**
+     * Opt-in diagnostic of the already-computed unified-village cache.  It never
+     * invokes placement or generation: reflection only snapshots the private
+     * planner cache after the census has finished its native requests.
+     */
+    private static List<Map<String,Object>> villageChoiceCache(
+            net.minecraft.core.Registry<net.minecraft.world.level.levelgen.structure.Structure> registry)
+            throws ReflectiveOperationException {
+        var plannersField=StructurePlacementRuntime.class.getDeclaredField("PLANNERS");
+        plannersField.setAccessible(true);
+        Map<?,?> planners=(Map<?,?>)plannersField.get(null);
+        List<Map<String,Object>> rows=new ArrayList<>();
+        synchronized(planners) {
+            for(Object planner:planners.values()) {
+                var cacheField=planner.getClass().getDeclaredField("villageCells");
+                cacheField.setAccessible(true);
+                Object cache=cacheField.get(planner);
+                var valuesField=cache.getClass().getDeclaredField("values");
+                valuesField.setAccessible(true);
+                Map<?,?> values=(Map<?,?>)valuesField.get(cache);
+                synchronized(values) {
+                    for(var entry:values.entrySet()) {
+                        Object key=entry.getKey();
+                        String set=(String)accessor(key,"set");
+                        int cellX=(Integer)accessor(key,"x"),cellZ=(Integer)accessor(key,"z");
+                        Optional<?> choice=(Optional<?>)entry.getValue();
+                        Map<String,Object> row=new LinkedHashMap<>();
+                        row.put("set",set);row.put("cell",List.of(cellX,cellZ));
+                        if(choice.isEmpty()) row.put("selected",null);
+                        else {
+                            Object selected=choice.get();
+                            ChunkPos owner=(ChunkPos)accessor(selected,"owner");
+                            com.github.xandergos.terraindiffusionmc.world.structure.StructureReservations.Descriptor descriptor=
+                                    (com.github.xandergos.terraindiffusionmc.world.structure.StructureReservations.Descriptor)accessor(selected,"descriptor");
+                            row.put("selected",Map.of("owner",List.of(owner.x,owner.z),
+                                    "structure",String.valueOf(registry.getKey(descriptor.structure()))));
+                        }
+                        rows.add(row);
+                    }
+                }
+            }
+        }
+        rows.sort(Comparator.comparing(row -> String.valueOf(row.get("set"))+row.get("cell")));
+        return List.copyOf(rows);
+    }
+    private static Object accessor(Object target,String name) throws ReflectiveOperationException {
+        var method=target.getClass().getDeclaredMethod(name);method.setAccessible(true);return method.invoke(target);
+    }
+
+    /**
+     * Opt-in post-census explanation for selected beach starts. It reflects only
+     * descriptors already cached by native reservation arbitration; it never
+     * calls winner, preflight, assembly, chunk access, or terrain inference.
+     */
+    private static List<Map<String,Object>> beachReservationRivals(long seed,
+            net.minecraft.core.Registry<net.minecraft.world.level.levelgen.structure.Structure> registry)
+            throws ReflectiveOperationException {
+        var plannersField=StructurePlacementRuntime.class.getDeclaredField("PLANNERS");
+        plannersField.setAccessible(true);
+        Map<?,?> planners=(Map<?,?>)plannersField.get(null);
+        List<Map<String,Object>> report=new ArrayList<>();
+        synchronized(planners) {
+            for(Object planner:planners.values()) {
+                Map<String,Object> plans=plansById(planner);
+                List<CachedDescriptor> cached=cachedDescriptors(planner);
+                for(CachedDescriptor beach:selectedBeachChoices(planner,registry)) {
+                    Object beachPlan=plans.get(beach.set());
+                    if(beachPlan==null) continue;
+                    var target=viable(seed,beachPlan,beach);
+                    List<Map<String,Object>> rivals=new ArrayList<>();
+                    for(CachedDescriptor rival:cached) {
+                        Object rivalPlan=plans.get(rival.set());
+                        if(rivalPlan==null || !withinWinnerRange(beachPlan,rivalPlan,beach.owner(),rival.owner())) continue;
+                        var contender=viable(seed,rivalPlan,rival);
+                        if(contender.defeats(target)) rivals.add(Map.of(
+                                "set",rival.set(),"owner",List.of(rival.owner().x,rival.owner().z),
+                                "structure",String.valueOf(registry.getKey(rival.descriptor().structure())),
+                                "tier",contender.candidate().tier(),
+                                "priority",Long.toUnsignedString(contender.candidate().priority())));
+                    }
+                    report.add(Map.of("beachOwner",List.of(beach.owner().x,beach.owner().z),
+                            "beachTier",target.candidate().tier(),
+                            "beachPriority",Long.toUnsignedString(target.candidate().priority()),
+                            "defeatingCachedRivals",List.copyOf(rivals)));
+                }
+            }
+        }
+        report.sort(Comparator.comparing(row -> String.valueOf(row.get("beachOwner"))));
+        return List.copyOf(report);
+    }
+    private record CachedDescriptor(String set,ChunkPos owner,
+            com.github.xandergos.terraindiffusionmc.world.structure.StructureReservations.Descriptor descriptor) { }
+    private static Map<String,Object> plansById(Object planner) throws ReflectiveOperationException {
+        var field=planner.getClass().getDeclaredField("sets");field.setAccessible(true);
+        Map<String,Object> result=new HashMap<>();
+        for(Object plan:(List<?>)field.get(planner)) result.put((String)accessor(plan,"id"),plan);
+        return result;
+    }
+    private static List<CachedDescriptor> cachedDescriptors(Object planner) throws ReflectiveOperationException {
+        var field=planner.getClass().getDeclaredField("preflights");field.setAccessible(true);
+        Object cache=field.get(planner);
+        var valuesField=cache.getClass().getDeclaredField("values");valuesField.setAccessible(true);
+        Map<?,?> values=(Map<?,?>)valuesField.get(cache);
+        List<CachedDescriptor> result=new ArrayList<>();
+        synchronized(values) {
+            for(var entry:values.entrySet()) {
+                Optional<?> value=(Optional<?>)entry.getValue();
+                if(value.isEmpty()) continue;
+                Object key=entry.getKey();
+                result.add(new CachedDescriptor((String)accessor(key,"set"),
+                        new ChunkPos((Integer)accessor(key,"x"),(Integer)accessor(key,"z")),
+                        (com.github.xandergos.terraindiffusionmc.world.structure.StructureReservations.Descriptor)value.get()));
+            }
+        }
+        return List.copyOf(result);
+    }
+    private static List<CachedDescriptor> selectedBeachChoices(Object planner,
+            net.minecraft.core.Registry<net.minecraft.world.level.levelgen.structure.Structure> registry)
+            throws ReflectiveOperationException {
+        var field=planner.getClass().getDeclaredField("villageCells");field.setAccessible(true);
+        Object cache=field.get(planner);
+        var valuesField=cache.getClass().getDeclaredField("values");valuesField.setAccessible(true);
+        Map<?,?> values=(Map<?,?>)valuesField.get(cache);
+        List<CachedDescriptor> result=new ArrayList<>();
+        synchronized(values) {
+            for(var entry:values.entrySet()) {
+                Optional<?> choice=(Optional<?>)entry.getValue();
+                if(choice.isEmpty()) continue;
+                Object key=entry.getKey(),selected=choice.get();
+                var descriptor=(com.github.xandergos.terraindiffusionmc.world.structure.StructureReservations.Descriptor)accessor(selected,"descriptor");
+                if(!"towns_and_towers:village_beach".equals(String.valueOf(registry.getKey(descriptor.structure())))) continue;
+                result.add(new CachedDescriptor((String)accessor(key,"set"),(ChunkPos)accessor(selected,"owner"),descriptor));
+            }
+        }
+        return List.copyOf(result);
+    }
+    /** Same bounded-origin radius used by StructureReservations.winner. */
+    private static boolean withinWinnerRange(Object own,Object other,ChunkPos owner,ChunkPos origin)
+            throws ReflectiveOperationException {
+        int ownRadius=(Integer)accessor(own,"radius"),otherRadius=(Integer)accessor(other,"radius");
+        int ownGap=(Integer)accessor(own,"gap"),otherGap=(Integer)accessor(other,"gap");
+        int range=(Math.max(ownRadius,136)+Math.max(otherRadius,136)+Math.max(ownGap,otherGap)+31)/16;
+        return Math.abs((long)origin.x-owner.x)<=range && Math.abs((long)origin.z-owner.z)<=range;
+    }
+
+    private static com.github.xandergos.terraindiffusionmc.world.structure.PlacementGeometry.Viable viable(
+            long seed,Object plan,CachedDescriptor cached) throws ReflectiveOperationException {
+        var descriptor=cached.descriptor();
+        int tier=!descriptor.conservative() && descriptor.surface()?0:1;
+        var candidate=new com.github.xandergos.terraindiffusionmc.world.structure.PlacementGeometry.Candidate(
+                cached.set(),cached.owner().x,cached.owner().z,(Integer)accessor(plan,"radius"),descriptor.gap(),
+                com.github.xandergos.terraindiffusionmc.world.structure.PlacementGeometry.priority(
+                        seed,cached.set(),cached.owner().x,cached.owner().z),tier);
+        return new com.github.xandergos.terraindiffusionmc.world.structure.PlacementGeometry.Viable(
+                candidate,descriptor.bounds(),descriptor.influence());
     }
 
     private static Map<String,Object> verifySupport(MinecraftServer server,StructureStart start,boolean wellSupport) throws Exception {

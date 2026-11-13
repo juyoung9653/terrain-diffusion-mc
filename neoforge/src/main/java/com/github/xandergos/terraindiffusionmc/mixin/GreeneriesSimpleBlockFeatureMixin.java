@@ -31,6 +31,6 @@ public final class GreeneriesSimpleBlockFeatureMixin {
         if (!survives || !(level instanceof WorldGenLevel worldgenLevel)) return survives;
         return GreeneriesPlacementGuard.allowsPlacement(worldgenLevel, pos, plant)
                 && ShorePlantPlacementGuard.allowsPlacement(worldgenLevel, pos, plant)
-                && GreeneriesPlacementGuard.acceptsNativeAttempt(worldgenLevel, pos, plant, context.random());
+                && GreeneriesPlacementGuard.acceptsNativeAttempt(worldgenLevel, pos, plant);
     }
 }

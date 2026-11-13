@@ -2,7 +2,9 @@ package com.github.xandergos.terraindiffusionmc.world.river;
 
 /** Versioned TD river policy. Distances are world blocks, widths are half-widths. */
 public final class NaturalRiverProfile {
-    public static final int VERSION = 13;
+    public static final int VERSION = 14;
+    public static final int STREAMS_2162_VERSION = 13;
+    public static final int STREAMS_2171_VERSION = 14;
     public static final int LEGACY_ADAPTER_VERSION = 10;
     private NaturalRiverProfile() { }
 

@@ -10,7 +10,6 @@ import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
 import net.minecraft.tags.BlockTags;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
@@ -33,14 +32,18 @@ public final class GreeneriesPlacementGuard {
         return !isEcologyBiome(level, pos);
     }
 
-    public static boolean acceptsNativeAttempt(WorldGenLevel level, BlockPos pos, BlockState plant,
-                                               RandomSource random) {
-        if (!GreeneriesNativePatchScope.active() || !isGrassOrFern(plant)
+    public static boolean acceptsNativeAttempt(WorldGenLevel level, BlockPos pos, BlockState plant) {
+        return !GreeneriesNativePatchScope.active() || acceptsNaturalGrass(level, pos, plant);
+    }
+
+    /** Explicit entry point for audited native writers that bypass SimpleBlockFeature. */
+    public static boolean acceptsNaturalGrass(WorldGenLevel level, BlockPos pos, BlockState plant) {
+        if (!GreeneriesSoilPolicy.nativeWorldgenPolicyEnabled() || !isGrassOrFern(plant)
                 || !isEcologyBiome(level, pos)) return true;
         float chance = GreeneriesSoilPolicy.acceptance(level.getBlockState(pos.below()));
         var climate = NaturalEcology.cachedSurfaceSample(level.getLevel().getChunkSource().getGenerator(), pos.getX(), pos.getZ());
         if (climate != null) chance *= FeatureEcologyMath.coldGroundcoverAcceptance(climate.climate().temperature());
-        return chance >= 1.0F || (chance > 0.0F && GreeneriesSoilPolicy.accepts(chance, random.nextFloat()));
+        return GreeneriesSoilPolicy.acceptsColumn(level.getSeed(), pos.getX(), pos.getZ(), chance);
     }
 
     private static boolean isEcologyBiome(WorldGenLevel level, BlockPos pos) {

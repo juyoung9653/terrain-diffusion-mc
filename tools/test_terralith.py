@@ -4,31 +4,118 @@ Requires a JDK, Python, the source Terralith JAR and a vanilla 1.21.1 client JAR
 The integration validator supports --vanilla when the Gradle cache is elsewhere.
 """
 import argparse
+from functools import partial
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_JAVA_HOME = Path("C:/Program Files/Java/jdk-21")
+SCRATCH = ROOT / ".tmp"
 
 
-def run(*args):
-    subprocess.run([str(arg) for arg in args], cwd=ROOT, check=True)
+def fail(message: str) -> None:
+    raise ValueError(message)
 
 
-def main():
+def resolve_java_home(explicit: Path | None) -> Path:
+    """Choose a real JDK, never Windows' java.exe forwarding shim."""
+    if explicit is not None:
+        candidates = [explicit]
+    else:
+        candidates = [DEFAULT_JAVA_HOME] if os.name == "nt" else []
+        if os.environ.get("JAVA_HOME"):
+            candidates.append(Path(os.environ["JAVA_HOME"]))
+        compiler = shutil.which("javac")
+        if compiler:
+            candidates.append(Path(compiler).resolve().parent.parent)
+    suffix = ".exe" if os.name == "nt" else ""
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        home = candidate.resolve()
+        release = home / "release"
+        if ((home / "bin" / ("java" + suffix)).is_file()
+                and (home / "bin" / ("javac" + suffix)).is_file()
+                and release.is_file()
+                and re.search(r'^JAVA_VERSION="21(?:[.\"]|$)', release.read_text(encoding="latin-1"), re.MULTILINE)):
+            return home
+    requested = explicit if explicit is not None else DEFAULT_JAVA_HOME
+    fail(f"JDK 21 with java and javac is required: {requested}")
+
+
+def validate_terralith_jar(path: Path) -> Path:
+    path = path.resolve()
+    if not path.is_file():
+        fail(f"Terralith JAR does not exist: {path}")
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+    except (OSError, zipfile.BadZipFile) as error:
+        fail(f"invalid Terralith JAR: {path}: {error}")
+    if not any(name.startswith("data/terralith/worldgen/biome/") for name in names):
+        fail(f"JAR lacks Terralith worldgen biome data: {path}")
+    return path
+
+
+def writable_scratch() -> Path:
+    scratch = SCRATCH.resolve()
+    try:
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=scratch, prefix="terralith-preflight-", delete=False) as stream:
+            probe = Path(stream.name)
+            stream.write(b"ok")
+        if probe.read_bytes() != b"ok":
+            fail(f"temporary-file readback failed: {scratch}")
+        probe.unlink()
+    except OSError as error:
+        fail(f"workspace temporary directory is not writable: {scratch}: {error}")
+    return scratch
+
+
+def child_environment(java_home: Path, scratch: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment["JAVA_HOME"] = str(java_home)
+    environment["TMP"] = environment["TEMP"] = str(scratch)
+    option = '-Djava.io.tmpdir="' + str(scratch).replace('"', '\\"') + '"'
+    environment["JAVA_TOOL_OPTIONS"] = (environment.get("JAVA_TOOL_OPTIONS", "") + " " + option).strip()
+    environment["PATH"] = str(java_home / "bin") + os.pathsep + environment.get("PATH", "")
+    return environment
+
+
+def run(*args, environment: dict[str, str] | None = None):
+    if environment is None:
+        raise RuntimeError("test environment has not passed preflight")
+    completed = subprocess.run([str(arg) for arg in args], cwd=ROOT, env=environment,
+                               check=False, text=True, capture_output=True,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if completed.stdout:
+        print(completed.stdout, end="")
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    completed.check_returncode()
+
+
+def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--jar", required=True, type=Path)
     parser.add_argument("--java-home", type=Path)
     parser.add_argument("--vanilla", type=Path)
-    args = parser.parse_args()
-    java_home = args.java_home or (Path(os.environ["JAVA_HOME"]) if "JAVA_HOME" in os.environ else None)
+    args = parser.parse_args(argv)
+    try:
+        terralith = validate_terralith_jar(args.jar)
+        java_home = resolve_java_home(args.java_home)
+        environment = child_environment(java_home, writable_scratch())
+    except ValueError as error:
+        parser.error(str(error))
     suffix = ".exe" if os.name == "nt" else ""
-    javac = java_home / "bin" / ("javac" + suffix) if java_home else shutil.which("javac")
-    java = java_home / "bin" / ("java" + suffix) if java_home else shutil.which("java")
-    if not javac or not java:
-        parser.error("JDK missing; supply --java-home")
+    javac = java_home / "bin" / ("javac" + suffix)
+    java = java_home / "bin" / ("java" + suffix)
     target = ROOT / "build" / "terralith-tests"
     target.mkdir(parents=True, exist_ok=True)
     package = Path("com/github/xandergos/terraindiffusionmc/pipeline")
@@ -60,35 +147,36 @@ def main():
     sources.append(ROOT / "common/src/test/java" / ecology_package / "ReliefSurfaceTest.java")
     sources.append(ROOT / "common/src/main/java" / ecology_package / "SubmergedPlantPolicy.java")
     sources.append(ROOT / "common/src/test/java" / ecology_package / "SubmergedPlantPolicyTest.java")
-    run(javac, "--release", "21", "-encoding", "UTF-8", "-d", target, *sources)
+    child = partial(run, environment=environment)
+    child(javac, "--release", "21", "-encoding", "UTF-8", "-d", target, *sources)
     classpath = os.pathsep.join([str(target), str(ROOT / "common/src/main/resources")])
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifierTest", args.jar.resolve())
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimateTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifierTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.SnowPatchGeometryTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.SnowTerrainRetentionTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfileTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifierTest", terralith)
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimateTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifierTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.SnowPatchGeometryTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.SnowTerrainRetentionTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfileTest")
     for name in ("ShoreClassifierTest", "ShoreContextTest"):
-        run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline." + name)
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.LowlandCarvingGuardTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ExactBiomeSearchTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMathTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.SurfaceBoundaryDitherTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.EcotoneContinuityTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.ShorePlantPolicyTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.ReliefSurfaceTest")
-    run(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.SubmergedPlantPolicyTest")
-    run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith/tests", "-v")
-    run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith_integration", "-v")
-    run(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/ecology", "-v")
+        child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline." + name)
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.LowlandCarvingGuardTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ExactBiomeSearchTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.FeatureEcologyMathTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.SurfaceBoundaryDitherTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.EcotoneContinuityTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.ShorePlantPolicyTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.ReliefSurfaceTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.world.ecology.SubmergedPlantPolicyTest")
+    child(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith/tests", "-v")
+    child(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/terralith_integration", "-v")
+    child(sys.executable, "-B", "-m", "unittest", "discover", "-s", "tools/ecology", "-v")
     for inverse in (False, True):
-        command = [sys.executable, "-B", "tools/terralith_integration/validate_resources.py", "--terralith", args.jar.resolve()]
+        command = [sys.executable, "-B", "tools/terralith_integration/validate_resources.py", "--terralith", terralith]
         if inverse:
             command.append("--common-before-terralith")
         if args.vanilla:
             command.extend(["--vanilla", args.vanilla.resolve()])
-        run(*command)
+        child(*command)
     print("Terralith checks: PASS (engine startup and scenery require a separate game check)")
 
 

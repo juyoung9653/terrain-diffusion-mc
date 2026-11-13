@@ -47,7 +47,7 @@ for method, count in [("handle1x", 4), ("handleUpsampled", 5)]:
         assert handler and handler.group(1).count("int ") == count
 assert "@Shadow private long seed;" in mixin and "getSeed(" not in mixin
 run([JAVA / "javac", "-encoding", "UTF-8", "-cp", GSON.relative_to(ROOT), "-d", OUT, stub, classifier_stub,
-     PIPELINE / "EcologyData.java", DIAGNOSTIC / "TerrainReplayCodec.java", DIAGNOSTIC / "TerrainReplayStore.java",
+     PIPELINE / "EcologyData.java", PIPELINE / "EcologyDataCache.java", DIAGNOSTIC / "TerrainReplayCodec.java", DIAGNOSTIC / "TerrainReplayStore.java",
      Path(__file__).with_name("TerrainReplayCodecTest.java")])
 
 

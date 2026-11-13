@@ -11,7 +11,7 @@ import java.util.zip.Inflater;
 
 /** Bounded decoded snapshots for losslessly packed ecology planes. */
 final class EcologyDataCache {
-    private static final int BYTES_PER_VALUE = 2 * Short.BYTES + 5 * Float.BYTES;
+    private static final int BYTES_PER_VALUE = 2 * Short.BYTES + 6 * Float.BYTES;
     private final int maxHot;
     private final LinkedHashMap<EcologyData, EcologyData.Snapshot> hot = new LinkedHashMap<>(16, .75f, true);
     private final Set<EcologyData> known = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -89,7 +89,7 @@ final class EcologyDataCache {
         ByteBuffer raw = ByteBuffer.allocate(bytes).order(ByteOrder.LITTLE_ENDIAN);
         put(raw, fields.biomeIds); put(raw, fields.terrainBiomeIds);
         put(raw, fields.cover); put(raw, fields.temperature); put(raw, fields.moisture);
-        put(raw, fields.slope); put(raw, fields.snowRetention);
+        put(raw, fields.slope); put(raw, fields.snowRetention); put(raw, fields.openWaterFraction);
         Deflater deflater = new Deflater(Deflater.BEST_SPEED, true);
         try {
             deflater.setInput(raw.array()); deflater.finish();
@@ -121,7 +121,8 @@ final class EcologyDataCache {
         ByteBuffer source = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
         short[] biomeIds = getShorts(source, values), terrainBiomeIds = getShorts(source, values);
         return new EcologyData.Snapshot(biomeIds, terrainBiomeIds, getFloats(source, values), getFloats(source, values),
-                getFloats(source, values), getFloats(source, values), getFloats(source, values));
+                getFloats(source, values), getFloats(source, values), getFloats(source, values),
+                getFloats(source, values));
     }
 
     private static void put(ByteBuffer out, short[] values) { for (short value : values) out.putShort(value); }

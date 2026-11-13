@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
 import json
 from pathlib import Path
@@ -10,11 +11,47 @@ import shutil
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "build" / "streams-probe"
+NEOFORGE_VERSION = re.compile(r"\d+\.\d+\.\d+")
+SCALE_RANGE = range(1, 7)
 
 
 def digest(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def write_fresh_scale_marker(path: Path, scale: int) -> None:
+    """Persist a selected TD scale before the first world boot."""
+    if scale not in SCALE_RANGE:
+        raise ValueError(f"scale must be 1..6, got {scale}")
+    def named(kind: int, name: str, payload: bytes) -> bytes:
+        raw = name.encode("utf-8")
+        return bytes((kind,)) + len(raw).to_bytes(2, "big") + raw + payload
+    data = (named(3, "scale", scale.to_bytes(4, "big", signed=True))
+            + named(1, "explicit_scale", b"\x01")
+            + named(1, "fast_ground_sampling", b"\x01") + b"\x00")
+    raw = b"\x0a\x00\x00" + named(10, "data", data) + named(3, "DataVersion",
+            (3955).to_bytes(4, "big", signed=True)) + b"\x00"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(gzip.compress(raw, mtime=0))
+
+
+def write_world_preset(pack: Path, *, scale: int, fixed_biome: str | None) -> Path:
+    """Override only the fresh fixture's TD preset, never the source instance."""
+    target = pack / "data/terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json"
+    target.parent.mkdir(parents=True)
+    preset = json.loads((ROOT / "common/src/main/resources/data/terrain-diffusion-mc/"
+                         "worldgen/world_preset/terrain_diffusion.json").read_text())
+    preset["dimensions"]["minecraft:overworld"]["type"] = (
+            f"terrain-diffusion-mc:terrain_diffusion_scale_{scale}")
+    if fixed_biome:
+        preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"] = {
+            "type": "minecraft:fixed", "biome": fixed_biome}
+    target.write_text(json.dumps(preset, indent=2) + "\n", encoding="utf-8")
+    (pack / "pack.mcmeta").write_text(json.dumps({"pack": {"pack_format": 48,
+            "description": "TD Streams probe only: selected terrain scale"}}) + "\n",
+            encoding="utf-8")
+    return target
 
 
 def main() -> None:
@@ -24,8 +61,12 @@ def main() -> None:
     parser.add_argument("--terralith", action="store_true")
     parser.add_argument("--c2me", action="store_true", help="Also include the installed NeoForge C2ME jar")
     parser.add_argument("--seed", type=int, default=12345)
+    parser.add_argument("--scale", type=int, choices=SCALE_RANGE, default=2,
+                        help="Explicit TD world scale for this fresh fixture (default: 2)")
     parser.add_argument("--streams-version", default="2.13.1",
-                        choices=["2.13.1", "2.13.5", "2.13.8", "2.15.2", "2.16.2"])
+                        choices=["2.13.1", "2.13.5", "2.13.8", "2.15.2", "2.16.2", "2.17.1"])
+    parser.add_argument("--neoforge-version", default="21.1.249",
+                        help="NeoForge major.minor.patch version recorded in the fixture")
     parser.add_argument("--dry-floor", type=float)
     parser.add_argument("--disable-waterways", action="store_true", help="Same-terrain control: disable Streams rivers and lakes")
     parser.add_argument("--fixed-biome", choices=["minecraft:desert", "minecraft:savanna",
@@ -35,6 +76,8 @@ def main() -> None:
     args = parser.parse_args()
     if not re.fullmatch(r"[a-zA-Z0-9_-]+", args.name):
         parser.error("name must contain only letters, digits, underscore or hyphen")
+    if not NEOFORGE_VERSION.fullmatch(args.neoforge_version):
+        parser.error("neoforge-version must use numeric major.minor.patch form")
     if args.dry_floor is not None and not 0 <= args.dry_floor <= 1:
         parser.error("dry-floor must be between 0 and 1")
     if args.fixed_biome and args.terralith:
@@ -70,8 +113,8 @@ def main() -> None:
     manifest = {"seed": args.seed, "streamsVersion": args.streams_version,
                 "terralith": args.terralith, "c2me": args.c2me, "dryFloorOverride": args.dry_floor,
                 "waterwaysDisabled": args.disable_waterways,
-                "fixedBiome": args.fixed_biome,
-                "minecraft": "1.21.1", "neoforge": "21.1.249", "mods": [], "modelAssets": {}, "configs": {}}
+                "fixedBiome": args.fixed_biome, "scale": args.scale,
+                "minecraft": "1.21.1", "neoforge": args.neoforge_version, "mods": [], "modelAssets": {}, "configs": {}}
     for mod in mods:
         target = run / "mods" / mod.name
         shutil.copy2(mod, target)
@@ -83,11 +126,11 @@ def main() -> None:
         manifest["modelAssets"][name] = {"bytes": target.stat().st_size, "sha256": digest(target)}
     streams_config = "streamsreflowing-common.toml"
     properties = source / "config/streamsreflowing.properties"
-    if args.streams_version == "2.16.2":
-        # Streams 2.16 no longer consumes the legacy common TOML.  Do not make a
+    if args.streams_version in {"2.16.2", "2.17.1"}:
+        # Streams 2.16+ no longer consumes the legacy common TOML.  Do not make a
         # fixture which appears configured while the mod silently uses defaults.
         if not properties.is_file():
-            parser.error("Streams 2.16.2 requires config/streamsreflowing.properties; "
+            parser.error(f"Streams {args.streams_version} requires config/streamsreflowing.properties; "
                          "copy or start the source instance once to migrate its configuration")
         streams_config = properties.name
     elif args.streams_version == "2.15.2" and properties.is_file():
@@ -111,6 +154,9 @@ def main() -> None:
             target.write_text(content, encoding="utf-8")
         manifest["configs"][name] = digest(target)
     (run / "eula.txt").write_text("eula=true\n", encoding="ascii")
+    scale_marker = run / "world/data/terrain_diffusion_world_settings.dat"
+    write_fresh_scale_marker(scale_marker, args.scale)
+    manifest["freshScaleMarker"] = {"scale": args.scale, "sha256": digest(scale_marker)}
     (run / "server.properties").write_text(
         "server-ip=127.0.0.1\nserver-port=25585\nonline-mode=false\nenable-query=false\n"
         "enable-rcon=false\nlevel-name=world\nlevel-type=terrain-diffusion-mc:terrain_diffusion\n"
@@ -126,17 +172,12 @@ def main() -> None:
         shutil.copytree(pack, target)
         manifest["compatPack"] = {str(p.relative_to(pack)): digest(p)
                                   for p in sorted(pack.rglob("*")) if p.is_file()}
-    if args.fixed_biome:
-        pack = run / "world/datapacks/td-probe-fixed-biome"
-        target = pack / "data/terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json"
-        target.parent.mkdir(parents=True)
-        preset = json.loads((ROOT / "common/src/main/resources/data/terrain-diffusion-mc/worldgen/world_preset/terrain_diffusion.json").read_text())
-        preset["dimensions"]["minecraft:overworld"]["generator"]["biome_source"] = {
-            "type": "minecraft:fixed", "biome": args.fixed_biome}
-        target.write_text(json.dumps(preset, indent=2), encoding="utf-8")
-        (pack / "pack.mcmeta").write_text(json.dumps({"pack": {"pack_format": 48,
-            "description": "TD Streams probe only: fixed biome, unchanged TD terrain"}}), encoding="utf-8")
-        manifest["fixedBiomePresetSha256"] = digest(target)
+    if args.scale != 2 or args.fixed_biome:
+        target = write_world_preset(run / "world/datapacks/td-probe-world-preset",
+                                    scale=args.scale, fixed_biome=args.fixed_biome)
+        manifest["worldPresetSha256"] = digest(target)
+        if args.fixed_biome:
+            manifest["fixedBiomePresetSha256"] = manifest["worldPresetSha256"]
     (run / "input-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"run": str(run), "mods": manifest["mods"], "seed": args.seed}))
 

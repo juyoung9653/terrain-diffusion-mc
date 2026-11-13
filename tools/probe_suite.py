@@ -12,6 +12,7 @@ import re
 import subprocess
 import time
 from typing import Callable, Iterator
+from build_evidence import PROBE_RECEIPT, sha256, source_fingerprint
 
 
 NAME = re.compile(r"[A-Za-z0-9_-]+\Z")
@@ -112,14 +113,17 @@ def unique_runs(runs: list[Path]) -> None:
         raise ValueError("duplicate or overlapping output runs in suite")
 
 
-def gradle_command(root: Path, options: list[str], daemon: bool) -> list[str]:
+def gradle_command(root: Path, options: list[str], daemon: bool,
+                   neoforge_version: str = "21.1.249") -> list[str]:
     wrapper = root / ("gradlew.bat" if os.name == "nt" else "gradlew")
     if not wrapper.is_file():
         raise ValueError(f"missing Gradle wrapper: {wrapper}")
+    if not re.fullmatch(r"\d+\.\d+\.\d+", neoforge_version):
+        raise ValueError("NeoForge version must use numeric major.minor.patch form")
     args = [str(wrapper), ":neoforge:runServer", "--offline", "--console=plain"]
     if daemon:
         args.append("--daemon")
-    args.extend(["-PuseCuda=true", "-Pneoforge_version=21.1.249", *options])
+    args.extend(["-PuseCuda=true", f"-Pneoforge_version={neoforge_version}", *options])
     # A batch wrapper is parsed by cmd.exe even with shell=False. Reject cmd
     # metacharacters rather than attempting fragile second-layer quoting.
     if os.name == "nt" and any(re.search(r'[&|<>^%!"\r\n]', arg) for arg in args):
@@ -204,6 +208,9 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
             if is_link(log):
                 raise ValueError(f"refusing symlinked launcher log: {log}")
             prior = job.receipt.stat().st_mtime_ns if job.receipt.exists() else None
+            source_before = source_fingerprint(root)
+            manifest = job.run / "input-manifest.json"
+            manifest_before = sha256(manifest) if manifest.is_file() else None
             started_ns = time.time_ns()
             begun = time.monotonic()
             started = utc_now()
@@ -244,6 +251,10 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
                         receipt_status = job.check_receipt(job.receipt)
                     except (ValueError, OSError, UnicodeError) as exc:
                         receipt_status = f"invalid_receipt:{type(exc).__name__}: {exc}"
+            if source_fingerprint(root) != source_before:
+                receipt_status = "production_sources_changed_during_probe"
+            if (sha256(manifest) if manifest.is_file() else None) != manifest_before:
+                receipt_status = "fixture_manifest_changed_during_probe"
             ok = code == 0 and receipt_status == "success"
             summary: dict[str, object] = {"name": job.run.name, "processExit": code,
                                           "probeStatus": receipt_status, "success": ok,
@@ -252,6 +263,13 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
                                           "log": str(log)}
             if launch_error:
                 summary["error"] = launch_error
+            atomic_json(job.run / PROBE_RECEIPT, {
+                **summary, "schema": 1, "kind": "probe-validation",
+                "sourceFingerprint": source_before, "inputManifestSha256": manifest_before,
+                "receipt": str(job.receipt.relative_to(job.run)),
+                "receiptSha256": sha256(job.receipt) if job.receipt.is_file() else None,
+                "command": job.command, "javaHome": env.get("JAVA_HOME"),
+            })
             completed.append(summary)
             print(json.dumps(summary), flush=True)
             atomic_json(status, {"started": suite_started, "active": None,

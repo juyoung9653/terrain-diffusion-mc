@@ -104,6 +104,10 @@ public final class StreamsReflowingProbe {
         TerrainCpuProfile cpuProfile = null;
         try {
             ServerLevel level = server.overworld();
+            if (Boolean.getBoolean("td.streamsProbe.riverBedMaterialAudit")
+                    && !Boolean.getBoolean("td.streamsProbe.settleWater")) {
+                throw new IllegalArgumentException("riverBedMaterialAudit requires settleWater");
+            }
             if (Boolean.getBoolean("td.streamsProbe.vanillaKelpAudit"))
                 emit(receipts, server.submit(() -> VanillaKelpAudit.run(level))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
@@ -256,6 +260,29 @@ public final class StreamsReflowingProbe {
             emit(receipts, json("start", "center", config.centerX + "," + config.centerZ,
                     "centerSource", config.centerExplicit ? "property" : "shared_spawn", "maxChunks", config.maxChunks,
                     "requestTimeoutSeconds", config.timeoutSeconds, "routeSearchRadius", config.routeSearchRadius));
+            if (com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin.hasNativeTerrainAdapter()) {
+                boolean profile = com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.enabled(level);
+                int profileVersion = com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.version(level);
+                boolean exact = com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStartupPolicy.useExactTerrain(level);
+                String requestedNatural = System.getProperty("td.rivers.natural");
+                boolean requestedEnabled = "true".equals(requestedNatural);
+                boolean requestedDisabled = "false".equals(requestedNatural);
+                boolean profileMatchesRequest = !requestedEnabled || profile && profileVersion == 14;
+                profileMatchesRequest &= !requestedDisabled || !profile;
+                emit(receipts, json("streams_profile", "enabled", profile, "version", profileVersion,
+                        "exactTerrain", exact, "requested", requestedNatural == null ? "persisted" : requestedNatural,
+                        "status", exact && profileMatchesRequest ? "passed" : "failed"));
+                NativeStreamsConfig nativeConfig = server.submit(() -> {
+                    try { return nativeStreamsConfig(level, profile && profileVersion == 14); }
+                    catch (ReflectiveOperationException failure) { throw new IllegalStateException("Cannot inspect native Streams config", failure); }
+                })
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                emit(receipts, nativeConfig.receipt());
+                emit(receipts, json("native_streams_mode", "version", "2.17.1", "tdNaturalProfile", profile,
+                        "exactTerrain", exact, "status", exact ? "passed" : "failed"));
+                if (!exact || !profileMatchesRequest || !nativeConfig.passed())
+                    throw new IllegalStateException("Native Streams profile or exact-terrain contract failed");
+            }
             boolean riverPreview = Boolean.getBoolean("td.streamsProbe.riverPreview");
             if (Boolean.getBoolean("td.streamsProbe.naturalRiverAudit")) NaturalRiverAudit.export(level);
             if (Boolean.getBoolean("td.streamsProbe.naturalPlanOnly")) {
@@ -326,17 +353,14 @@ public final class StreamsReflowingProbe {
                         receipt.plannedChannelColumns = candidate.channelColumns;
                         receipt.plannedWaterSurfaceY = candidate.waterSurfaceY;
                         receipt.plannedChannelSamples = candidate.samples;
-                        if (Boolean.getBoolean("td.streamsProbe.planAudit")) {
-                            auditPlanAfterGeneration(level, receipt);
-                            writePlanAuditCsv(server, receipt);
-                        }
                         writeColumnCsv(server, receipt);
                         if (Boolean.getBoolean("td.streamsProbe.surfaceAudit")) {
                             writeSurfaceAuditCsv(server, receipt);
                             emit(receipts, receipt.surfaceAuditJson());
                         }
                         completed.add(receipt);
-                        if (!riverPreview) emit(receipts, receipt.json());
+                        if (!riverPreview && !Boolean.getBoolean("td.streamsProbe.planAudit"))
+                            emit(receipts, receipt.json());
                         if (Boolean.getBoolean("td.streamsProbe.shieldAudit")) {
                             emit(receipts, server.submit(() -> auditShield(level, chunkX, chunkZ))
                                     .get(config.timeoutSeconds, TimeUnit.SECONDS));
@@ -349,6 +373,18 @@ public final class StreamsReflowingProbe {
                         // A timed-out generation task can still occupy the server executor: do not queue more work.
                         break;
                     }
+            }
+            if (com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin.hasNativeTerrainAdapter()
+                    && !completed.isEmpty()) {
+                var counts = com.github.xandergos.terraindiffusionmc.compat.ecology.SubmergedPlantPlacementGuard.counts();
+                emit(receipts, json("submerged_plant_guard", "status", "observed", "phase", "after_generation",
+                        "generatedChunks", completed.size(), "allowed", counts.allowed(), "rejected", counts.rejected(),
+                        "dry", counts.dry(), "nonNaturalTerrain", counts.nonNaturalTerrain()));
+                var networks = com.github.xandergos.terraindiffusionmc.compat.streams.Streams2171NetworkAdapter.counts();
+                emit(receipts, json("natural_network_policy", "invocations", networks.invocations(),
+                        "completed", networks.completed(), "failed", networks.failed(),
+                        "status", networks.failed() == 0 ? "observed" : "failed"));
+                if (networks.failed() != 0) throw new IllegalStateException("Native river policy failed");
             }
             if (Boolean.getBoolean("td.streamsProbe.ecologyOverview")) {
                 emit(receipts, writeEcologyOverview(server));
@@ -627,6 +663,29 @@ public final class StreamsReflowingProbe {
                 emit(receipts, json("native_water_settled", "status", "passed", "startTick", startTick,
                         "endTick", settled.tick, "tickableChunks", settled.tickableCount,
                         "selectedChunks", selected.size()));
+                if (Boolean.getBoolean("td.streamsProbe.riverBedMaterialAudit")) {
+                    emit(receipts, server.submit(() -> SubmergedRiverBedAudit.run(level, selected,
+                            settled.tick - startTick)).get(config.timeoutSeconds, TimeUnit.SECONDS));
+                }
+            }
+            if (Boolean.getBoolean("td.streamsProbe.planAudit")) {
+                if (!Boolean.getBoolean("td.streamsProbe.settleWater")) {
+                    List<ChunkPos> selected = completed.stream()
+                            .map(r -> new ChunkPos(r.chunkX, r.chunkZ)).toList();
+                    tickAuditForcedChunks.addAll(server.submit(() -> forceTickAuditPositions(level, selected))
+                            .get(config.timeoutSeconds, TimeUnit.SECONDS));
+                    Tickability ready = awaitTickablePositions(server, level, selected, 180_000L);
+                    if (ready.tickableCount != selected.size())
+                        throw new IllegalStateException("Plan-audit completed cohort is not loaded");
+                }
+                // This is deliberately after optional settlement: plan geometry
+                // stays native, while physical columns are reread from the
+                // already-loaded completed chunks.
+                for (ChunkReceipt receipt : completed) {
+                    auditPlanAfterGeneration(level, receipt);
+                    writePlanAuditCsv(server, receipt);
+                    if (!riverPreview) emit(receipts, receipt.json());
+                }
             }
             if (riverPreview) {
                 // Run only after every requested FULL chunk is complete, so neighboring generation order is settled.
@@ -1192,7 +1251,15 @@ public final class StreamsReflowingProbe {
                 }).get(config.timeoutSeconds, TimeUnit.SECONDS);
                 emit(receipts, json("engine_initialized", "present", engine != null));
             }
-            Method near = engineMethod(engine.getClass(), "anyStreamsNear", double.class, double.class, double.class);
+            Method near;
+            try {
+                near = engineMethod(engine.getClass(), "anyStreamsNear", double.class, double.class, double.class);
+            } catch (NoSuchMethodException unavailable) {
+                // Streams 2.17 no longer exposes the broad-phase query.  Keep the
+                // bounded search truthful by sampling its public per-column plan
+                // below; do not infer routes from a replacement private index.
+                near = null;
+            }
             Method plan = engine.getClass().getMethod("plan", int.class, int.class);
             Method inChannel = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan", false,
                     StreamsReflowingProbe.class.getClassLoader()).getMethod("inChannel");
@@ -1203,12 +1270,14 @@ public final class StreamsReflowingProbe {
                 for (int dx = -config.routeSearchRadius; dx <= config.routeSearchRadius && result.size() < config.maxChunks; dx++) {
                     int cx = config.centerX + dx, cz = config.centerZ + dz;
                     examined++;
-                    if (!((Boolean) near.invoke(engine, cx * 16.0 + 8.0, cz * 16.0 + 8.0, 16.0))) continue;
+                    if (near != null && !((Boolean) near.invoke(engine,
+                            cx * 16.0 + 8.0, cz * 16.0 + 8.0, 16.0))) continue;
                     int channels = 0, waterY = Integer.MIN_VALUE;
                     for (int z = 0; z < 16; z += 4) for (int x = 0; x < 16; x += 4) {
                         Object column = plan.invoke(engine, cx * 16 + x, cz * 16 + z);
                         if ((Boolean) inChannel.invoke(column)) { channels++; waterY = Math.max(waterY, (Integer) waterSurfaceY.invoke(column)); }
                     }
+                    if (Boolean.getBoolean("td.streamsProbe.inlandRoutes") && waterY <= level.getSeaLevel()) continue;
                     if (channels > 0) {
                         List<String> samples = new ArrayList<>();
                         for (int z = 0; z < 16; z += 4) for (int x = 0; x < 16; x += 4) {
@@ -1830,18 +1899,58 @@ public final class StreamsReflowingProbe {
         } catch (IOException e) { audit.restartStatus = "io_error:" + e.getClass().getSimpleName(); }
     }
 
+    private static NativeStreamsConfig nativeStreamsConfig(ServerLevel level, boolean enforceNaturalProfile) throws ReflectiveOperationException {
+        Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen", false,
+                StreamsReflowingProbe.class.getClassLoader());
+        Object engine = worldgen.getMethod("engineIfPresent", ServerLevel.class).invoke(null, level);
+        if (engine == null) engine = worldgen.getMethod("engine", net.minecraft.world.level.WorldGenLevel.class)
+                .invoke(null, level);
+        if (engine == null) throw new IllegalStateException("Streams engine absent for native config receipt");
+        Object config = engine.getClass().getMethod("config").invoke(engine);
+        Number plateScale = (Number) com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess
+                .read(config, "plateScale");
+        Number gridSpacing = (Number) com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess
+                .read(config, "gridSpacing");
+        Number minRiverAccumulation = (Number) com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess
+                .read(config, "minRiverAccumulation");
+        Number growDensity = (Number) com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess
+                .read(config, "growDensity");
+        Number widthScale = (Number) com.github.xandergos.terraindiffusionmc.compat.streams.StreamsRecordAccess
+                .read(config, "widthScale");
+        boolean passed = !enforceNaturalProfile || plateScale.doubleValue() >= 2048.0 && minRiverAccumulation.doubleValue() >= 24.0;
+        return new NativeStreamsConfig(json("streams_engine_config", "status", passed ? "passed" : "failed",
+                "plateScale", plateScale, "gridSpacing", gridSpacing,
+                "minRiverAccumulation", minRiverAccumulation, "growDensity", growDensity,
+                "widthScale", widthScale, "naturalProfileEnforced", enforceNaturalProfile), passed);
+    }
+
+    private record NativeStreamsConfig(String receipt, boolean passed) { }
+
     /**
-     * This runs only after the requested FULL chunk future completes. It asks an already initialized
-     * Streams engine for its per-column plans; it never initializes an engine or requests a chunk.
+     * This runs only after the requested FULL chunk future completes. It uses Streams' normal
+     * server-thread lazy factory when a restarted loaded chunk has not otherwise recreated the
+     * engine, then reads its per-column plans without requesting another chunk.
      */
     private static void auditPlanAfterGeneration(ServerLevel level, ChunkReceipt receipt) {
         try {
+            Map<Long, PhysicalColumn> physical = level.getServer().submit(() ->
+                    rereadPlanPhysicalColumns(level, receipt)).get(
+                            Integer.getInteger("td.streamsProbe.timeoutSeconds", 900), TimeUnit.SECONDS);
             ClassLoader loader = StreamsReflowingProbe.class.getClassLoader();
             Class<?> worldgen = Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen", false, loader);
             Object engine = worldgen.getMethod("engineIfPresent", ServerLevel.class).invoke(null, level);
             if (engine == null) {
-                receipt.planAuditStatus = "engine_absent_after_full_chunk";
-                return;
+                engine = level.getServer().submit(() -> {
+                    try {
+                        return worldgen.getMethod("engine", net.minecraft.world.level.WorldGenLevel.class)
+                                .invoke(null, level);
+                    } catch (ReflectiveOperationException e) {
+                        throw new IllegalStateException("Streams engine initialization failed for plan audit", e);
+                    }
+                }).get(Integer.getInteger("td.streamsProbe.timeoutSeconds", 900), TimeUnit.SECONDS);
+            }
+            if (engine == null) {
+                throw new IllegalStateException("Streams engine absent after plan-audit initialization");
             }
             Method plan = engine.getClass().getMethod("plan", int.class, int.class);
             Class<?> columnPlan = Class.forName("dev.streamsreflowing.core.compose.ColumnPlan", false, loader);
@@ -1854,6 +1963,9 @@ public final class StreamsReflowingProbe {
             int channelColumns = 0;
             Integer minNaturalGroundMinusWater = null, maxNaturalGroundMinusWater = null;
             for (ColumnSnapshot column : receipt.columns) {
+                PhysicalColumn actual = physical.get(BlockPos.asLong(column.x, 0, column.z));
+                if (actual == null) throw new IllegalStateException("Missing loaded plan-audit column "
+                        + column.x + "," + column.z);
                 Object value = plan.invoke(engine, column.x, column.z);
                 boolean channel = (Boolean) inChannel.invoke(value);
                 int plannedWater = ((Number) waterSurfaceY.invoke(value)).intValue();
@@ -1863,14 +1975,14 @@ public final class StreamsReflowingProbe {
                 double plannedBankBlend = ((Number) bankBlend.invoke(value)).doubleValue();
                 // OCEAN_FLOOR_WG is the first-air boundary; the TD natural top solid is baseHeight - 1.
                 int naturalGroundMinusWater = (column.baseHeight - 1) - plannedWater;
-                int actualWaterMinusPlanned = column.topWaterY - plannedWater;
+                int actualWaterMinusPlanned = actual.topWaterY - plannedWater;
                 if (channel) {
                     channelColumns++;
                     minNaturalGroundMinusWater = minNaturalGroundMinusWater == null ? naturalGroundMinusWater : Math.min(minNaturalGroundMinusWater, naturalGroundMinusWater);
                     maxNaturalGroundMinusWater = maxNaturalGroundMinusWater == null ? naturalGroundMinusWater : Math.max(maxNaturalGroundMinusWater, naturalGroundMinusWater);
                 }
-                receipt.planAuditRows.add(column.x + "," + column.z + "," + column.baseHeight + "," + column.surfaceY + ","
-                        + column.groundY + "," + column.topWaterY + "," + csv(column.naturalBiome) + "," + channel + ","
+                receipt.planAuditRows.add(column.x + "," + column.z + "," + column.baseHeight + ","
+                        + actual.surfaceY + "," + actual.groundY + "," + actual.topWaterY + "," + csv(column.naturalBiome) + "," + channel + ","
                         + plannedWater + "," + plannedWidth + "," + plannedDistance + "," + plannedSlope + "," + plannedBankBlend + ","
                         + naturalGroundMinusWater + "," + actualWaterMinusPlanned);
             }
@@ -1881,6 +1993,39 @@ public final class StreamsReflowingProbe {
             receipt.planAuditStatus = "unavailable:" + t.getClass().getSimpleName();
             receipt.planAuditError = safe(t.getMessage());
         }
+    }
+
+    /** Server-thread-only, loaded-chunk reread; it never admits neighbour chunks. */
+    private static Map<Long, PhysicalColumn> rereadPlanPhysicalColumns(ServerLevel level,
+            ChunkReceipt receipt) {
+        Map<Long, PhysicalColumn> result = new java.util.HashMap<>();
+        int minY = level.getMinBuildHeight(), maxY = level.getMaxBuildHeight();
+        for (ColumnSnapshot snapshot : receipt.columns) {
+            LevelChunk chunk = level.getChunkSource().getChunkNow(snapshot.x >> 4, snapshot.z >> 4);
+            if (chunk == null) throw new IllegalStateException("Plan-audit chunk is no longer loaded: "
+                    + (snapshot.x >> 4) + "," + (snapshot.z >> 4));
+            int localX = snapshot.x & 15, localZ = snapshot.z & 15;
+            int surfaceY = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, localX, localZ);
+            int topWaterY = minY - 1, groundY = minY - 1;
+            BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+            for (int y = maxY - 1; y >= minY; y--) {
+                pos.set(snapshot.x, y, snapshot.z);
+                if (chunk.getBlockState(pos).getFluidState().is(FluidTags.WATER)) {
+                    topWaterY = y;
+                    break;
+                }
+            }
+            for (int y = Math.max(minY, surfaceY); y >= minY; y--) {
+                pos.set(snapshot.x, y, snapshot.z);
+                if (!chunk.getBlockState(pos).getFluidState().is(FluidTags.WATER)) {
+                    groundY = y;
+                    break;
+                }
+            }
+            result.put(BlockPos.asLong(snapshot.x, 0, snapshot.z),
+                    new PhysicalColumn(surfaceY, groundY, topWaterY));
+        }
+        return result;
     }
 
     private static void writePlanAuditCsv(MinecraftServer server, ChunkReceipt receipt) {
@@ -2339,5 +2484,6 @@ public final class StreamsReflowingProbe {
 
     private record RouteCandidate(int chunkX, int chunkZ, int channelColumns, int waterSurfaceY, String samples) {}
     private record ColumnSnapshot(int x, int z, int baseHeight, int surfaceY, int topWaterY, int groundY, String naturalBiome) {}
+    private record PhysicalColumn(int surfaceY, int groundY, int topWaterY) {}
     private record Tickability(long tick, int tickableCount) {}
 }

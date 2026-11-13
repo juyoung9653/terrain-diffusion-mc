@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import json
+import os
 from functools import partial
 from pathlib import Path
 import re
@@ -18,6 +20,8 @@ from probe_suite import (Job, atomic_json, default_java_home, environment, exclu
                          gradle_command, prepared_run, run_suite, streams_receipt)
 from streams_probe.preflight import coordinate_pairs, select_chunks, validate_fixture
 from streams_probe.restart_snapshot import capture_snapshot, compare_snapshots
+from streams_probe.tree_ground_runtime import validate_tree_ground_runtime
+from streams_probe.aquatic_preflight import validate_aquatic_fixture
 
 
 def cold_audit_receipt(path: Path, *, weather: bool, spatial: bool,
@@ -76,6 +80,208 @@ def native_water_settlement_receipt(path: Path, *, expected: set[str]) -> str:
     return "success"
 
 
+def vanilla_kelp_receipt(path: Path) -> str:
+    """Require both registered vanilla features and the revised littoral evidence."""
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "vanilla_kelp_audit_receipt_unreadable"
+    audits = [row for row in rows if row.get("event") == "vanilla_kelp_audit"]
+    if len(audits) != 1 or audits[0].get("status") != "passed":
+        return "vanilla_kelp_audit_not_passed"
+    targets = audits[0].get("targets")
+    if not isinstance(targets, dict) or set(targets) != {"minecraft:kelp_cold", "minecraft:kelp_warm"}:
+        return "vanilla_kelp_audit_targets_missing"
+    required = ("shelfSixAccepted", "transitionSevenAccepted", "deepAccepted",
+                "shelfSixNativeStalks", "transitionSevenNativeStalks", "deepTwelveNativeStalks")
+    for target in targets.values():
+        if not isinstance(target, dict) or any(not isinstance(target.get(field), int) for field in required):
+            return "vanilla_kelp_audit_depth_evidence_missing"
+        if (target["shelfSixAccepted"] != 0 or target["shelfSixNativeStalks"] != 0
+                or target["deepAccepted"] <= 0 or target["deepTwelveNativeStalks"] <= 0
+                or target["transitionSevenAccepted"] > target["deepAccepted"]
+                or target["transitionSevenNativeStalks"] > target["deepTwelveNativeStalks"]):
+            return "vanilla_kelp_audit_littoral_gate_failed"
+    return "success"
+
+
+def aquatic_placement_receipt(path: Path) -> str:
+    """Require fresh physical short/tall and sea-pickle fixture evidence."""
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "aquatic_placement_receipt_unreadable"
+    audits = [row for row in rows if row.get("event") == "aquatic_placement_audit"]
+    fixtures = [row for row in rows if row.get("event") == "aquatic_placement_fixture"]
+    if len(audits) != 1 or audits[0].get("status") != "passed":
+        return "aquatic_placement_audit_missing_or_failed"
+    if len(fixtures) != 1 or fixtures[0].get("status") != "passed":
+        return "aquatic_placement_fixture_missing_or_failed"
+    audit, fixture = audits[0], fixtures[0]
+    for field in ("vanillaHook", "seaPickleHook", "reefSeaPickleHook", "policyGuards",
+                  "streamsPresent", "streamsHook"):
+        if audit.get(field) is not True:
+            return "aquatic_placement_hook_or_policy_missing"
+    required = ("acceptedShort", "acceptedTallPair", "rejectedShort", "rejectedTallPair",
+                "acceptedSeaPickle", "rejectedSeaPickle", "acceptedReefSeaPickle",
+                "rejectedReefSeaPickle", "streamsPresent", "streamsAcceptedShort",
+                "streamsAcceptedTallPair", "streamsRejectedShort", "streamsRejectedTallPair")
+    if any(fixture.get(field) is not True for field in required):
+        return "aquatic_placement_physical_evidence_missing"
+    return "success"
+
+
+def submerged_river_bed_receipt(path: Path, *, expected: set[str]) -> str:
+    """Require a post-100-tick physical water-bottom scan, never a plan snapshot."""
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "submerged_river_bed_receipt_unreadable"
+    audits = [row for row in rows if row.get("event") == "submerged_river_bed_audit"]
+    if len(audits) != 1 or audits[0].get("status") != "passed":
+        return "submerged_river_bed_audit_not_passed"
+    audit = audits[0]
+    fields = ("settledTicks", "fullChunks", "waterBeds", "surfaceWaterBeds",
+              "submergedGrassBeds", "dryExposedGrassBlocks", "treeGroundWritesSkipped")
+    if any(not isinstance(audit.get(field), int) for field in fields):
+        return "submerged_river_bed_audit_fields_missing"
+    if (audit.get("method") != "actual_loaded_water_bottom_after_settlement"
+            or audit["settledTicks"] < 100 or audit["fullChunks"] != len(expected)
+            or audit["waterBeds"] < 1 or audit["surfaceWaterBeds"] < 1
+            or audit["submergedGrassBeds"] != 0):
+        return "submerged_river_bed_audit_physical_evidence_failed"
+    return "success"
+
+
+def plan_audit_receipt(path: Path, *, expected: set[str], started_ns: int) -> str:
+    """Require a fresh, complete native plan CSV for every generated chunk."""
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "plan_audit_receipt_unreadable"
+    audits = [row for row in rows if row.get("event") == "chunk"]
+    if not audits:
+        return "plan_audit_chunk_receipts_missing"
+    chunks = [row.get("chunk") for row in audits]
+    required = expected or set(chunks)
+    if (len(chunks) != len(set(chunks)) or set(chunks) != required
+            or any(not isinstance(chunk, str) for chunk in chunks)):
+        return "plan_audit_chunk_receipts_mismatch"
+    header = ("x,z,naturalPreCarveY,actualSurfaceY,actualGroundY,actualTopWaterY,"
+              "naturalBiome,inChannel,planWaterSurfaceY,planWidth,planDistance,planSlope,"
+              "planBankBlend,naturalGroundMinusPlanWater,actualWaterMinusPlanWater")
+    for row in audits:
+        if row.get("planAuditStatus") != "engine_plan_after_full_chunk":
+            return "plan_audit_status_missing_or_failed"
+        chunk = row["chunk"]
+        expected_name = f"td-streams-probe-plan-audit-{chunk.replace(',', '-')}.csv"
+        name = row.get("planAuditCsv")
+        if name != expected_name:
+            return "plan_audit_csv_name_mismatch"
+        artifact = path.parent / name
+        try:
+            lines = artifact.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            return "plan_audit_csv_missing"
+        if artifact.stat().st_mtime_ns < started_ns:
+            return "plan_audit_csv_stale"
+        if len(lines) != 257 or lines[0] != header or any(not line for line in lines[1:]):
+            return "plan_audit_csv_not_256_rows"
+        try:
+            widths = [len(columns) for columns in csv.reader(lines)]
+        except csv.Error:
+            return "plan_audit_csv_bad_columns"
+        if any(width != 15 for width in widths):
+            return "plan_audit_csv_bad_columns"
+    return "success"
+
+
+def validate_neoforge_version(run: Path, requested: str) -> None:
+    """Do not launch a fixture prepared for a different NeoForge runtime."""
+    try:
+        manifest = json.loads((run / "input-manifest.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid input manifest for {run.name}") from exc
+    actual = manifest.get("neoforge") if isinstance(manifest, dict) else None
+    if actual != requested:
+        raise ValueError(f"fixture {run.name} requires NeoForge {actual!r}, requested {requested!r}")
+
+
+def streams_profile_receipt(path: Path, *, natural_rivers: str | None) -> str:
+    """Check the persisted native Streams profile only when the caller requested one."""
+    if natural_rivers is None:
+        return "success"
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "streams_profile_receipt_unreadable"
+    profiles = [row for row in rows if row.get("event") == "streams_profile"]
+    if len(profiles) != 1 or profiles[0].get("status") != "passed":
+        return "streams_profile_missing_or_failed"
+    profile = profiles[0]
+    def flag(field: str) -> bool:
+        return profile.get(field) is True or profile.get(field) == "true"
+    version = profile.get("version")
+    version = int(version) if isinstance(version, str) and version.isdecimal() else version
+    if not flag("exactTerrain"):
+        return "streams_profile_not_exact_terrain"
+    if natural_rivers == "true":
+        if not flag("enabled") or version != 14:
+            return "streams_profile_not_enabled_v14"
+    elif flag("enabled"):
+        return "streams_profile_not_disabled"
+    return "success"
+
+
+def natural_network_policy_receipt(path: Path) -> str:
+    """Fresh V14 runs must execute the production network hook, not just set config."""
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        audits = [row for row in rows if row.get("event") == "natural_network_policy"]
+        if len(audits) != 1:
+            return "natural_network_policy_missing"
+        row = audits[0]
+        values = [str(row.get(key, "")) for key in ("invocations", "completed", "failed")]
+        if any(not re.fullmatch(r"[0-9]+", value) for value in values):
+            return "natural_network_policy_invalid"
+        invoked, completed, failed = map(int, values)
+        if failed or not 0 < completed <= invoked or row.get("status") != "observed":
+            return "natural_network_policy_not_executed_or_failed"
+        return "success"
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "natural_network_policy_unreadable"
+
+
+def greeneries_density_receipt(path: Path) -> str:
+    """Require the native Greeneries fixture audit to complete successfully."""
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "greeneries_density_receipt_unreadable"
+    audits = [row for row in rows if row.get("event") == "greeneries_density_fixture"]
+    if len(audits) != 1:
+        return "greeneries_density_fixture_missing"
+    return "success" if audits[0].get("status") == "passed" else "greeneries_density_fixture_failed"
+
+
+def network_audit_receipt(path: Path, *, started_ns: int, natural_rivers: str | None) -> str:
+    """Require a fresh bounded native graph export and its saved-profile evidence."""
+    status = streams_profile_receipt(path, natural_rivers=natural_rivers)
+    if status != "success":
+        return status
+    for name in ("td-natural-river-network.csv", "td-natural-river-profile.txt"):
+        artifact = path.parent / name
+        try:
+            content = artifact.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return "network_audit_artifact_missing"
+        if artifact.stat().st_mtime_ns < started_ns:
+            return "network_audit_artifact_stale"
+        if not content.strip():
+            return "network_audit_artifact_empty"
+    return "success"
+
+
 def surface_checks(run: Path, args, check_receipt):
     """Keep the pre-launch baseline and the post-launch verdict under the suite lock."""
     state = {}
@@ -94,7 +300,26 @@ def surface_checks(run: Path, args, check_receipt):
         return snapshot
 
     def prepare(dry_run=False):
-        validate_fixture(run, args.expect_river_cache)
+        state["fixture_preflight"] = validate_fixture(run, args.expect_river_cache)
+        # The merged artifact contains NeoForge's patched Minecraft methods;
+        # inspecting the vanilla SRG compile jar misses its event overloads.
+        version = getattr(args, "neoforge_version", "21.1.249")
+        runtime = ROOT / "neoforge/build/moddev/artifacts" / f"neoforge-{version}-merged.jar"
+        java_home = getattr(args, "java_home", None) or os.environ.get("JAVA_HOME") or default_java_home()
+        if not java_home:
+            javap = shutil.which("javap")
+            if not javap:
+                raise ValueError("runtime preflight requires --java-home with a JDK containing javap")
+            java_home = str(Path(javap).resolve().parent.parent)
+        if getattr(args, "aquatic_placement_audit", False):
+            state["aquatic_preflight"] = validate_aquatic_fixture(ROOT, run, args.chunks, Path(java_home))
+            if not dry_run:
+                atomic_json(run / "aquatic-preflight.json", state["aquatic_preflight"])
+        state["runtime_preflight"] = validate_tree_ground_runtime(
+            runtime, Path(java_home),
+            ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin/SubmergedTreeGroundMixin.java")
+        if not dry_run:
+            atomic_json(run / "runtime-preflight.json", state["runtime_preflight"])
         if args.surface_audit:
             existing = {p.name for p in (run / "world").glob("td-streams-probe-surface-audit-*.csv")}
             if existing - csv_names:
@@ -118,13 +343,47 @@ def surface_checks(run: Path, args, check_receipt):
         status = check_receipt(path)
         if status != "success":
             return status
+        status = streams_profile_receipt(path, natural_rivers=getattr(args, "natural_rivers", None))
+        if status != "success":
+            return status
+        if (getattr(args, "natural_rivers", None) == "true"
+                and state.get("fixture_preflight", {}).get("effectiveCachePolicy",
+                        getattr(args, "expect_river_cache", None)) == "fresh"):
+            status = natural_network_policy_receipt(path)
+            if status != "success":
+                return status
         status = cold_audit_receipt(path, weather=getattr(args, "cold_weather_audit", False),
                                     spatial=getattr(args, "cold_biome_spatial_audit", False),
                                     started_ns=state["started_ns"])
         if status != "success":
             return status
+        if getattr(args, "plan_audit", False):
+            status = plan_audit_receipt(path, expected=expected, started_ns=state["started_ns"])
+            if status != "success":
+                return status
         if getattr(args, "settle_water", False):
             status = native_water_settlement_receipt(path, expected=expected)
+            if status != "success":
+                return status
+        if getattr(args, "river_bed_material_audit", False):
+            status = submerged_river_bed_receipt(path, expected=expected)
+            if status != "success":
+                return status
+        if getattr(args, "vanilla_kelp_audit", False):
+            status = vanilla_kelp_receipt(path)
+            if status != "success":
+                return status
+        if getattr(args, "aquatic_placement_audit", False):
+            status = aquatic_placement_receipt(path)
+            if status != "success":
+                return status
+        if getattr(args, "greeneries_density_audit", False):
+            status = greeneries_density_receipt(path)
+            if status != "success":
+                return status
+        if getattr(args, "network_audit", False):
+            status = network_audit_receipt(path, started_ns=state["started_ns"],
+                                           natural_rivers=getattr(args, "natural_rivers", None))
             if status != "success":
                 return status
         if not args.surface_audit:
@@ -231,8 +490,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gradle-user-home", required=True)
     parser.add_argument("--java-home", default=default_java_home())
     parser.add_argument("--daemon", action="store_true", help="opt in to Gradle daemon")
+    parser.add_argument("--neoforge-version", default="21.1.249",
+                        help="exact dotted NeoForge version recorded by the fixture")
     parser.add_argument("--max-chunks", type=int, choices=range(1, 17), default=4)
     parser.add_argument("--chunks", help="fixed chunk order: X,Z;X,Z (use --chunks=... for negatives)")
+    parser.add_argument("--center-chunk", help="bounded route-discovery center in chunk coordinates X,Z")
+    parser.add_argument("--inland-routes", action="store_true", help="discover channels with planned water above sea level")
     parser.add_argument("--block-sites", help="world-block X,Z;X,Z; derive chunks or check --chunks coverage")
     parser.add_argument("--expect-river-cache", choices=("fresh", "present"),
                         help="assert fresh routing or an existing graph before launch")
@@ -241,7 +504,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="require complete surface/ecology columns and a natural river export")
     parser.add_argument("--verify-restart", action="store_true",
                         help="compare a prior successful surface audit against one restart")
-    parser.add_argument("--natural-center", help="world-block X,Z center of the surface audit's river export")
+    parser.add_argument("--network-audit", action="store_true",
+                        help="export one bounded native Streams graph without a surface audit")
+    parser.add_argument("--natural-rivers", choices=("true", "false"),
+                        help="request the fresh TD natural-river profile; omit to respect saved state")
+    parser.add_argument("--natural-center", help="world-block X,Z center of the bounded river export")
     parser.add_argument("--natural-radius", type=int, choices=range(64, 2049), metavar="64..2048")
     parser.add_argument("--cold-weather-audit", action="store_true",
                         help="require cached-climate snow and ice eligibility evidence")
@@ -262,6 +529,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="record native channel distance, width, and water evidence")
     parser.add_argument("--settle-water", action="store_true",
                         help="require native water settlement for 100 ticks in fixed chunks")
+    parser.add_argument("--river-bed-material-audit", action="store_true",
+                        help="after --settle-water, reject actual water bottoms on grass blocks")
+    parser.add_argument("--vanilla-kelp-audit", action="store_true",
+                        help="exercise registered vanilla kelp placements at the littoral depth gate")
+    parser.add_argument("--aquatic-placement-audit", action="store_true",
+                        help="require physical seagrass and sea-pickle placement gates")
+    parser.add_argument("--greeneries-density-audit", action="store_true",
+                        help="require the native Greeneries density fixture audit")
     parser.add_argument("--topology-audit", action="store_true")
     parser.add_argument("--terrain-slab-audit", action="store_true",
                         help="native slab contour and loaded Landmarks registry checks on controlled terrain")
@@ -281,17 +556,21 @@ def main(argv: list[str] | None = None) -> int:
                         help="diagnostic override of the saved ground-only sampling profile")
     args = parser.parse_args(argv)
     try:
+        if not re.fullmatch(r"\d+\.\d+\.\d+", args.neoforge_version):
+            raise ValueError("neoforge-version must be dotted numeric")
         args.chunks = select_chunks(args.chunks, args.block_sites, args.max_chunks)
         args.surface_audit = args.surface_audit or args.verify_restart
         if args.settle_water and not args.chunks:
             raise ValueError("settle-water requires fixed chunks or block-sites")
+        if args.river_bed_material_audit and (not args.settle_water or not args.chunks):
+            raise ValueError("river-bed-material-audit requires --settle-water and fixed chunks or block-sites")
         if args.surface_audit and (not args.chunks or args.topology_audit
                                    or args.terrain_slab_audit or args.short_tunnel_audit):
             raise ValueError("surface/restart audit requires fixed chunks or block-sites without a discovery audit")
         if args.verify_restart and args.expect_river_cache == "fresh":
             raise ValueError("restart cannot require fresh routing")
-        if (args.natural_center or args.natural_radius is not None) and not args.surface_audit:
-            raise ValueError("natural export options require --surface-audit or --verify-restart")
+        if (args.natural_center or args.natural_radius is not None) and not (args.surface_audit or args.network_audit):
+            raise ValueError("natural export options require --surface-audit, --verify-restart, or --network-audit")
         if args.natural_center and len(coordinate_pairs(args.natural_center)) != 1:
             raise ValueError("natural-center must be one X,Z pair")
         if not 1 <= args.cold_tiles <= 8:
@@ -324,11 +603,28 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("short-tunnel-radius must be 96..2048")
         options = [f"-PtdProbe.maxChunks={args.max_chunks}", "-PtdProbe.routeSearchRadius=32",
                    "-PtdProbe.timeoutSeconds=900"]
+        if args.center_chunk:
+            centers = coordinate_pairs(args.center_chunk)
+            if len(centers) != 1:
+                raise ValueError("center-chunk must be one X,Z pair")
+            cx, cz = centers[0]
+            options.extend((f"-PtdProbe.centerChunkX={cx}", f"-PtdProbe.centerChunkZ={cz}"))
+        if args.inland_routes:
+            options.append("-PtdProbe.inlandRoutes=true")
         if args.chunks:
             options.append(f"-PtdProbe.chunks={args.chunks}")
+        if args.natural_rivers is not None:
+            options.append(f"-PtdRiver.natural={args.natural_rivers}")
         if args.surface_audit:
             options.extend(("-PtdProbe.surfaceAudit=true", "-PtdProbe.ecologyAudit=true",
                             "-PtdProbe.naturalRiverAudit=true"))
+            if args.natural_center:
+                x, z = coordinate_pairs(args.natural_center)[0]
+                options.extend((f"-PtdProbe.naturalCenterX={x}", f"-PtdProbe.naturalCenterZ={z}"))
+            if args.natural_radius is not None:
+                options.append(f"-PtdProbe.naturalRadius={args.natural_radius}")
+        elif args.network_audit:
+            options.append("-PtdProbe.naturalRiverAudit=true")
             if args.natural_center:
                 x, z = coordinate_pairs(args.natural_center)[0]
                 options.extend((f"-PtdProbe.naturalCenterX={x}", f"-PtdProbe.naturalCenterZ={z}"))
@@ -353,6 +649,15 @@ def main(argv: list[str] | None = None) -> int:
             options.append("-PtdProbe.planAudit=true")
         if args.settle_water:
             options.append("-PtdProbe.settleWater=true")
+        if args.river_bed_material_audit:
+            options.append("-PtdProbe.riverBedMaterialAudit=true")
+        if args.vanilla_kelp_audit:
+            options.append("-PtdProbe.vanillaKelpAudit=true")
+        if args.aquatic_placement_audit:
+            options.extend(("-PtdProbe.aquaticPlacementFixture=true",
+                            "-PtdProbe.aquaticPlacementAudit=true"))
+        if args.greeneries_density_audit:
+            options.append("-PtdProbe.greeneriesDensityAudit=true")
         if args.topology_audit:
             options.append("-PtdProbe.streamsTopologyAudit=true")
         if args.terrain_slab_audit:
@@ -380,7 +685,9 @@ def main(argv: list[str] | None = None) -> int:
         for name in args.names:
             if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
                 raise ValueError(f"invalid run name: {name}")
-            runs.append(prepared_run(ROOT, "streams-probe", f"build/streams-probe/{name}", "input-manifest.json"))
+            run = prepared_run(ROOT, "streams-probe", f"build/streams-probe/{name}", "input-manifest.json")
+            validate_neoforge_version(run, args.neoforge_version)
+            runs.append(run)
         check_receipt = (partial(metrics_receipt, topology=args.topology_audit, terrain_parity=args.terrain_parity, cpu_profile=args.cpu_profile)
                          if args.inference_metrics or args.terrain_parity or args.cpu_profile
                          else topology_receipt if args.topology_audit else streams_receipt)
@@ -401,7 +708,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.cold_biome_spatial_audit:
                 run_options.append(f"-PtdProbe.coldOutput={run / 'world/td-cold-biomes.csv'}")
             jobs.append(Job(run, gradle_command(ROOT, ["-I", "tools/streams_probe/probe.init.gradle",
-                                                       f"-PtdProbeDir={run}", *run_options], args.daemon),
+                                                       f"-PtdProbeDir={run}", *run_options], args.daemon,
+                                           neoforge_version=args.neoforge_version),
                             run / "world/td-streams-probe.jsonl", check, prepare))
         return run_suite(ROOT, "streams-probe", jobs, environment(args.java_home, args.gradle_user_home))
     except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:

@@ -20,12 +20,17 @@ public final class VanillaKelpPlacementPolicyTest {
     }
     public static void main(String[] args) {
         require(VanillaKelpPlacementPolicy.CANDIDATES_PER_CHUNK == 64, "candidate bound");
-        require(VanillaKelpPlacementPolicy.shallowWaterFactor(0) == 0.0, "dry rejected");
-        require(VanillaKelpPlacementPolicy.shallowWaterFactor(1) == .08, "one-block shelf");
-        require(VanillaKelpPlacementPolicy.shallowWaterFactor(2) == .18, "two-block shelf");
-        require(VanillaKelpPlacementPolicy.shallowWaterFactor(3) == .40, "three-block transition");
-        require(VanillaKelpPlacementPolicy.shallowWaterFactor(4) == .70, "four-block transition");
-        require(VanillaKelpPlacementPolicy.shallowWaterFactor(5) == 1.0, "deep water unchanged");
+        for (int depth = 0; depth <= 6; depth++)
+            require(VanillaKelpPlacementPolicy.shallowWaterFactor(depth) == 0.0,
+                    "shallow shelf rejected at " + depth);
+        require(VanillaKelpPlacementPolicy.shallowWaterFactor(7) > 0.0,
+                "transition begins above shelf");
+        require(VanillaKelpPlacementPolicy.shallowWaterFactor(8)
+                > VanillaKelpPlacementPolicy.shallowWaterFactor(7), "transition rises");
+        require(VanillaKelpPlacementPolicy.shallowWaterFactor(11) < 1.0,
+                "transition remains below deep-ocean density");
+        require(VanillaKelpPlacementPolicy.shallowWaterFactor(12) == 1.0,
+                "deep water unchanged");
         long seed = 0x5EED1234L;
         long cold = 0x3EAE9B59A7F116C1L;
         long warm = 0x76D4F9082C5AB137L;
@@ -61,12 +66,12 @@ public final class VanillaKelpPlacementPolicyTest {
         int shallowAccepted = 0, deepAccepted = 0;
         for (int x = -240; x <= 240; x++) for (int z = -240; z <= 240; z++) {
             if (VanillaKelpPlacementPolicy.accept(seed, cold,
-                    VanillaKelpPlacementPolicy.COLD_ACCEPTANCE, 2, x, z)) shallowAccepted++;
+                    VanillaKelpPlacementPolicy.COLD_ACCEPTANCE, 6, x, z)) shallowAccepted++;
             if (VanillaKelpPlacementPolicy.accept(seed, cold,
-                    VanillaKelpPlacementPolicy.COLD_ACCEPTANCE, 5, x, z)) deepAccepted++;
+                    VanillaKelpPlacementPolicy.COLD_ACCEPTANCE, 12, x, z)) deepAccepted++;
         }
-        require(shallowAccepted * 4 < deepAccepted,
-                "two-block shore shelf remains much sparser than deep water");
+        require(shallowAccepted == 0, "six-block shallow shelf is kelp-free");
+        require(deepAccepted > 1000, "deep water retains a nonzero kelp bed");
         System.out.println("VanillaKelpPlacementPolicyTest: PASS cold=" + coldMean
                 + " warm=" + warmMean + " shallow=" + shallowAccepted + " deep=" + deepAccepted);
     }

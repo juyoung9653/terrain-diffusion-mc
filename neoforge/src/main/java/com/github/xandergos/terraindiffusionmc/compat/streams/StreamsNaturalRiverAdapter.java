@@ -99,6 +99,7 @@ public final class StreamsNaturalRiverAdapter {
         return version != null ? nativePath.resolve("td-natural-v" + version) : nativePath;
     }
     public static void clear() {
+        Streams2171NetworkAdapter.resetCounts();
         StreamsShortRiverTunnels.clear();
         java.util.Set<LocalTerrainProvider> providers;
         synchronized (PROVIDERS) {

@@ -7,6 +7,7 @@ import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource
 import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -19,9 +20,9 @@ import net.minecraft.world.level.levelgen.placement.PlacementModifier;
 
 /** TD-only scope for the original, unmodified HA kelp placement chain. */
 public final class HybridAquaticKelpPlacementScope {
-    private static final Entry BULL_KELP = new Entry(id("bull_kelp"), 0x44CBA31A0D1237E1L);
-    private static final Entry DELESSERIA = new Entry(id("delesseria"), 0x6FC1E0B9782A5D43L);
-    private static final Entry SARGASSUM = new Entry(id("sargassum"), 0x1985B3E42D96CF07L);
+    private static final Entry BULL_KELP = new Entry(id("bull_kelp"), 0x44CBA31A0D1237E1L, true);
+    private static final Entry DELESSERIA = new Entry(id("delesseria"), 0x6FC1E0B9782A5D43L, false);
+    private static final Entry SARGASSUM = new Entry(id("sargassum"), 0x1985B3E42D96CF07L, false);
     private static final ThreadLocal<Entry> ACTIVE = new ThreadLocal<>();
 
     private HybridAquaticKelpPlacementScope() { }
@@ -48,7 +49,20 @@ public final class HybridAquaticKelpPlacementScope {
 
     public static boolean accept(WorldGenLevel level, BlockPos pos) {
         Entry entry = ACTIVE.get();
-        return entry == null || HybridAquaticKelpPlacementPolicy.accept(level.getSeed(), entry.salt, pos.getX(), pos.getZ());
+        return entry == null || HybridAquaticKelpPlacementPolicy.accept(level.getSeed(), entry.salt,
+                entry.shallowShelf ? waterDepth(level, pos) : 12, pos.getX(), pos.getZ());
+    }
+
+    /** The bounded scan is independent of neighbouring chunk generation order. */
+    private static int waterDepth(WorldGenLevel level, BlockPos pos) {
+        BlockPos.MutableBlockPos scan = pos.mutable();
+        int depth = 0;
+        while (depth < 12 && scan.getY() < level.getMaxBuildHeight()
+                && level.getFluidState(scan).is(FluidTags.WATER)) {
+            depth++;
+            scan.move(0, 1, 0);
+        }
+        return depth;
     }
 
     private static boolean isOriginalChain(List<PlacementModifier> placement) {
@@ -79,7 +93,7 @@ public final class HybridAquaticKelpPlacementScope {
         return ResourceLocation.fromNamespaceAndPath("hybrid_aquatic", path);
     }
 
-    private record Entry(ResourceLocation id, long salt) { }
+    private record Entry(ResourceLocation id, long salt, boolean shallowShelf) { }
 
     @FunctionalInterface
     public interface Scope extends AutoCloseable {

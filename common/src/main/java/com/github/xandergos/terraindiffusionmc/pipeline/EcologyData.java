@@ -12,12 +12,22 @@ public final class EcologyData {
 
     public EcologyData(int width, int height, short[] biomeIds, short[] terrainBiomeIds,
                        float[] cover, float[] temperature, float[] moisture, float[] slope, float[] snowRetention) {
+        this(width, height, biomeIds, terrainBiomeIds, cover, temperature, moisture, slope,
+                snowRetention, openWater(width, height));
+    }
+
+    public EcologyData(int width, int height, short[] biomeIds, short[] terrainBiomeIds,
+                       float[] cover, float[] temperature, float[] moisture, float[] slope,
+                       float[] snowRetention, float[] openWaterFraction) {
         this.width = width; this.height = height; this.values = Math.multiplyExact(width, height);
-        this.hot = new Snapshot(biomeIds, terrainBiomeIds, cover, temperature, moisture, slope, snowRetention);
+        this.hot = new Snapshot(biomeIds, terrainBiomeIds, cover, temperature, moisture, slope,
+                snowRetention, openWaterFraction);
     }
     public int biomeId(int x, int z) { return snapshot().biomeIds[z * width + x]; }
     public short terrainBiomeId(int x, int z) { return snapshot().terrainBiomeIds[z * width + x]; }
     public float snowRetention(int x, int z) { return snapshot().snowRetention[z * width + x]; }
+    /** Finite-neighbourhood marine exposure calculated while the tile was built. */
+    public float openWaterFraction(int x, int z) { return snapshot().openWaterFraction[z * width + x]; }
     public EcologyClassifier.Sample sample(int x, int z) {
         Snapshot fields = snapshot(); int i = z * width + x;
         return new EcologyClassifier.Sample(fields.biomeIds[i], fields.cover[i], fields.temperature[i],
@@ -27,7 +37,7 @@ public final class EcologyData {
         Snapshot source = snapshot(); int size = w * h;
         short[] ids = new short[size], terrain = new short[size];
         float[] trees = new float[w * h], temp = new float[w * h], moist = new float[w * h], slopes = new float[w * h];
-        float[] retention = new float[w * h];
+        float[] retention = new float[w * h], openWater = new float[w * h];
         for (int r = 0; r < h; r++) {
             int from = (z + r) * width + x, to = r * w;
             System.arraycopy(source.biomeIds, from, ids, to, w);
@@ -37,8 +47,9 @@ public final class EcologyData {
             System.arraycopy(source.moisture, from, moist, to, w);
             System.arraycopy(source.slope, from, slopes, to, w);
             System.arraycopy(source.snowRetention, from, retention, to, w);
+            System.arraycopy(source.openWaterFraction, from, openWater, to, w);
         }
-        return new EcologyData(w, h, ids, terrain, trees, temp, moist, slopes, retention);
+        return new EcologyData(w, h, ids, terrain, trees, temp, moist, slopes, retention, openWater);
     }
 
     void retainCold(EcologyDataCache cache) { cache.retain(this); }
@@ -78,12 +89,19 @@ public final class EcologyData {
 
     static final class Snapshot {
         final short[] biomeIds, terrainBiomeIds;
-        final float[] cover, temperature, moisture, slope, snowRetention;
+        final float[] cover, temperature, moisture, slope, snowRetention, openWaterFraction;
         Snapshot(short[] biomeIds, short[] terrainBiomeIds, float[] cover, float[] temperature,
-                 float[] moisture, float[] slope, float[] snowRetention) {
+                 float[] moisture, float[] slope, float[] snowRetention, float[] openWaterFraction) {
             this.biomeIds = biomeIds; this.terrainBiomeIds = terrainBiomeIds;
             this.cover = cover; this.temperature = temperature; this.moisture = moisture;
             this.slope = slope; this.snowRetention = snowRetention;
+            this.openWaterFraction = openWaterFraction;
         }
+    }
+
+    private static float[] openWater(int width, int height) {
+        float[] result = new float[Math.multiplyExact(width, height)];
+        java.util.Arrays.fill(result, 1F);
+        return result;
     }
 }

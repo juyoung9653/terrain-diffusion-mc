@@ -34,6 +34,9 @@ class PrepareFixtureTest(unittest.TestCase):
         self.write("config/example.toml", b"config-A")
         self.write("terrain-diffusion-models/model.onnx", b"model-A")
         self.write("world/level.dat", b"level-A")
+        self.write("world/datapacks/td-controlled-beach/pack.mcmeta", b"pack-A")
+        self.write("world/datapacks/td-controlled-beach/data/example.json", b"data-A")
+        self.write("world/datapacks/control.zip", b"zip-A")
         self.write("world/streamsreflowing/cache.bin", b"river-A")
 
     def write(self, name: str, data: bytes) -> None:
@@ -42,7 +45,8 @@ class PrepareFixtureTest(unittest.TestCase):
         path.write_bytes(data)
 
     def prepare(self, **kwargs: object) -> dict[str, object]:
-        return fixture.prepare(self.source, self.target, root=self.root, **kwargs)
+        target = kwargs.pop("target", self.target)
+        return fixture.prepare(self.source, target, root=self.root, **kwargs)
 
     def test_copy_manifest_and_noop_preserves_mtimes(self) -> None:
         first = self.prepare()
@@ -52,12 +56,19 @@ class PrepareFixtureTest(unittest.TestCase):
                          {"server.properties", "eula.txt", "village-census-only.txt",
                           "require-ecology-scale1.txt", "mods/example.jar",
                           "config/example.toml", "terrain-diffusion-models/model.onnx",
-                          "world/level.dat", "world/streamsreflowing/cache.bin",
+                          "world/level.dat", "world/datapacks/td-controlled-beach/pack.mcmeta",
+                          "world/datapacks/td-controlled-beach/data/example.json",
+                          "world/datapacks/control.zip", "world/streamsreflowing/cache.bin",
                           "density-center.txt", "density-radius.txt"})
         self.assertEqual((self.target / "density-center.txt").read_text(), "0,0\n")
         self.assertEqual((self.target / "density-radius.txt").read_text(), "96\n")
         self.assertEqual((self.target / "world/streamsreflowing/cache.bin").read_bytes(), b"river-A")
+        self.assertEqual((self.target / "world/datapacks/td-controlled-beach/pack.mcmeta").read_bytes(),
+                         b"pack-A")
+        self.assertEqual((self.target / "world/datapacks/control.zip").read_bytes(), b"zip-A")
         self.assertFalse((self.target / "world/region").exists())
+        self.assertFalse((self.target / "world/entities").exists())
+        self.assertFalse((self.target / "world/poi").exists())
         self.assertTrue((self.target / "defaultconfigs").is_dir())
         self.assertEqual(set(fixture._source_files(self.target)),
                          set(manifest["sha256"]) - {"density-center.txt", "density-radius.txt"})
@@ -80,6 +91,7 @@ class PrepareFixtureTest(unittest.TestCase):
     def test_streams_family_preserves_marine_admission(self) -> None:
         marker = "world/data/terrain_diffusion_hybrid_aquatic.properties"
         self.write(marker, b"enabled=true\nprofileVersion=1\nseed=12345\n")
+        self.write("input-manifest.json", b'{"neoforge":"21.1.249"}')
         self.target = self.root / "build" / "streams-probe" / "trial"
         self.prepare(family_name="streams-probe")
         self.assertEqual((self.target / marker).read_bytes(), (self.source / marker).read_bytes())
@@ -123,6 +135,42 @@ class PrepareFixtureTest(unittest.TestCase):
         self.assertGreater(result["scannedFiles"], 0)
         manifest = json.loads((self.target / fixture.MANIFEST).read_text())
         self.assertEqual(manifest["cacheMode"], "fresh river cache; fresh chunks")
+
+    def test_streams_fixture_carries_runtime_and_cache_contract(self) -> None:
+        from streams_probe.preflight import validate_fixture
+        from streams_probe.run_suite import validate_neoforge_version
+        streams_target = self.root / "build" / "streams-probe" / "trial"
+        source_manifest = {"neoforge": "21.1.264", "seed": 42, "scale": 1,
+                           "minecraft": "1.21.1", "streamsVersion": "2.17.1",
+                           "terralith": True, "c2me": False}
+        self.write("input-manifest.json", json.dumps(source_manifest).encode())
+        self.prepare(family_name="streams-probe", target=streams_target)
+        manifest = json.loads((streams_target / fixture.MANIFEST).read_text())
+        self.assertEqual(manifest["neoforge"], "21.1.264")
+        self.assertEqual(manifest["riverCachePolicy"], "present")
+        self.assertTrue(manifest["preparedFreshChunks"])
+        self.assertIn("sourceManifestSha256", manifest)
+        self.assertEqual(manifest["seed"], 42)
+        validate_neoforge_version(streams_target, "21.1.264")
+        verdict = validate_fixture(streams_target)
+        self.assertEqual(verdict["effectiveCachePolicy"], "present")
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            validate_fixture(streams_target, "fresh")
+        (self.source / "world/streamsreflowing/cache.bin").unlink()
+        fresh_target = self.root / "build" / "streams-probe" / "fresh"
+        self.prepare(family_name="streams-probe", target=fresh_target)
+        fresh = json.loads((fresh_target / fixture.MANIFEST).read_text())
+        self.assertEqual(fresh["riverCachePolicy"], "fresh")
+
+    def test_streams_fixture_rejects_missing_runtime_before_copy(self) -> None:
+        target = self.root / "build" / "streams-probe" / "trial"
+        with self.assertRaisesRegex(ValueError, "input-manifest"):
+            self.prepare(family_name="streams-probe", target=target)
+        self.assertFalse(target.exists())
+        self.write("input-manifest.json", b'{"neoforge":"not-a-version"}')
+        with self.assertRaisesRegex(ValueError, "numeric neoforge"):
+            self.prepare(family_name="streams-probe", target=target)
+        self.assertFalse(target.exists())
 
     def test_removed_source_input_refuses_stale_target(self) -> None:
         self.prepare()
@@ -176,6 +224,15 @@ class PrepareFixtureTest(unittest.TestCase):
         linked = self.source / "config/linked.toml"
         try:
             os.symlink(self.source / "config/example.toml", linked)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable on this host")
+        with self.assertRaisesRegex(ValueError, "linked fixture path"):
+            self.prepare()
+
+    def test_linked_world_datapack_is_refused(self) -> None:
+        linked = self.source / "world/datapacks/linked-pack"
+        try:
+            os.symlink(self.source / "config", linked, target_is_directory=True)
         except (OSError, NotImplementedError):
             self.skipTest("symlinks unavailable on this host")
         with self.assertRaisesRegex(ValueError, "linked fixture path"):

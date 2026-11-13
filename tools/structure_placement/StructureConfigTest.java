@@ -23,6 +23,16 @@ public final class StructureConfigTest {
         Override structure = new Override(); structure.minGapBlocks = 240;
         d.structures.put("test:village", structure);
         var snapshot = StructurePlacementConfig.validate(d);
+        check(snapshot.global().maxCutBlocks() == 3 && snapshot.global().maxFillBlocks() == 4,
+                "new worlds allow the bounded three-cut/four-fill default");
+        Override legacyTerrain = new Override();
+        legacyTerrain.maxCutBlocks = 2;
+        legacyTerrain.maxFillBlocks = 3;
+        d.structures.put("legacy:house", legacyTerrain);
+        var legacyPolicy = StructurePlacementConfig.validate(d).resolve("legacy:house");
+        check(legacyPolicy.maxCutBlocks() == 2 && legacyPolicy.maxFillBlocks() == 3,
+                "explicit saved-world terrain bounds override new defaults");
+        d.structures.remove("legacy:house");
         for (String id : new String[]{"minecraft:ruined_portal", "minecraft:ruined_portal_desert",
                 "minecraft:ruined_portal_jungle", "minecraft:ruined_portal_mountain",
                 "minecraft:ruined_portal_nether", "minecraft:ruined_portal_ocean",
@@ -56,6 +66,15 @@ public final class StructureConfigTest {
         check(snapshot.resolve("test:house").minGapBlocks() == 180, "mod inheritance");
         check(snapshot.resolve("test:village").minGapBlocks() == 240, "structure override");
         check(snapshot.resolve("test:village").maxCutBlocks() == 1, "partial override inheritance");
+        Override beachVillage = new Override();
+        beachVillage.surfaceMode = StructurePlacementConfig.SurfaceMode.SURFACE;
+        d.structures.put("towns_and_towers:village_beach", beachVillage);
+        var beachPolicy = StructurePlacementConfig.validate(d).resolve("towns_and_towers:village_beach");
+        check(beachPolicy.surfaceMode() == StructurePlacementConfig.SurfaceMode.SURFACE
+                        && beachPolicy.maxCutBlocks() == 3 && beachPolicy.maxFillBlocks() == 4
+                        && beachPolicy.blendRadiusBlocks() == 12,
+                "beach village surface override keeps the bounded foundation defaults");
+        d.structures.remove("towns_and_towers:village_beach");
         mod.minGapBlocks = 500;
         check(snapshot.resolve("test:house").minGapBlocks() == 180, "snapshot detached from UI draft");
         snapshot.document().global.minGapBlocks = 700;

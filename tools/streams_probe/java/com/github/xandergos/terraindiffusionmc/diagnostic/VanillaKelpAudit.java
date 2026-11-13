@@ -75,18 +75,16 @@ final class VanillaKelpAudit {
             if (plants == 0 || !ocean.observedScope)
                 throw new IllegalStateException("native kelp not placed: " + target.id);
             int deepStalks = stalks(ocean.blocks);
-            ocean.blocks.clear();
-            ocean.waterTop = 66;
-            placeGrid(feature, ocean.world, generator);
-            int shallowStalks = stalks(ocean.blocks);
-            ocean.blocks.clear();
-            ocean.waterTop = 65;
-            placeGrid(feature, ocean.world, generator);
-            int oneBlockStalks = stalks(ocean.blocks);
-            if (shallowStalks * 2 >= deepStalks || oneBlockStalks > shallowStalks)
-                throw new IllegalStateException("native kelp depth gate failed: " + target.id
-                        + " one=" + oneBlockStalks + " shallow=" + shallowStalks
-                        + " deep=" + deepStalks);
+            int oneBlockStalks = placeAtDepth(feature, ocean, generator, 1);
+            int shelfSixStalks = placeAtDepth(feature, ocean, generator, 6);
+            int transitionSevenStalks = placeAtDepth(feature, ocean, generator, 7);
+            int deepTwelveStalks = placeAtDepth(feature, ocean, generator, 12);
+            if (oneBlockStalks != 0 || shelfSixStalks != 0 || deepTwelveStalks == 0
+                    || transitionSevenStalks > deepTwelveStalks)
+                throw new IllegalStateException("native kelp littoral gate failed: " + target.id
+                        + " one=" + oneBlockStalks + " shelfSix=" + shelfSixStalks
+                        + " transitionSeven=" + transitionSevenStalks + " deepTwelve="
+                        + deepTwelveStalks);
             ocean.blocks.clear();
             ocean.dry = true;
             for (int x = -2; x < 2; x++) for (int z = -2; z < 2; z++)
@@ -103,24 +101,29 @@ final class VanillaKelpAudit {
             if (!ocean.blocks.isEmpty()) throw new IllegalStateException("biome filter bypassed");
             if (VanillaKelpPlacementScope.replacesNoiseCount())
                 throw new IllegalStateException("scope leaked");
-            int shallowAccepted = 0;
+            int shelfAccepted = 0;
+            int transitionAccepted = 0;
             int deepAccepted = 0;
             for (int x = -128; x < 128; x++) for (int z = -128; z < 128; z++) {
                 if (VanillaKelpPlacementPolicy.accept(level.getSeed(), target.salt,
-                        target.acceptance, 2, x, z)) shallowAccepted++;
+                        target.acceptance, 6, x, z)) shelfAccepted++;
                 if (VanillaKelpPlacementPolicy.accept(level.getSeed(), target.salt,
-                        target.acceptance, 5, x, z)) deepAccepted++;
+                        target.acceptance, 7, x, z)) transitionAccepted++;
+                if (VanillaKelpPlacementPolicy.accept(level.getSeed(), target.salt,
+                        target.acceptance, 12, x, z)) deepAccepted++;
             }
-            if (shallowAccepted * 4 >= deepAccepted)
-                throw new IllegalStateException("shallow kelp was not thinned: " + target.id);
+            if (shelfAccepted != 0 || deepAccepted == 0 || transitionAccepted > deepAccepted)
+                throw new IllegalStateException("coordinate kelp littoral gate failed: " + target.id);
             if (rows.length() > 0) rows.append(',');
             rows.append("\"").append(target.id).append("\":{\"nativePlantBlocks\":")
                     .append(plants).append(",\"fixedCandidates\":")
                     .append(VanillaKelpPlacementPolicy.CANDIDATES_PER_CHUNK)
                     .append(",\"oneBlockNativeStalks\":").append(oneBlockStalks)
-                    .append(",\"shallowNativeStalks\":").append(shallowStalks)
-                    .append(",\"deepNativeStalks\":").append(deepStalks)
-                    .append(",\"shallowAccepted\":").append(shallowAccepted)
+                    .append(",\"shelfSixNativeStalks\":").append(shelfSixStalks)
+                    .append(",\"transitionSevenNativeStalks\":").append(transitionSevenStalks)
+                    .append(",\"deepTwelveNativeStalks\":").append(deepTwelveStalks)
+                    .append(",\"shelfSixAccepted\":").append(shelfAccepted)
+                    .append(",\"transitionSevenAccepted\":").append(transitionAccepted)
                     .append(",\"deepAccepted\":").append(deepAccepted)
                     .append(",\"customChainRejected\":true,\"dryRejected\":true,"
                             + "\"excludedBiomeRejected\":true}");
@@ -146,6 +149,15 @@ final class VanillaKelpAudit {
         for (int x = -4; x < 4; x++) for (int z = -4; z < 4; z++)
             feature.placeWithBiomeCheck(world, generator,
                     RandomSource.create(991L + x * 103L + z), new BlockPos(x * 16, 64, z * 16));
+    }
+
+    /** The virtual floor is Y=63, so waterTop yields exactly waterTop-64 cells. */
+    private static int placeAtDepth(PlacedFeature feature, VirtualOcean ocean,
+                                    net.minecraft.world.level.chunk.ChunkGenerator generator, int depth) {
+        ocean.blocks.clear();
+        ocean.waterTop = 64 + depth;
+        placeGrid(feature, ocean.world, generator);
+        return stalks(ocean.blocks);
     }
 
     private static int stalks(Map<BlockPos, BlockState> blocks) {

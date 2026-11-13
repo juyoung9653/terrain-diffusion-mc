@@ -36,6 +36,7 @@ import net.minecraft.world.level.levelgen.feature.configurations.RandomPatchConf
 import net.minecraft.world.level.levelgen.feature.configurations.SimpleBlockConfiguration;
 import net.minecraft.world.level.levelgen.feature.stateproviders.BlockStateProvider;
 import net.minecraft.world.level.levelgen.placement.PlacedFeature;
+import net.minecraft.world.level.levelgen.placement.BiomeFilter;
 
 /** Deterministic native-provider, canopy-heightmap, and restored real-world survival checks. */
 public final class GreeneriesDensityAudit {
@@ -90,8 +91,10 @@ public final class GreeneriesDensityAudit {
                 RandomSource random = RandomSource.create(0x475245454E45524CL);
                 for (int i = 0; i < TRIALS; i++) {
                     ground.blocks.clear();
+                    BlockPos samplePos = virtualPos.offset(Math.floorMod(i, 50) - 25, 0,
+                            Math.floorDiv(i, 50) - 20);
                     if (GreeneriesNativePatchScope.place(() -> placePlant(simple, ground.world,
-                            level, random, virtualPos))) accepted++;
+                            level, random, samplePos))) accepted++;
                 }
                 float chance = GreeneriesSoilPolicy.acceptance(support);
                 // Expected categories are independent of production tag membership.
@@ -106,6 +109,27 @@ public final class GreeneriesDensityAudit {
                 rows.add("{\"support\":\"" + supportId + "\",\"accepted\":" + accepted
                         + ",\"trials\":" + TRIALS + ",\"expected\":" + expected + "}");
             }
+            // The native patch can revisit a column. Soil acceptance must be a
+            // coordinate decision, independent of retry order and its RNG stream.
+            ground.support = Blocks.COARSE_DIRT.defaultBlockState();
+            ConfiguredFeature<?, ?> fixedPlant = new ConfiguredFeature<>(Feature.SIMPLE_BLOCK,
+                    new SimpleBlockConfiguration(BlockStateProvider.simple(Blocks.SHORT_GRASS)));
+            ground.blocks.clear();
+            boolean firstAcceptance = GreeneriesNativePatchScope.place(() -> placePlant(fixedPlant,
+                    ground.world, level, RandomSource.create(1), virtualPos));
+            for (int attempt = 2; attempt <= 64; attempt++) {
+                ground.blocks.clear();
+                int retry = attempt;
+                boolean repeatedAcceptance = GreeneriesNativePatchScope.place(() -> placePlant(fixedPlant,
+                        ground.world, level, RandomSource.create(retry), virtualPos));
+                if (repeatedAcceptance != firstAcceptance) failures.add("coordinate_retry");
+            }
+            ground.blocks.clear();
+            RandomSource guardRandom = RandomSource.create(0x5EEDL);
+            RandomSource untouchedRandom = RandomSource.create(0x5EEDL);
+            GreeneriesNativePatchScope.place(() -> placePlant(fixedPlant, ground.world, level,
+                    guardRandom, virtualPos));
+            if (guardRandom.nextLong() != untouchedRandom.nextLong()) failures.add("coordinate_rng_consumed");
             // Scope must not thin vanilla/TD base SimpleBlockFeature calls, nor vanilla biomes.
             ground.support = Blocks.COARSE_DIRT.defaultBlockState();
             for (int i = 0; i < 100; i++) {
@@ -193,7 +217,7 @@ public final class GreeneriesDensityAudit {
                 biomeRows.add("{\"biome\":\"" + biomeId + "\",\"features\":{" + String.join(",", featureCounts)
                         + "},\"order\":[" + orderedFeatures + "]}");
             }
-            if (biomeCount != 15) failures.add("biome_count:" + biomeCount);
+            if (biomeCount != 19) failures.add("biome_count:" + biomeCount);
 
             if (!level.hasChunk(chunkX, chunkZ)) throw new IllegalStateException("fixture_chunk_not_loaded");
             int x = chunkX * 16 + 8, z = chunkZ * 16 + 8;
@@ -250,10 +274,9 @@ public final class GreeneriesDensityAudit {
                 }
             }
 
-            // Opt-in FULL ServerLevel integration fixture. Exercise the registered native placed
-            // feature so its real in-square, heightmap, biome, provider, and patch filters run.
-            // This proves the final-heightmap overlay ignores leaves; it does not attribute
-            // fresh FEATURES-stage density, where WORLD_SURFACE_WG is frozen after CARVERS.
+            // Opt-in FULL ServerLevel integration fixture. The synthetic platform has no
+            // decoration biome context, so remove only the placed feature's BiomeFilter. Its
+            // count, in-square, heightmap, rarity, provider and random-patch path still run.
             int minX = chunkX * 16, minZ = chunkZ * 16;
             int highest = level.getMinBuildHeight();
             for (int dx = 0; dx < 16; dx++) for (int dz = 0; dz < 16; dz++)
@@ -325,7 +348,10 @@ public final class GreeneriesDensityAudit {
             BlockPos origin, int supportY, int canopyY, BlockState support, BlockState floor,
             boolean canopy, List<Long> seeds, Map<BlockPos, BlockState> originals) {
         BlockState leaves = Blocks.OAK_LEAVES.defaultBlockState().setValue(LeavesBlock.PERSISTENT, true);
-        for (int dx = 0; dx < 16; dx++) for (int dz = 0; dz < 16; dz++) {
+        // RandomPatch may spread beyond the outer in-square's 16x16 origins.
+        // Back up and restore that margin as part of the temporary platform.
+        int margin = 8;
+        for (int dx = -margin; dx < 16 + margin; dx++) for (int dz = -margin; dz < 16 + margin; dz++) {
             int x = origin.getX() + dx, z = origin.getZ() + dz;
             fixtureBlock(level, originals, new BlockPos(x, supportY, z), support);
             fixtureBlock(level, originals, new BlockPos(x, supportY + 1, z), floor);
@@ -335,9 +361,11 @@ public final class GreeneriesDensityAudit {
         int plants = 0;
         Map<ResourceLocation, Integer> species = new HashMap<>();
         for (long seed : seeds) {
-            feature.placeWithBiomeCheck(level, level.getChunkSource().getGenerator(),
+            PlacedFeature withoutBiomeFilter = new PlacedFeature(feature.feature(), feature.placement().stream()
+                    .filter(modifier -> !(modifier instanceof BiomeFilter)).toList());
+            withoutBiomeFilter.place(level, level.getChunkSource().getGenerator(),
                     RandomSource.create(seed), origin);
-            for (int dx = 0; dx < 16; dx++) for (int dz = 0; dz < 16; dz++) {
+            for (int dx = -margin; dx < 16 + margin; dx++) for (int dz = -margin; dz < 16 + margin; dz++) {
                 BlockPos pos = new BlockPos(origin.getX() + dx, supportY + 1, origin.getZ() + dz);
                 BlockState state = level.getBlockState(pos);
                 if (!state.equals(floor)) {

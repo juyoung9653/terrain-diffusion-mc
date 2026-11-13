@@ -8,7 +8,7 @@ import java.util.HexFormat;
 
 /** Versioned, bounded binary format; no Minecraft dependencies. Floats retain raw bits. */
 public final class TerrainReplayCodec {
-    private static final int MAGIC = 0x54445452, VERSION = 1;
+    private static final int MAGIC = 0x54445452, VERSION = 2;
     public static final int MAX_BYTES = 128 * 1024 * 1024;
     public record Key(String snapshotId, long seed, int scale, int i1, int j1, int i2, int j2) {
         public Key {
@@ -44,7 +44,7 @@ public final class TerrainReplayCodec {
             if (ecology) {
                 int cells = key.width() * key.height();
                 writeShorts(out, tile.ecologyIds(), 2, cells);
-                if (tile.ecologyValues().length != 5) throw new IOException("Invalid ecology plane count");
+                if (tile.ecologyValues().length != 6) throw new IOException("Invalid ecology plane count");
                 for (float[] plane : tile.ecologyValues()) {
                     if (plane == null || plane.length != cells) throw new IOException("Invalid ecology dimensions");
                     for (float value : plane) out.writeInt(Float.floatToRawIntBits(value));
@@ -78,8 +78,8 @@ public final class TerrainReplayCodec {
             if (flag(in)) {
                 int cells = expected.width() * expected.height();
                 ids = readShorts(in, 2, cells);
-                if (ids == null || (long)cells * 20 > in.available()) throw new IOException("Incomplete ecology payload");
-                values = new float[5][cells];
+                if (ids == null || (long)cells * 24 > in.available()) throw new IOException("Incomplete ecology payload");
+                values = new float[6][cells];
                 for (float[] plane : values) for (int i = 0; i < cells; i++) plane[i] = Float.intBitsToFloat(in.readInt());
             }
             if (in.available() != 0) throw new IOException("Trailing terrain snapshot payload");

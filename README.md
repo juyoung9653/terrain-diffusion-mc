@@ -292,6 +292,28 @@ previous profile; installing the JAR does not rewrite saved rivers. See the
 [Streams integration setup and validation](tools/streams_probe/README.md).
 The Streams mod is installed separately.
 
+Streams **2.17.1** uses its original engine with TD natural river profile **V14**
+in fresh TD worlds. TD supplies exact host terrain, binds asynchronous samplers,
+and restores sparse watershed/source selection, connected river hierarchy and
+shallow grades after native routing. The effective watershed is pinned before
+engine construction and native graph storage is isolated under `td-natural-v14`.
+Native carving remains in Streams; legacy private carver and planform hooks are
+not enabled. Both native short and tall seagrass writes use TD's existing
+seeded placement guard. Existing disabled-profile worlds retain native rivers;
+enabled V1-V13 worlds are not migrated to 2.17.1. Use a fresh world for V14.
+Terrain Slabs 3.1.2 and Snow Real Magic 12.2.5 keep their separate integrations.
+
+In natural TD overworlds, tree ground decoration preserves existing ground under
+water. Terralith's grass-producing `AlterGroundDecorator` can otherwise repaint
+Streams' completed mud bed as grass. The guard is limited to that decorator's
+ground write; dry ground decoration, trees, water and channel geometry retain
+their existing handling. This affects new generation, not already saved chunks.
+
+Towns and Towers' `village_beach` generates at `FLUID_SPRINGS`, so the automatic
+surface-structure filter does not select it. Set its per-structure `surfaceMode`
+to `SURFACE` to use the existing bounded, rounded terrain adaptation in fresh
+starts. This does not change village distribution.
+
 New TD worlds with Streams **2.16.2** use natural river profile **V13**.
 It retains V11's gentle bends in narrow straight runs of at least 32 blocks, with at most four
 blocks of lateral movement. Junctions, source/outlet endpoints and water grades
@@ -651,11 +673,21 @@ substrates. Streams 2.13.8 bank correction wraps only its exposed top write,
 using local water observations and the same climate/material field. Depth fills
 and water geometry are unchanged; unsupported falling material becomes coarse dirt.
 
-Generated seagrass has separate vanilla and audited Streams 2.13.8 placement
-guards in natural TD worlds. Submerged patches vary with seed, depth, substrate
-and freshwater/marine context; exposed beach receives no seagrass. Tall pairs
-are accepted or rejected together. This does not remove saved or player-placed
-plants and does not change coral, kelp, or ordinary Greeneries grass.
+Generated seagrass has separate vanilla and audited Streams placement
+guards in natural TD worlds. Marine beds use local water-column depth (up to
+32 blocks) and the terrain's existing 96-block open-water ring as a shelter
+proxy, not simulated waves. Exposed shallow sand is strongly thinned; sheltered
+shallows retain patches. Cover rises smoothly toward the 8–16-block shelf and
+fades from 16 to 32 blocks, without a depth-12 boundary. Tall seagrass is a
+subset of the same beds and both halves are accepted or rejected together.
+Freshwater short seagrass retains its existing policy, independent of sea level.
+Generated sea pickles have a separate warm-marine policy: small reef colonies
+and very rare bare-sand placements. Both the standalone and coral feature writers
+are guarded; coral block/fan writes pass through. This does not remove saved or
+player-placed plants or change kelp or ordinary Greeneries grass.
+Streams 2.17.1's direct seagrass writer is included in this policy.
+The retained exposure field survives ecology crop/eviction and diagnostic terrain
+replay; binary terrain snapshots are now v2 and old snapshots must be re-recorded.
 
 Ecology IDs now include `snowy_boreal_forest`, `temperate_rainforest`,
 `montane_forest` and `steppe` under `terrain-diffusion-mc:ecology/`. These are real
@@ -673,7 +705,7 @@ apron and material transition grow with river width and use coherent variation;
 source, junction, structure and non-soil guards remain. Saved bank blocks are not
 rewritten. Earlier river profiles retain their previous bank geometry.
 
-With Greeneries on NeoForge, the 15 ecology biomes use their original source
+With Greeneries on NeoForge, the 19 ecology biomes use their original source
 biomes' non-tree vegetation, including flowers, and Greeneries' native providers.
 The former TD grass/fern substitution pool and simultaneous climate groundcover
 pass are removed. Base vegetation runs in BEFORE_EVERYTHING, before the mod's
@@ -687,11 +719,18 @@ providers, patch tries, counts, rarity and biome filters are unchanged. The seve
 Greeneries resource overrides apply in every biome using those features; the
 restored vanilla copies and soil thinning remain TD-specific.
 
-Native grass/fern attempts, including five overridden vanilla worldgen providers,
-are accepted at 100% on grassy substrates, 50% on ordinary soil and 10% on barren
-soil. Bonemeal and original vanilla flower providers are not thinned. These are attempt probabilities, not
-percentages of the ground guaranteed to contain grass; vanilla survival and patch
-placement still apply. Sand, red sand, their slabs and waterlogged supports are
+Native grass/fern placements, including five overridden vanilla worldgen providers,
+use a stable world-seed and block-coordinate acceptance mask: 100% on grassy
+substrates, 50% on ordinary soil and 10% on barren soil. Retrying the same column
+cannot turn a rejection into acceptance, and thinning does not consume the native
+patch RNG. These are eligible-column proportions, not guaranteed grass coverage.
+The surface pass reapplies the same decision when neighbouring vegetation arrived
+before grass soil became coarse dirt or another substrate. This extends the
+existing sand cleanup and removes both halves of rejected tall plants. The audited
+Streams 2.17.1 direct grass/fern writers use the same decision. Reconciliation is
+enabled only with the matching NeoForge/Greeneries placement hooks.
+Vanilla survival and patch placement still apply. Bonemeal and original vanilla
+flower providers are not thinned. Sand, red sand, their slabs and waterlogged supports are
 excluded. Native configured providers remain registry references. To avoid feature
 order cycles, placed-feature definitions are copied from vanilla 1.21.1 under
 `terrain-diffusion-mc:greeneries_native/`; packs replacing those placement definitions
@@ -917,7 +956,9 @@ to open because saved chunk NBT must be scanned.
 
 Defaults allow a maximum 112-block radius around the start chunk center, try up to nine
 local jigsaw origins within that chunk (maximum offset seven blocks), and permit
-at most two blocks of cutting and three blocks of filling. Foundations blend over
+at most three blocks of cutting and four blocks of filling. Existing worlds retain
+their pinned terrain limits, including explicit two-cut/three-fill settings;
+changing these defaults does not migrate saved structure policies. Foundations blend over
 12 blocks; affected terrain and village paths are checked for at most one block of
 rise over two horizontal blocks, with integer stair steps. Unsuitable candidates
 are rejected before placement. `reservationRadiusBlocks` can be increased for large
@@ -1084,7 +1125,9 @@ Lush's configured feature and original count-40 placement chain; the distinct
 holder prevents cross-biome feature-order cycles. Each attempted plant then uses
 the actual target biome and shared soil categories, with a Lush-specific ordinary-soil rate:
 100% on grassy soil, 30% on ordinary soil, 10% on barren soil, and 0% on sand or
-fluid-bearing support. The shared soil tags include the supported Immersive
+fluid-bearing support. This uses the same seed/coordinate mask as Greeneries
+and surface reconciliation, so repeated Lush attempts cannot bypass a rejection.
+The shared soil tags include the supported Immersive
 Weathering and Terrain Slabs variants, and one decision covers both halves of a
 tall plant. Other Lush versions fail closed. Installations without Greeneries
 retain the previous TD suppression, while Lush's rocks, mushrooms, non-TD
@@ -1144,9 +1187,12 @@ noise count is replaced with 64 candidates and seed/species-specific continuous
 world-coordinate thinning in natural-biome TD Overworlds. The original
 120/80 or 80/80 noise count, `in_square`, `OCEAN_FLOOR_WG`, `biome` chain must
 match; custom chains retain their rules. Native water, support and biome checks
-still apply. At depths 1/2/3/4, the normal placement probability is multiplied by
-0.08/0.18/0.40/0.70; five or more water blocks keep the original deep-water
-probability. Only the candidate column is inspected, at most five blocks upward.
+still apply. Shallow shelves with at most six water blocks receive no kelp;
+depths seven through twelve smoothly restore the original deep-water probability.
+Only the candidate column is inspected, at most twelve blocks upward. This is a
+depth-based shelf policy, not a measurement of horizontal distance from land.
+Hybrid Aquatic's tall `bull_kelp` uses the same shelf exclusion; its shorter
+`delesseria` and `sargassum` retain their existing placement policy.
 This changes density and new generation only, not saved kelp.
 
 Streams 2.16.2 can carve a two-block water column where its immutable plan calls
@@ -1360,6 +1406,10 @@ Run the focused checks from the repository root (replace the JAR argument):
 python -B tools/test_terralith.py --jar "path/to/Terralith_1.21.1_v2.6.2_Neoforge.jar"
 ```
 
+The runner validates the supplied Terralith JAR, a real JDK 21 and writable
+workspace `.tmp` before compilation. It selects the local JDK automatically and
+sets Python and Java temporary directories for every child process, avoiding
+Windows Java forwarding shims and restricted system temporary directories.
 Use `--java-home` for a specific JDK and `--vanilla` for a vanilla 1.21.1 client JAR
 outside the default Gradle cache. This runs the standalone Java selector checks,
 generator regression tests, and feature-order checks in both mod resource orders.
@@ -1769,6 +1819,8 @@ all six scales; the nine-profile model atlas covered three seeds at scales
 
 ## Repeatable local validation
 
+### Offline checks
+
 Run only the relevant independent checks, with one launcher owning their output
 directories. For example:
 
@@ -1798,7 +1850,10 @@ other checks. A shared geometry/config change needs the union of affected rows.
 | Changed area | Starting checks |
 | --- | --- |
 | Village distribution and group selection | `village config` |
-| Structure spacing, foundations or component geometry | `placement component config` |
+| Structure spacing or component geometry | `placement component config` |
+| Native structure-height sharing | `height-cache` |
+| Natural floor support repair | `foundation-support placement component` |
+| Deep-water structure site admission | `structure-site` |
 | Basic-village template/pool generation | `basic-villages component village` |
 | Moss processor geometry | `moss` |
 | Streams structure preflight | `preflight` with `--streams-jar` |
@@ -1825,6 +1880,20 @@ when optimizing this path; malformed numeric lists must still fail validation.
 Profile repeated parsing and avoidable writes before adding a persistent cache
 whose invalidation would need to cover sources, tools and dependencies.
 
+### Fixtures and reproductions
+
+Reproduce a reported mod interaction with the installed mod set, world settings
+and cache policy before reducing the fixture. A clean sample without a reproduced
+baseline or exercised repair is observation, not fix verification. Streams
+launchers check the patched runtime target; a vanilla compile JAR cannot establish
+NeoForge injection compatibility. For apparent grids or texture regressions,
+distinguish placement from rendering using saved coordinates, actual plant/support
+blocks and generation order before replacing models.
+
+Default to dedicated workspace fixtures. If the user requests same-instance
+testing, use a separately named copied world inside that instance, never the
+original player save. The density runner below requires its workspace layout.
+
 Prepared density fixtures must be real directories directly under
 `build/structure-density/<name>`, containing `server.properties`, `eula.txt`, the
 required mods/config/models, and matching world metadata. No player-save paths,
@@ -1841,8 +1910,10 @@ Prepare a fresh-chunk copy from an existing **workspace diagnostic fixture**:
 python tools/structure_placement/prepare_fixture.py --source build/<source-fixture> --target build/structure-density/trial --center 108,20 --radius 40
 ```
 
-This copies mods, config, models, known probe controls, world metadata and any
-existing river cache. It requires `world/level.dat` and canonical
+This copies mods, config, models, known probe controls, world metadata, world
+datapacks and any existing river cache. Enabled fixture datapacks must accompany
+`level.dat`; otherwise a controlled support fixture can silently produce zero
+starts. It requires `world/level.dat` and canonical
 `level-name=world`; it never copies generated chunks or the saved structure index.
 Center/radius inherit the source controls, falling back to the probe defaults
 of `0,0` and `96`. Optional order/support controls retain their source settings.
@@ -1865,8 +1936,14 @@ not validate a routing fix. Use a separate fixture without that graph for it.
 The Streams suite checks this layout before launching any job, under the shared
 lock. It verifies declared mod hashes, and unrun fixtures' declared config and
 copied-state hashes. Use `--expect-river-cache fresh` for an unrun world without
-graphs, or `present` to require saved graphs. Omit it for ordinary runs that do
-not constrain cache state. `--preflight-only` performs these checks without Java.
+graphs, or `present` to require saved graphs. New fixtures prepared with
+`prepare_fixture.py --family streams-probe` carry the source runtime identity and
+the actual copied-cache policy automatically; missing runtime metadata fails before
+copying. The first launch checks all copied hashes even when `level.dat` was copied.
+An explicit conflicting cache option is rejected. Later generated-world restarts
+inspect current cache state and continue checking mod hashes. For older fixtures,
+omitting the option leaves cache state unconstrained. `--preflight-only` runs the
+same checks without starting Gradle or Minecraft (some checks use JDK tools).
 
 For coordinate reproductions, `--block-sites=-1713,-1745;-2148,-1722` derives
 chunks using floor division, including negative coordinates. If `--chunks` is
@@ -1892,6 +1969,8 @@ not establish a saved-world change. Other changed or missing fields fail. This
 check covers sampled surface columns, not every block in the world. Malformed
 receipt checks become failed suite results rather than leaving an active status.
 
+### Probe execution and evidence
+
 ```text
 python tools/structure_placement/run_suite.py --gradle-user-home .gradle --prefetch 8 build/structure-density/before build/structure-density/after
 python tools/structure_placement/run_suite.py --gradle-user-home .gradle --shore-audit --verify-support build/structure-density/trial
@@ -1908,6 +1987,15 @@ polling. Windows children are launched without console windows. The lock coordin
 these runners, not direct Gradle commands or a child left by a forcibly killed
 parent. Keep other builds and GPU probes out of an active suite.
 
+Review diagnostic callers and emitted artifacts, including delegated changes:
+measurements must occur after the claimed lifecycle phase and refreshed values
+must reach the final receipt. Distinguish plans, initial snapshots and post-tick
+physical blocks. CSV shape checks cannot establish these semantics or visual
+acceptance. Inspect task-specific processes after interruption before retrying;
+never stop unrelated Java/game processes or edit compiled sources during a run.
+
+### Density measurements
+
 Density additionally supports `--shore-audit` and `--prefetch 1..32`; default prefetch
 remains eight. Prefetch controls pending chunk requests, not a thread count. Receipts
 record `availableProcessors`, `processCpuTimeDeltaSeconds`,
@@ -1917,6 +2005,10 @@ it excludes launcher/Gradle startup and is not a GPU utilization metric. Unsuppo
 CPU counters are JSON null. Average utilized cores are CPU seconds divided by wall
 seconds, normalized against logical processors for the percentage.
 
+The local host has 16 physical / 32 logical CPUs. Available processors and runnable
+threads do not establish utilization; historical logs without CPU-time counters
+cannot prove full utilization. GPU execution intentionally serializes.
+
 `chunkCensusObserverSeconds` separates submission round trips, future waits,
 ticket cleanup, direct chunk fetches and result scanning. These are elapsed times
 observed by the diagnostic thread, including scheduling and blocking; they do not
@@ -1925,10 +2017,10 @@ executor counter deltas for tasks, cumulative queue time and execution time duri
 the census. Overlapping task waits must not be added to observer times or read as
 GPU utilization. Serialization also has a separate phase timer.
 Density batch tickets are admitted on the server thread, while future requests
-use the public off-thread API from the audit worker. Calling that API on the
-server thread would block each request before submitting the next one. Results
-are still consumed in the configured owner order and tickets are cleaned up in
-`finally`.
+use the public off-thread API from the audit worker.
+`ServerChunkCache.getChunkFuture` managed-blocks on the server thread, so wrapping
+the whole request loop in `server.submit` silently serializes the batch. Results
+are consumed in the configured owner order and tickets are cleaned up in `finally`.
 
 Census, native locate, saved-index and serialization checks already share one
 server lifecycle. Add `--verify-support` to verify physical foundations, or
@@ -1941,6 +2033,14 @@ samples compare classifier outputs and are not a full river-block or visual audi
 Combine these options when the same fixture/area serves the checks, rather than
 launching one server per check. Separate seeds, settings and cold-cache comparisons
 still need independent fixtures.
+
+For zero-start village censuses, inspect the selected owner and rejection or
+defeating rival before widening bounds or biome eligibility. Enable the existing
+cache trace with `trace-village-choices.txt`. Isolate competing structures only
+for support tests, and do not report those fixtures as production density evidence.
+Preserve both fixed-area and land-coverage measurements and report sample counts
+and censoring. Candidate spacing is not realized mean spacing; a 70% draw among
+viable groups does not guarantee 70% accepted villages in each region.
 
 The support probe also reports `support.heightCacheAudit`: in one JVM it alternates
 uncached and shared native-height plans for an accepted village, with fresh local
@@ -1966,14 +2066,41 @@ Minecraft startup costs. Reuse a populated Gradle user home and avoid routine
 clean builds. Inspect the final release JAR for diagnostic classes/resources after
 using an init script.
 
+### Builds and installation
+
 For the local Windows NeoForge CUDA disk-library build, use
 `python -B tools/build_neoforge.py`. It sets `JAVA_HOME` to the local JDK 21 and
 `GRADLE_USER_HOME` to the repository `.gradle`, passes NeoForge `21.1.249` as one
 argument, and shares the probe lock. Explicit `--java-home` and
 `--gradle-user-home` overrides are supported; invalid paths and unsafe Windows
 batch arguments stop before Gradle. Add `--check-only` to inspect the resolved
-command and paths without building. This entry point builds artifacts only;
-installation and final JAR inspection remain separate steps.
+command and paths without building. The build rejects diagnostic classes/resources
+in its output JAR. Installation remains a separate explicit step.
+
+The probe suite now writes `validation-evidence.json` in each fixture automatically.
+It binds a successful process and checked result to the production source contents
+(including uncommitted files), prepared-input manifest hash, launch command and JDK
+path. Production sources or the manifest changing during a run make it fail. This
+is provenance, not a claim that the fixture covers the complete installed modpack.
+
+For an installable build, pass `--validation <fixture>/validation-evidence.json`
+to `tools/build_neoforge.py`, repeating the option for all reviewed required runs.
+Stale source/result evidence stops before Gradle. After a successful build, the
+tool checks again and writes `<mod.jar>.validation.json` beside the JAR, binding
+its exact hash to those results. A build without this option is still available
+for development, but has no validated-install permission.
+
+Use `tools/memory_probe/disk_libraries.py RECEIPT LIBRARY MOD --install-mods DIR`
+for local disk-library updates. Under the shared lock it checks the validation
+sidecar, current sources, original result hashes and ONNX pairing before creating
+destination files. Keep the original fixture evidence available until installation;
+a rerun replacing that evidence invalidates the older build. Earlier runs have no
+such receipts and are not retroactively certified. Manual file copies and the
+separate initial memory-package migration are outside this update guard. Which
+tests are required, runtime/modpack coverage, measurement semantics and visual
+acceptance still require review; one successful probe does not prove all of them.
+
+### Terrain replay
 
 For repeated **structure-only** iterations, record the terrain inputs once and
 replay them in a separate fresh fixture:
@@ -2023,10 +2150,13 @@ python -m unittest tools.structure_placement.test_terrain_snapshot
 python tools/structure_placement/run_terrain_replay_tests.py
 ```
 
+### Launcher regression checks
+
 The runner contracts and telemetry can be checked without starting Minecraft:
 
 ```text
 python -m unittest tools.test_probe_suite tools.structure_placement.test_run_fast_tests
+python -m unittest tools.structure_placement.test_java_test_support
 python -m unittest tools.structure_placement.test_prepare_fixture
 python tools/structure_placement/run_density_telemetry_tests.py
 ```

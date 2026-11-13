@@ -26,7 +26,7 @@ public final class StreamsStartupPolicy {
         var world = level.getServer().getWorldPath(LevelResource.ROOT);
         if (!StreamsStructureShieldMixinPlugin.hasStartupAdapter()) {
             if (StreamsStartupState.hasMarker(world)) throw new IllegalStateException(
-                    "This world's exact Streams terrain sampler requires an audited Streams Reflowing adapter (2.13.8, 2.15.2 or 2.16.2)");
+                    "This world's exact Streams terrain sampler requires an audited Streams Reflowing adapter (2.13.8, 2.15.2, 2.16.2 or 2.17.1)");
             return;
         }
         try {

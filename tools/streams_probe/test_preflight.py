@@ -30,8 +30,11 @@ class PreflightTest(unittest.TestCase):
         (self.run / "mods").mkdir()
         (self.run / "config").mkdir()
         (self.run / "server.properties").write_text("level-name=world\n")
-        self.manifest = {"mods": [], "configs": {}}
+        self.manifest = {"mods": [], "configs": {}, "neoforge": "21.1.249"}
         self.write_manifest()
+        guard = mock.patch.object(cli, "validate_tree_ground_runtime", return_value={"calls": 1})
+        self.runtime_guard = guard.start()
+        self.addCleanup(guard.stop)
 
     def write_manifest(self):
         (self.run / "input-manifest.json").write_text(json.dumps(self.manifest))
@@ -60,6 +63,38 @@ class PreflightTest(unittest.TestCase):
         (cache / "tile.srt").write_bytes(b"graph")
         self.assertEqual(validate_fixture(self.run, "present")["cacheFiles"], 1)
         with self.assertRaisesRegex(ValueError, "fresh routing"): validate_fixture(self.run, "fresh")
+
+    def test_prepared_fixture_contract_checks_copied_inputs_before_launch(self):
+        mod = self.run / "mods/streams.jar"
+        mod.write_bytes(b"mod")
+        server_hash = hashlib.sha256((self.run / "server.properties").read_bytes()).hexdigest()
+        self.manifest.update({"preparedFreshChunks": True, "riverCachePolicy": "fresh",
+                              "sha256": {"server.properties": server_hash,
+                                         "mods/streams.jar": hashlib.sha256(b"mod").hexdigest()}})
+        self.write_manifest()
+        self.assertEqual(validate_fixture(self.run)["routingEvidence"], "fresh")
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            validate_fixture(self.run, "present")
+        mod.write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "hash mismatch"):
+            validate_fixture(self.run)
+        mod.write_bytes(b"mod")
+        cache = self.run / "world/streamsreflowing"
+        cache.mkdir()
+        (cache / "tile.srt").write_bytes(b"graph")
+        with self.assertRaisesRegex(ValueError, "fresh routing"):
+            validate_fixture(self.run)
+        (cache / "tile.srt").unlink()
+        cache.rmdir()
+        (self.run / "world/region").mkdir()
+        (self.run / "world/level.dat").write_bytes(b"initialized")
+        cache.mkdir()
+        (cache / "tile.srt").write_bytes(b"graph")
+        self.assertEqual(validate_fixture(self.run, "present")["effectiveCachePolicy"], "present")
+        self.assertIsNone(validate_fixture(self.run)["effectiveCachePolicy"])
+        mod.write_bytes(b"changed-again")
+        with self.assertRaisesRegex(ValueError, "hash mismatch"):
+            validate_fixture(self.run)
 
     def test_declared_inputs_and_copied_state_must_match(self):
         mod = self.run / "mods/streams.jar"
@@ -90,6 +125,30 @@ class PreflightTest(unittest.TestCase):
         (self.run / "server.properties").write_text("level-name=other\n")
         with self.assertRaisesRegex(ValueError, "level-name"): validate_fixture(self.run)
 
+    def test_legacy_generated_world_keeps_restart_support(self):
+        (self.run / "world/level.dat").write_bytes(b"existing")
+        (self.run / "world/region").mkdir()
+        (self.run / "world/streamsreflowing").mkdir()
+        (self.run / "world/streamsreflowing/graph.srt").write_bytes(b"graph")
+        self.assertEqual(validate_fixture(self.run, "present")["routingEvidence"], "saved")
+        self.assertEqual(validate_fixture(self.run)["routingEvidence"], "saved")
+        with self.assertRaisesRegex(ValueError, "fresh routing"):
+            validate_fixture(self.run, "fresh")
+
+    def test_automatic_fresh_policy_still_requires_fresh_network_evidence(self):
+        self.manifest["riverCachePolicy"] = "fresh"
+        self.write_manifest()
+        args = SimpleNamespace(chunks="0,0", expect_river_cache=None, surface_audit=False,
+                               verify_restart=False, natural_rivers="true")
+        prepare, check = cli.surface_checks(self.run, args, cli.streams_receipt)
+        prepare()
+        receipt = self.run / "world/td-streams-probe.jsonl"
+        receipt.write_text('{"event":"complete","status":"success"}\n')
+        with (mock.patch.object(cli, "streams_profile_receipt", return_value="success"),
+              mock.patch.object(cli, "natural_network_policy_receipt", return_value="missing-network") as network):
+            self.assertEqual(check(receipt), "missing-network")
+            network.assert_called_once_with(receipt)
+
     def test_config_migration_only_allowed_for_initialized_world(self):
         (self.run / "config/streams.properties").write_bytes(b"original")
         self.manifest["configs"] = {"streams.properties": hashlib.sha256(b"original").hexdigest()}
@@ -109,11 +168,41 @@ class PreflightTest(unittest.TestCase):
             self.assertEqual(cli.main(base + ["--preflight-only", "--block-sites=-1713,-1745"]), 0)
             launch.assert_not_called()
 
+    def test_runtime_mismatch_blocks_real_suite_before_child_launch(self):
+        # Exercise the real suite/Job.prepare connection, not only the checker.
+        self.runtime_guard.side_effect = ValueError("runtime target has 0 Context.setBlock calls")
+        with (mock.patch.object(cli, "ROOT", self.root),
+              mock.patch.object(cli, "gradle_command", return_value=["unused-gradle"]),
+              mock.patch("probe_suite.subprocess.Popen") as child):
+            with self.assertRaises(SystemExit) as failure:
+                cli.main(["test", "--gradle-user-home", str(self.root)])
+            self.assertEqual(failure.exception.code, 2)
+            child.assert_not_called()
+        self.assertEqual(self.runtime_guard.call_args.args[0],
+                         self.root / "neoforge/build/moddev/artifacts/neoforge-21.1.249-merged.jar")
+
+    def test_declared_cache_mismatch_blocks_real_suite_before_child_launch(self):
+        self.manifest.update({"preparedFreshChunks": True, "riverCachePolicy": "fresh",
+                              "sha256": {"server.properties": hashlib.sha256(
+                                  (self.run / "server.properties").read_bytes()).hexdigest()}})
+        self.write_manifest()
+        cache = self.run / "world/streamsreflowing"
+        cache.mkdir()
+        (cache / "tile.srt").write_bytes(b"graph")
+        with (mock.patch.object(cli, "ROOT", self.root),
+              mock.patch.object(cli, "gradle_command", return_value=["unused-gradle"]),
+              mock.patch("probe_suite.subprocess.Popen") as child):
+            with self.assertRaises(SystemExit) as failure:
+                cli.main(["test", "--gradle-user-home", str(self.root)])
+            self.assertEqual(failure.exception.code, 2)
+            child.assert_not_called()
+
     def test_cold_audit_arguments_and_fresh_receipt_evidence(self):
         base = ["test", "--gradle-user-home", str(self.root)]
         with (mock.patch.object(cli, "ROOT", self.root),
               mock.patch.object(cli, "run_suite") as launch,
-              mock.patch.object(cli, "gradle_command", side_effect=lambda _, command, __: command)):
+              mock.patch.object(cli, "gradle_command",
+                                side_effect=lambda root, command, daemon, **kwargs: command) as gradle):
             with self.assertRaises(SystemExit):
                 cli.main(base + ["--preflight-only", "--cold-biome-spatial-audit"])
             with self.assertRaises(SystemExit):
@@ -151,6 +240,7 @@ class PreflightTest(unittest.TestCase):
             self.assertIn("-PtdProbe.bankTraceMaxY=156", command)
             self.assertIn("-PtdProbe.planAudit=true", command)
             self.assertIn("-PtdProbe.settleWater=true", command)
+            self.assertEqual(gradle.call_args.kwargs["neoforge_version"], "21.1.249")
         receipt = self.run / "world/td-streams-probe.jsonl"
         receipt.write_text('{"event":"complete","status":"success"}\n'
                            '{"event":"cold_weather_audit","passed":true,"status":"passed"}\n'
@@ -184,6 +274,22 @@ class PreflightTest(unittest.TestCase):
         receipt.write_text(receipt.read_text().replace('"selectedChunks":"1"', '"selectedChunks":"2"'))
         self.assertEqual(cli.native_water_settlement_receipt(receipt, expected={"0,0"}),
                          "native_water_settlement_chunk_count_mismatch")
+
+    def test_network_audit_keeps_fixed_chunk_generation_and_natural_property(self):
+        base = ["test", "--gradle-user-home", str(self.root), "--network-audit",
+                "--natural-rivers=true", "--chunks=0,0", "--plan-audit", "--settle-water"]
+        with (mock.patch.object(cli, "ROOT", self.root),
+              mock.patch.object(cli, "run_suite", return_value=0) as launch,
+              mock.patch.object(cli, "gradle_command",
+                                side_effect=lambda root, command, daemon, **kwargs: command)):
+            self.assertEqual(cli.main(base), 0)
+        command = launch.call_args.args[2][0].command
+        self.assertIn("-PtdRiver.natural=true", command)
+        self.assertIn("-PtdProbe.naturalRiverAudit=true", command)
+        self.assertIn("-PtdProbe.chunks=0,0", command)
+        self.assertIn("-PtdProbe.planAudit=true", command)
+        self.assertIn("-PtdProbe.settleWater=true", command)
+        self.assertNotIn("-PtdProbe.naturalPlanOnly=true", command)
 
     def test_manifest_traversal_rejected(self):
         self.manifest["mods"] = [{"file": "../../secret", "sha256": "f" * 64}]

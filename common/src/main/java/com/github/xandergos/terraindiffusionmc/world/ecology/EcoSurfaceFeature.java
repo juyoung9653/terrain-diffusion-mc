@@ -113,6 +113,14 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         default -> Blocks.GRASS_BLOCK.defaultBlockState();
                     };
                     changed |= replace(level, top, target);
+                    // A neighbouring patch can arrive before this chunk paints its soil.
+                    // Apply the same column decision used for a plant arriving afterwards.
+                    if (GreeneriesSoilPolicy.nativeWorldgenPolicyEnabled()) {
+                        float chance = GreeneriesSoilPolicy.acceptance(level.getBlockState(top))
+                                * FeatureEcologyMath.coldGroundcoverAcceptance(surfaceSample.climate().temperature());
+                        if (!GreeneriesSoilPolicy.acceptsColumn(level.getSeed(), x, z, chance))
+                            changed |= removeUnsupportedGrass(level, top.above());
+                    }
                 }
             }
         }

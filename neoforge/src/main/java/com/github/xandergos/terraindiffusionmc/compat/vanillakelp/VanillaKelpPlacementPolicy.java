@@ -15,13 +15,13 @@ public final class VanillaKelpPlacementPolicy {
 
     public static boolean accept(long worldSeed, long salt, double acceptance,
                                  int blockX, int blockZ) {
-        return accept(worldSeed, salt, acceptance, 5, blockX, blockZ);
+        return accept(worldSeed, salt, acceptance, 12, blockX, blockZ);
     }
 
     /**
-     * Kelp needs open water above its root. Keep sparse pioneer plants on a
-     * shallow sandy shelf, then restore ordinary bed density once a column has
-     * enough water for a grown stalk. The caller caps the local depth read.
+     * Kelp needs open water above its root. Exclude shallow shelves, then restore
+     * ordinary bed density once a column has enough water for a grown stalk. The
+     * caller caps the local depth read.
      */
     public static boolean accept(long worldSeed, long salt, double acceptance, int waterDepth,
                                  int blockX, int blockZ) {
@@ -31,7 +31,7 @@ public final class VanillaKelpPlacementPolicy {
 
     public static double probability(long worldSeed, long salt, double acceptance,
                                      int blockX, int blockZ) {
-        return probability(worldSeed, salt, acceptance, 5, blockX, blockZ);
+        return probability(worldSeed, salt, acceptance, 12, blockX, blockZ);
     }
 
     public static double probability(long worldSeed, long salt, double acceptance, int waterDepth,
@@ -41,14 +41,17 @@ public final class VanillaKelpPlacementPolicy {
         return acceptance * shallowWaterFactor(waterDepth) * smooth(edge);
     }
 
-    /** One- and two-block shore shelves stay sparse; depth five is normal ocean kelp. */
+    /**
+     * Keep the first six water blocks off limits to kelp. This is a bounded
+     * shallow-shelf rule, rather than a mutable nearby-land query: placement
+     * must not depend on whether a neighbouring chunk has already generated.
+     * Density then returns smoothly across the next six blocks, preserving the
+     * original bed field in established deep ocean.
+     */
     public static double shallowWaterFactor(int waterDepth) {
-        if (waterDepth <= 0) return 0.0;
-        if (waterDepth == 1) return 0.08;
-        if (waterDepth == 2) return 0.18;
-        if (waterDepth == 3) return 0.40;
-        if (waterDepth == 4) return 0.70;
-        return 1.0;
+        if (waterDepth <= 6) return 0.0;
+        if (waterDepth >= 12) return 1.0;
+        return smooth((waterDepth - 6) / 6.0);
     }
 
     /** Continuous field in [0, 1), sampled only from world coordinates. */

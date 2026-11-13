@@ -272,10 +272,14 @@ public final class PlacementGeometryTest {
             check(!left.bounds().conflicts(right.bounds(),100),"accepted actual bounds maintain 100 edge gap");
             check(!left.influence().conflicts(right.influence(),0),"accepted terrain influence disjoint");
         }
-        check(PlacementGeometry.boundedEarthwork(70,73,2,3),"fill boundary");
-        check(!PlacementGeometry.boundedEarthwork(70,74,2,3),"fill overflow");
-        check(PlacementGeometry.boundedEarthwork(70,68,2,3),"cut boundary");
-        check(!PlacementGeometry.boundedEarthwork(70,67,2,3),"cut overflow");
+        check(PlacementGeometry.boundedEarthwork(70,73,2,3),"legacy fill boundary");
+        check(!PlacementGeometry.boundedEarthwork(70,74,2,3),"legacy fill overflow");
+        check(PlacementGeometry.boundedEarthwork(70,68,2,3),"legacy cut boundary");
+        check(!PlacementGeometry.boundedEarthwork(70,67,2,3),"legacy cut overflow");
+        check(PlacementGeometry.boundedEarthwork(70,74,3,4),"four-block fill boundary");
+        check(!PlacementGeometry.boundedEarthwork(70,75,3,4),"fill overflow remains rejected");
+        check(PlacementGeometry.boundedEarthwork(70,67,3,4),"three-block cut boundary");
+        check(!PlacementGeometry.boundedEarthwork(70,66,3,4),"cut overflow remains rejected");
         check(PlacementGeometry.supportFloor(107,2)==104,"regression: protect native foundation carved at 104 through 107");
         for (int original=-60;original<320;original+=13) for (int cut=0;cut<=8;cut++) {
             int floor=PlacementGeometry.supportFloor(original,cut);

@@ -26,8 +26,10 @@ METADATA = ("level.dat", "data/terrain_diffusion_world_settings.dat",
             "data/terrain_diffusion_natural_rivers.dat",
             "data/terrain_diffusion_streams_exact_v1.txt",
             "data/terrain_diffusion_hybrid_aquatic.properties")
+WORLD_DATAPACKS = "datapacks"
 MANIFEST = "input-manifest.json"
 NAME = re.compile(r"[A-Za-z0-9_-]+\Z")
+NEOFORGE_VERSION = re.compile(r"\d+\.\d+\.\d+\Z")
 
 
 def _real_components(path: Path, base: Path) -> None:
@@ -138,6 +140,13 @@ def _source_files(source: Path) -> dict[str, Path]:
             if not path.is_file():
                 raise ValueError(f"source metadata is not a file: {path}")
             files[f"world/{name}"] = path
+    datapacks = world / WORLD_DATAPACKS
+    _real_components(datapacks, source)
+    if datapacks.exists():
+        if is_link(datapacks) or not datapacks.is_dir():
+            raise ValueError(f"invalid world datapacks: {datapacks}")
+        for path in _walk_files(datapacks):
+            files[path.relative_to(source).as_posix()] = path
     river_cache = world / "streamsreflowing"
     _real_components(river_cache, source)
     if river_cache.exists():
@@ -146,6 +155,29 @@ def _source_files(source: Path) -> dict[str, Path]:
         for path in _walk_files(river_cache):
             files[path.relative_to(source).as_posix()] = path
     return files
+
+
+def _streams_runtime(source: Path) -> tuple[dict[str, object], str]:
+    """Read only the runtime identity a Streams probe will actually launch."""
+    manifest_path = source / MANIFEST
+    if not manifest_path.is_file() or is_link(manifest_path):
+        raise ValueError("Streams source fixture requires input-manifest.json")
+    try:
+        source_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Streams source input manifest is invalid") from exc
+    if not isinstance(source_manifest, dict):
+        raise ValueError("Streams source input manifest must be an object")
+    neoforge = source_manifest.get("neoforge")
+    if not isinstance(neoforge, str) or not NEOFORGE_VERSION.fullmatch(neoforge):
+        raise ValueError("Streams source input manifest requires numeric neoforge")
+    runtime = {"neoforge": neoforge}
+    for key, value_type in (("seed", int), ("scale", int), ("minecraft", str),
+                            ("streamsVersion", str), ("terralith", bool), ("c2me", bool)):
+        value = source_manifest.get(key)
+        if value is not None and type(value) is value_type:
+            runtime[key] = value
+    return runtime, _sha256(manifest_path)
 
 
 def _check_target(target: Path, expected: set[str]) -> None:
@@ -201,6 +233,10 @@ def prepare(source: Path, target: Path, *, center: str | None = None,
         raise ValueError("radius must be positive")
 
     with exclusive_lock(root):
+        streams_runtime: dict[str, object] | None = None
+        source_manifest_sha256: str | None = None
+        if family_name == "streams-probe":
+            streams_runtime, source_manifest_sha256 = _streams_runtime(source)
         files = _source_files(source)
         # Match the probe's own defaults when no explicit controls are supplied.
         generated = {
@@ -256,6 +292,11 @@ def prepare(source: Path, target: Path, *, center: str | None = None,
         manifest = {"version": 1, "cacheMode": cache_mode,
                     "source": source.relative_to(root).as_posix(),
                     "sha256": dict(sorted(source_hashes.items()))}
+        if streams_runtime is not None:
+            manifest.update(streams_runtime)
+            manifest["sourceManifestSha256"] = source_manifest_sha256
+            manifest["riverCachePolicy"] = "present" if copied_river_cache else "fresh"
+            manifest["preparedFreshChunks"] = True
         encoded = (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
         manifest_path = target / MANIFEST
         if not manifest_path.is_file() or manifest_path.read_bytes() != encoded:

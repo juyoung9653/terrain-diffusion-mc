@@ -91,7 +91,8 @@ public final class TerrainReplayStore {
             var tile = TerrainReplayCodec.decode(key, read(directory.resolve(key.filename())));
             EcologyData ecology = tile.ecologyIds() == null ? null : new EcologyData(key.width(), key.height(),
                     tile.ecologyIds()[0], tile.ecologyIds()[1], tile.ecologyValues()[0], tile.ecologyValues()[1],
-                    tile.ecologyValues()[2], tile.ecologyValues()[3], tile.ecologyValues()[4]);
+                    tile.ecologyValues()[2], tile.ecologyValues()[3], tile.ecologyValues()[4],
+                    tile.ecologyValues()[5]);
             replayed++;
             return new HeightmapData(tile.heightmap(), tile.biomeIds(), tile.terralithBiomeIds(), ecology, key.width(), key.height());
         } catch (IOException | RuntimeException e) {
@@ -111,7 +112,7 @@ public final class TerrainReplayStore {
             short[][] ids = null; float[][] values = null;
             if (data.ecology != null) {
                 if (data.ecology.width != data.width || data.ecology.height != data.height) throw new IOException("Ecology dimensions differ");
-                ids = new short[2][data.width * data.height]; values = new float[5][data.width * data.height];
+                ids = new short[2][data.width * data.height]; values = new float[6][data.width * data.height];
                 for (int z = 0; z < data.height; z++) for (int x = 0; x < data.width; x++) {
                     int at = z * data.width + x;
                     var sample = data.ecology.sample(x, z);
@@ -119,6 +120,7 @@ public final class TerrainReplayStore {
                     values[0][at] = sample.treeCover(); values[1][at] = sample.temperature();
                     values[2][at] = sample.moisture(); values[3][at] = sample.slope();
                     values[4][at] = data.ecology.snowRetention(x, z);
+                    values[5][at] = data.ecology.openWaterFraction(x, z);
                 }
             }
             byte[] bytes = TerrainReplayCodec.encode(key, new TerrainReplayCodec.Tile(data.heightmap, data.biomeIds,

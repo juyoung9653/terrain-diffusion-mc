@@ -7,6 +7,7 @@ import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource
 import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.WorldGenLevel;
 import net.minecraft.world.level.levelgen.Heightmap;
@@ -54,12 +55,16 @@ public final class VanillaKelpPlacementScope {
                 entry.acceptance, waterDepth(level, pos), pos.getX(), pos.getZ());
     }
 
-    /** Inspect only the loaded candidate column; five represents normal/deeper ocean water. */
+    /**
+     * Inspect only the loaded candidate column. The cap matches the policy's
+     * deep-water threshold and fluid state includes water retained by a plant
+     * that an earlier candidate placed in this same feature pass.
+     */
     private static int waterDepth(WorldGenLevel level, BlockPos pos) {
         BlockPos.MutableBlockPos scan = pos.mutable();
         int depth = 0;
-        while (depth < 5 && scan.getY() < level.getMaxBuildHeight()
-                && level.getBlockState(scan).is(net.minecraft.world.level.block.Blocks.WATER)) {
+        while (depth < 12 && scan.getY() < level.getMaxBuildHeight()
+                && level.getFluidState(scan).is(FluidTags.WATER)) {
             depth++;
             scan.move(0, 1, 0);
         }

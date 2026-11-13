@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.terrain.instanceclientprobe.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["ProtoChunkWriteTraceMixin", "LevelChunkWriteTraceMixin"],
+  "injectors": {"defaultRequire": 1}
+}

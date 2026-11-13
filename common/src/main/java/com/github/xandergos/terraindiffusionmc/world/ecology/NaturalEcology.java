@@ -30,6 +30,22 @@ public final class NaturalEcology {
         return surfaceSample(generator, x, z, true);
     }
 
+    /**
+     * Return the exposure captured with the generated ecology tile. Uses the
+     * same canonical tile fetch as surfaceSample so cache eviction or feature
+     * order cannot alter placement.
+     */
+    public static float sampleOpenWaterFraction(ChunkGenerator generator, int x, int z) {
+        var source = TerrainDiffusionBiomeSources.find(generator.getBiomeSource());
+        if (source == null || !source.naturalBiomes() || !source.ecologyShowcase().isEmpty()) return 1F;
+        int size = TerrainDiffusionConfig.tileSize();
+        int x0 = Math.floorDiv(x, size) * size, z0 = Math.floorDiv(z, size) * size;
+        var data = LocalTerrainProvider.getInstance().fetchHeightmap(z0, x0, z0 + size, x0 + size);
+        if (data == null || data.ecology == null)
+            throw new IllegalStateException("Natural ecology tile unavailable");
+        return data.ecology.openWaterFraction(x - x0, z - z0);
+    }
+
     private static SurfaceSample surfaceSample(ChunkGenerator generator, int x, int z, boolean cachedOnly) {
         var source = TerrainDiffusionBiomeSources.find(generator.getBiomeSource());
         if (source == null || !source.naturalBiomes())

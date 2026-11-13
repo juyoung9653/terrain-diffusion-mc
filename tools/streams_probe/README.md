@@ -1,9 +1,122 @@
 # Streams Reflowing integration probe
 
-Opt-in dedicated-server diagnostic for Minecraft 1.21.1 / NeoForge 21.1.249,
-audited Streams Reflowing versions through 2.16.2 and the current Terrain Diffusion source tree. Normal
+Opt-in dedicated-server diagnostic for Minecraft 1.21.1 / NeoForge 21.1.249 (default),
+audited Streams Reflowing versions through 2.17.1 and the current Terrain Diffusion source tree. Normal
 builds do not include the diagnostic Java directory. Do not package a release
 with `probe.init.gradle` enabled.
+
+To match a different installed loader, pass the same `--neoforge-version` to
+`prepare.py` and `run_suite.py`; the runner rejects a manifest/version mismatch.
+NeoForge 21.1.264 also needs its dependencies populated in the repository Gradle
+cache before the offline suite can run.
+
+`run_suite.py` checks the selected patched `neoforge-<version>-merged.jar`
+against the production tree-ground selector before launching any Gradle child,
+including in `--preflight-only` mode. The exact event-aware method descriptor and
+its single `Context.setBlock` invocation must match; missing local artifacts fail
+before launch. A real run records `runtime-preflight.json`. This bytecode check
+does not replace a lifecycle test with the installed mods and Mixin transforms.
+
+Match the player's terrain scale explicitly with `prepare.py --scale 1` (or the
+saved value). The base preset defaults to scale 2: the same seed at a different
+scale does not reproduce coastal heights or biomes. Preparation records both a
+fresh scale marker and, when necessary, a matching world-preset override. Verify
+the saved dimension type and scale marker before comparing screenshot coordinates.
+
+For Streams 2.17.1, run `audit_2171.py`, `test_2171_adapter.py`,
+`test_2171_inference.py`, `test_2171_network.py`, `test_2171_seagrass.py`
+(with `--jar <installed-jar>`) and `test_2171_gate.py` first.
+Prepare a fresh fixture with `--streams-version 2.17.1` and the installed
+`streamsreflowing.properties`. Use `--natural-rivers true` for V14, or `false`
+for an otherwise identical native baseline. The `streams_profile` receipt must
+confirm the requested profile and exact terrain. V14 also requires the observed
+engine config to meet watershed 2048 and accumulation 24 minimums. Existing
+enabled V1-V13 worlds are unsupported; do not copy their markers or caches.
+Fresh V14 checks also require a nonzero completed `natural_network_policy`
+counter with no failures. A matching config alone does not prove the graph hook
+ran: 2.17.1's normal engine calls the five-argument domain builder; its
+six-argument plate-key builder is a different path.
+
+For submerged grass beds, first run `tools/ecology/test_tree_ground.py`.
+The full instance reproduced the November 13 screenshot at `1508,80,171`:
+Streams writes mud, then vanilla `AlterGroundDecorator.placeBlockAt` replaces it
+with grass. Terralith 2.6.2 supplies the grass-producing tree decorators.
+The production hook retains submerged ground only during that tree decorator in
+natural TD overworlds; it does not rewrite Streams' channel or water placement.
+Use `--river-bed-material-audit --settle-water --chunks X,Z;X,Z` on a fresh
+fixture containing an above-sea river. The audit reads physical water supports
+after 100 actual ticks, requires above-sea water coverage and rejects submerged
+grass. Zero material-policy counters mean the sampled generation did not exercise
+the repair; a clean bed alone does not prove that a reported grass bed was fixed.
+Reduced fixtures missed this interaction despite using the same seed and scale.
+The actual 287-mod instance, with copied world settings and native river caches,
+retained 26 submerged grass blocks in the saved copy and generated 14 in a fresh
+copy over `x1500..1516,z163..179,y75..84`. Both observations followed at least
+100 actual server ticks. Generation traces, not block tags, identified the writer.
+`instance-client-probe/` provides a strictly gated integrated-client observer for
+these copies; it is never packaged into the production mod.
+The fixed full-instance fresh copy retained all 48 sampled water supports and
+zero submerged grass after 105 server ticks (332 guarded tree-ground writes
+across the loaded area). The target bed remained mud, and dry grass decoration
+still occurred. This client comparison used the production policy and mixin
+sources with package-only relocation in a temporary diagnostic mod, leaving the
+installed TD JAR unchanged. The unrelocated production mixin also passed the
+separate NeoForge server lifecycle audit. NeoForge's actual ground write is in
+the three-argument `placeBlockAt(Context, BlockPos, AlterGroundEvent.StateProvider)`
+overload; target its full descriptor rather than the two-argument bridge.
+
+For another same-instance reproduction, explicitly prepare a separate
+`TD-River-*` copied save and use `instance-client-probe/run.py --world <copy>
+--probe <observer.jar> --output build/<fresh-run>`. The original player save is
+never a probe target. Build the observer with `instance-client-probe/build.py
+--output-dir build/<fresh-build>`; neither command replaces the installed TD JAR.
+The runner checks the actual client runtime and compiled fix annotation before
+copying the temporary diagnostic mod or launching the client. The optional
+`--tree-ground-fix` build/run mode adds a relocated fix for an old installed
+baseline and is rejected if the installed TD already contains that fix.
+
+Without `--baseline <prior-run>`, a run is only `success_observation`. A comparison
+can report `verified_regression` only with a reproduced grass baseline, matching
+captured inputs and observer, at least 100 server ticks, equal nonzero water
+coverage, zero fixed grass and a nonzero repair counter. A clean unrelated sample
+or an unexercised hook cannot meet this condition. Preserve the full instance
+environment before reducing mods; this choice still requires human judgment.
+The dedicated-server material audit checks its sampled bed and alone does not
+establish a matched full-instance regression.
+
+Add `--vanilla-kelp-audit` to the same launch for native registered cold/warm kelp
+placement on virtual oceans at depths 1, 6, 7 and 12. This is a placement check,
+not coastal visual acceptance; it does not require Hybrid Aquatic.
+Structure preflight must also propagate the exact 2.17.1
+`StreamsWorldgen$NoDecompilePermissionEver_002` plate-readiness signal. Treating
+it as an ordinary failure caches an empty unified-village reservation. Run
+`tools/structure_placement/run_preflight_tests.py <2.17.1-jar>` and require a
+native structure start after the pending plates complete; a successful build
+with zero starts does not validate structure adaptation.
+`--network-audit --natural-center=X,Z --natural-radius=N` exports bounded native
+graph evidence without the legacy surface audit. Graph evidence does not prove
+physical river generation; retain generated-chunk receipts as well.
+
+The 2.17.1 `engine(WorldGenLevel)` calls `RiverEngine`'s constructor directly.
+An additional private factory has the same constructor call but is not the
+world-engine call site; audit the enclosing method as well as the descriptor.
+For bounded native discovery, use `--center-chunk X,Z --inland-routes` to avoid
+counting marine channels as inland rivers. Restart the discovered fixed `--chunks`
+with `--plan-audit --settle-water`, retain both receipts/CSVs and compare native
+`.srn` graph hashes and plan fields. Native `.srt` terrain caches can grow during
+sampling and are not graph identity evidence. Plan audits require 256 fresh,
+15-column rows per chunk, including after a loaded-chunk restart. Physical fields
+are reread after optional water settlement; older CSVs used generation-time
+snapshots and cannot prove post-tick water presence. `actualGroundY` is the first
+non-water block below WORLD_SURFACE and can include leaves, not only river bed.
+The older `--verify-restart` route also invokes the legacy graph
+export and is not the native-only acceptance path.
+
+`--cold-weather-audit` currently compares global inference counters. Concurrent
+native Streams prefetch can produce a false "weather lookup triggered inference"
+failure. Run this audit separately on saved, fixed `--chunks`, without route
+discovery or `--plan-audit`, so the weather calls can be measured in isolation.
+This validates weather behavior separately from concurrent river generation.
 
 For 2.16.2, run the static hook audit, `test_2162_adapter.py`,
 `test_2162_network.py` and `test_2162_gate.py` before the native suite.
@@ -1286,10 +1399,21 @@ lower placement density. Non-sand placements skip the guard's biome lookup.
 
 Ecotone regression: `-PtdProbe.locateBiomeAudit=true` compares bounded native
 biome searches with and without request-local reuse, including full position/Y.
-`-PtdProbe.aquaticPlacementFixture=true` temporarily prepares and restores sky
-columns in an isolated loaded test chunk to verify vanilla and Streams short/tall
-seagrass writes. Pair with `-PtdProbe.aquaticPlacementAudit=true` and require both
-passed receipts. This fixture proves hook behavior, not landscape appearance.
+`run_suite.py --aquatic-placement-audit` enables both
+`-PtdProbe.aquaticPlacementFixture=true` and `-PtdProbe.aquaticPlacementAudit=true`
+and requires both passed receipts, including physical vanilla/Streams short/tall
+seagrass and standalone/coral-feature sea-pickle writes. The fixture temporarily
+prepares and restores sky columns in already-loaded test chunks; pickles use a
+five-block-deep coral column and a biome proxy (warm ocean versus nonmarine) without
+editing saved biomes. Explicit chunks or block sites are required. Before Gradle,
+the suite compiles the current pure production policy and checks the actual saved
+world seed (or explicit numeric seed for an uninitialized world) for an accepted
+colony among requested chunks in the first chunk's 3x3 search neighbourhood. It
+uses the fixture's shared five-block depth and conservative full exposure; no
+candidate stops the launch. `--preflight-only` also runs this check. This establishes
+a policy-eligible site, not clear physical sky columns or successful native writes;
+the runtime fixture still verifies those. An empty patch is not an injection failure.
+This fixture proves hook behavior, not landscape appearance or physical wave exposure.
 
 Beach modifiers must use `eco_beach_surface` with constant count 1. Merely giving
 an empty-placement alias another registry key does not separate it: Minecraft's

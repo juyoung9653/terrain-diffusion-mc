@@ -24,7 +24,7 @@ public final class StreamsSeagrassFeature2162Mixin {
     private void terrainDiffusion$limitTallSeagrass(LevelAccessor reader, BlockState plant,
                                                      BlockPos pos, int flags, Operation<Void> original) {
         if (!(reader instanceof WorldGenLevel level)
-                || SubmergedPlantPlacementGuard.allowsPlacement(level, pos)) {
+                || SubmergedPlantPlacementGuard.allowsPlacement(level, pos, true)) {
             original.call(reader, plant, pos, flags);
         }
     }

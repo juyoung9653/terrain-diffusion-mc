@@ -5,6 +5,7 @@ public final class FeatureEcologyMathTest {
     public static void main(String[] args) {
         long seed = 91357L;
         checkSoilMoisture(seed);
+        checkCoordinateChance(seed);
         checkLandscape();
         checkConnectedSoils();
         for (int x = -192; x <= 192; x++) {
@@ -234,6 +235,34 @@ public final class FeatureEcologyMathTest {
         for (int x = 0; x <= 192; x++)
             require(whole[x + 192] == FeatureEcologyMath.surfaceMoisture(.50F, seed, x, -73, 2),
                     "positive-coordinate split must retain soil moisture");
+    }
+
+    private static void checkCoordinateChance(long seed) {
+        long salt = 0x47524E534F494CL;
+        for (int x = -193; x <= 193; x += 7) for (int z = -191; z <= 191; z += 11) {
+            boolean first = FeatureEcologyMath.coordinateChance(seed, x, z, salt, .37F);
+            for (int repeat = 0; repeat < 20; repeat++)
+                require(first == FeatureEcologyMath.coordinateChance(seed, x, z, salt, .37F),
+                        "coordinate chance must ignore repeated native attempts");
+            require(!FeatureEcologyMath.coordinateChance(seed, x, z, salt, 0),
+                    "zero acceptance must always reject");
+            require(FeatureEcologyMath.coordinateChance(seed, x, z, salt, 1),
+                    "full acceptance must always allow");
+        }
+        int[] acceptedByPhase = new int[16];
+        int[] sampledByPhase = new int[16];
+        int changedSeeds = 0;
+        for (int x = -512; x < 512; x++) for (int z = -64; z < 64; z++) {
+            int phase = Math.floorMod(x, 16);
+            sampledByPhase[phase]++;
+            if (FeatureEcologyMath.coordinateChance(seed, x, z, salt, .25F)) acceptedByPhase[phase]++;
+            if (FeatureEcologyMath.coordinateChance(seed, x, z, salt, .25F)
+                    != FeatureEcologyMath.coordinateChance(seed + 1, x, z, salt, .25F)) changedSeeds++;
+        }
+        for (int phase = 0; phase < 16; phase++)
+            require(Math.abs(acceptedByPhase[phase] / (float) sampledByPhase[phase] - .25F) < .04F,
+                    "mod-16 phase must not bias stable acceptance");
+        require(changedSeeds > 1000, "world seed must affect stable acceptance");
     }
 
     private static void checkFarSeam(long seed, int coordinate, int cell) {

@@ -28,14 +28,21 @@ public class TerrainDiffusionMc {
 
     public TerrainDiffusionMc(IEventBus modEventBus) {
         LOG.info("Initializing terrain-diffusion-mc for NeoForge");
+        com.github.xandergos.terraindiffusionmc.world.ecology.GreeneriesSoilPolicy.setNativeWorldgenPolicyEnabled(
+                net.neoforged.fml.loading.FMLLoader.getLoadingModList().getMods().stream()
+                        .anyMatch(mod -> "greeneries".equals(mod.getModId())));
         com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.setAdapterAvailable(
                 net.neoforged.fml.loading.FMLLoader.getLoadingModList().getMods().stream()
                         .anyMatch(mod -> "streamsreflowing".equals(mod.getModId())
                                 && com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin
                                 .isAuditedVersion(mod.getVersion().toString())),
-                com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin.hasPlanformAdapter()
-                        ? com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile.VERSION
-                        : com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile.LEGACY_ADAPTER_VERSION);
+                com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin.hasNativeTerrainAdapter()
+                        ? com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile.STREAMS_2171_VERSION : 1,
+                com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin.hasNativeTerrainAdapter()
+                        ? com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile.STREAMS_2171_VERSION
+                        : com.github.xandergos.terraindiffusionmc.compat.streams.StreamsStructureShieldMixinPlugin.hasPlanformAdapter()
+                                ? com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile.STREAMS_2162_VERSION
+                                : com.github.xandergos.terraindiffusionmc.world.river.NaturalRiverProfile.LEGACY_ADAPTER_VERSION);
         modEventBus.addListener(this::onRegister);
         modEventBus.addListener(this::onAddPacks);
         TerrainDiffusionLifecycle.bootstrap(FMLPaths.CONFIGDIR.get(), FMLPaths.GAMEDIR.get());

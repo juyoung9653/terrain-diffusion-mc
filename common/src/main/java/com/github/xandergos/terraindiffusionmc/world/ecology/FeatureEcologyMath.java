@@ -243,6 +243,17 @@ public final class FeatureEcologyMath {
         return value ^ (value >>> 31);
     }
 
+    /**
+     * One stable decoration decision per world column. Repeated native patch
+     * attempts at the same position must not compound a soil acceptance rate.
+     */
+    public static boolean coordinateChance(long seed, int x, int z, long salt, float chance) {
+        if (!(chance > 0.0F)) return false;
+        if (chance >= 1.0F) return true;
+        float roll = (decorationSeed(seed, x, z, salt) >>> 40) * 0x1.0p-24F;
+        return roll < chance;
+    }
+
     /** Per-attempt probability, not achieved canopy coverage; tree survival is checked separately. */
     public static float treePlacementChance(float treeCover, long seed, int blockX, int blockZ, int scale) {
         float cover = clamp01(treeCover);

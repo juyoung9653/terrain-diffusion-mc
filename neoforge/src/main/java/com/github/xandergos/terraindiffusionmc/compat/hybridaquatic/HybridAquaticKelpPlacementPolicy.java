@@ -10,8 +10,14 @@ public final class HybridAquaticKelpPlacementPolicy {
 
     /** A separate coordinate random value is compared to the continuous probability. */
     public static boolean accept(long worldSeed, long speciesSalt, int blockX, int blockZ) {
+        return accept(worldSeed, speciesSalt, 12, blockX, blockZ);
+    }
+
+    /** Applies the shallow-shelf exclusion only to a stalk-forming kelp entry. */
+    public static boolean accept(long worldSeed, long speciesSalt, int waterDepth,
+                                 int blockX, int blockZ) {
         return random(worldSeed, speciesSalt ^ 0xD1342543DE82EF95L, blockX, blockZ)
-                < probability(worldSeed, speciesSalt, blockX, blockZ);
+                < probability(worldSeed, speciesSalt, waterDepth, blockX, blockZ);
     }
 
     /** Continuous bed-density field in [0,1). */
@@ -34,8 +40,20 @@ public final class HybridAquaticKelpPlacementPolicy {
      * beds that fade through sparse gaps instead of a dense carpet with holes.
      */
     public static double probability(long worldSeed, long speciesSalt, int blockX, int blockZ) {
+        return probability(worldSeed, speciesSalt, 12, blockX, blockZ);
+    }
+
+    public static double probability(long worldSeed, long speciesSalt, int waterDepth,
+                                     int blockX, int blockZ) {
         double edge = clamp((density(worldSeed, speciesSalt, blockX, blockZ) - 0.3) / 0.45);
-        return ACCEPTANCE * smooth(edge);
+        return ACCEPTANCE * shallowWaterFactor(waterDepth) * smooth(edge);
+    }
+
+    /** Matches vanilla kelp's deterministic six-block shallow-shelf exclusion. */
+    public static double shallowWaterFactor(int waterDepth) {
+        if (waterDepth <= 6) return 0.0;
+        if (waterDepth >= 12) return 1.0;
+        return smooth((waterDepth - 6) / 6.0);
     }
 
     private static double value(long worldSeed, long speciesSalt, int x, int z) {

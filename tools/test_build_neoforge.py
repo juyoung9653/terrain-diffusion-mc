@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
@@ -74,6 +76,52 @@ class BuildNeoForgeTest(unittest.TestCase):
             self.assertEqual(7, build.run(self.root, java_home=self.java, gradle_user_home=self.cache))
         self.assertEqual(process.call_args.kwargs["env"]["JAVA_HOME"], str(self.java.resolve()))
         self.assertFalse(process.call_args.kwargs["shell"])
+
+    def test_stale_validation_stops_before_gradle(self):
+        proof = self.root / "validation-evidence.json"
+        proof.write_text(json.dumps({"schema": 1, "kind": "probe-validation", "success": True,
+                                     "processExit": 0, "probeStatus": "success",
+                                     "sourceFingerprint": "obsolete"}))
+        with patch("subprocess.run") as process:
+            with self.assertRaisesRegex(ValueError, "source differs"):
+                build.run(self.root, java_home=self.java, validations=[proof])
+        process.assert_not_called()
+
+    def test_missing_validation_stops_before_gradle(self):
+        with patch("subprocess.run") as process:
+            with self.assertRaises(FileNotFoundError):
+                build.run(self.root, java_home=self.java, validations=[self.root / "missing.json"])
+        process.assert_not_called()
+
+    def test_successful_build_records_exact_artifact_and_validation(self):
+        import build_evidence
+        result = self.root / "result.json"
+        result.write_text('{"success":true}')
+        proof = self.root / "validation-evidence.json"
+        proof.write_text(json.dumps({"schema": 1, "kind": "probe-validation", "success": True,
+                                     "processExit": 0, "probeStatus": "success",
+                                     "sourceFingerprint": build.source_fingerprint(self.root),
+                                     "receipt": result.name, "receiptSha256": build.sha256(result),
+                                     "inputManifestSha256": None}))
+        mod = self.root / "neoforge/build/libs/td.jar"
+
+        def fake_gradle(*args, **kwargs):
+            mod.parent.mkdir(parents=True)
+            with zipfile.ZipFile(mod, "w") as archive:
+                archive.writestr("example/Main.class", b"compiled")
+            receipt = self.root / "neoforge/build/disk-libraries/onnx-runtime-receipt.properties"
+            receipt.parent.mkdir(parents=True)
+            receipt.write_text("formatVersion=1\nmode=neoforge-disk-library\n"
+                               "module=com.microsoft.onnxruntime:onnxruntime_gpu:1.20.0\n"
+                               "sourceSha256=source\nlibraryFile=ort.jar\nlibrarySha256=library\n"
+                               f"modFile=td.jar\nmodSha256={build.sha256(mod)}\n")
+            return type("Result", (), {"returncode": 0})()
+
+        with patch("subprocess.run", side_effect=fake_gradle):
+            self.assertEqual(0, build.run(self.root, java_home=self.java, validations=[proof]))
+        bound = build_evidence.verify_release(mod, self.root)
+        self.assertEqual(bound["modSha256"], build.sha256(mod))
+        self.assertEqual(bound["validations"][0]["sha256"], build.sha256(proof))
 
 
 if __name__ == "__main__":

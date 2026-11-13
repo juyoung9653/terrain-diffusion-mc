@@ -51,12 +51,14 @@ final class NaturalRiverAudit {
             profile.append(field).append('=').append(StreamsRecordAccess.read(config, field)).append('\n');
         }
         profile.append(String.format(Locale.ROOT, "bounds=%d,%d,%d,%d%n", x-radius,z-radius,x+radius,z+radius));
+        profile.append("coverageMethod=engine.platesNear\nplateCount=").append(plates.length).append('\n');
         profile.append("coastTerminalMeaning=marine-adjacent planned terminals; not proven physical outlets\n");
         Files.writeString(root.resolve("td-natural-river-profile.txt"), profile);
         if (Boolean.getBoolean("td.streamsProbe.naturalCoastAudit")) {
             exportMarineAdjacentTerminals(level, ordered, x, z, radius, root);
         }
     }
+
 
     /** The 2.16.2 RiverNetwork preserves the public type but renames its segment accessor. */
     @SuppressWarnings("unchecked")

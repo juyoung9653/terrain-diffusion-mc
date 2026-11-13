@@ -1,0 +1,10 @@
+modLoader="javafml"
+loaderVersion="[4,)"
+license="MIT"
+[[mods]]
+modId="td_instance_client_probe"
+version="1.0.0"
+displayName="TD Instance River Diagnostic"
+description="Strictly gated copied-save river material diagnostic."
+[[mixins]]
+config="td-instance-client-probe.mixins.json"

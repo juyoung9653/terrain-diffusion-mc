@@ -48,8 +48,7 @@ public final class LushVegetationPlacementScope {
         float chance = GreeneriesSoilPolicy.acceptance(level.getBlockState(pos.below()), 0.3F);
         var climate = NaturalEcology.cachedSurfaceSample(level.getLevel().getChunkSource().getGenerator(), pos.getX(), pos.getZ());
         if (climate != null) chance *= FeatureEcologyMath.coldGroundcoverAcceptance(climate.climate().temperature());
-        return chance >= 1.0F || (chance > 0.0F
-                && GreeneriesSoilPolicy.accepts(chance, random.nextFloat()));
+        return GreeneriesSoilPolicy.acceptsColumn(level.getSeed(), pos.getX(), pos.getZ(), chance);
     }
 
     private static boolean isNaturalTerrainDiffusion(WorldGenLevel level) {

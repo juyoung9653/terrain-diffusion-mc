@@ -6,6 +6,7 @@ import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.WorldGenLevel;
+import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.feature.SeagrassFeature;
 import org.spongepowered.asm.mixin.Mixin;
@@ -21,6 +22,6 @@ public final class SeagrassFeatureMixin {
                                                               BlockPos pos, Operation<Boolean> original) {
         boolean survives = original.call(plant, reader, pos);
         return survives && (!(reader instanceof WorldGenLevel level)
-                || SubmergedPlantPlacementGuard.allowsPlacement(level, pos));
+                || SubmergedPlantPlacementGuard.allowsPlacement(level, pos, plant.is(Blocks.TALL_SEAGRASS)));
     }
 }

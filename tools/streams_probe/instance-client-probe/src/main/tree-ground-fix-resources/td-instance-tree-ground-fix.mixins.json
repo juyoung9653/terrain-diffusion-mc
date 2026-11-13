@@ -1,0 +1,8 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.terrain.instanceclientprobe.production.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": ["SubmergedTreeGroundMixin"],
+  "injectors": {"defaultRequire": 1}
+}

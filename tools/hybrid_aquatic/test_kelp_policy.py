@@ -21,6 +21,15 @@ public final class HybridAquaticKelpPlacementPolicyTest {
     public static void main(String[] args) {
         require(HybridAquaticKelpPlacementPolicy.CANDIDATES_PER_CHUNK == 48, "candidate bound");
         require(HybridAquaticKelpPlacementPolicy.ACCEPTANCE == 0.8, "acceptance");
+        for (int depth = 0; depth <= 6; depth++)
+            require(HybridAquaticKelpPlacementPolicy.shallowWaterFactor(depth) == 0.0,
+                    "shallow bull-kelp shelf rejected at " + depth);
+        require(HybridAquaticKelpPlacementPolicy.shallowWaterFactor(7) > 0.0,
+                "bull-kelp transition begins above shelf");
+        require(HybridAquaticKelpPlacementPolicy.shallowWaterFactor(11) < 1.0,
+                "bull-kelp transition remains gradual");
+        require(HybridAquaticKelpPlacementPolicy.shallowWaterFactor(12) == 1.0,
+                "deep bull-kelp unchanged");
         long seed = 0x51A7E5EEDL;
         long salt = 0x44CBA31A0D1237E1L;
         int accepted = 0, differentSeed = 0, differentSpecies = 0;
@@ -45,6 +54,13 @@ public final class HybridAquaticKelpPlacementPolicyTest {
                 require(Math.abs(probability - adjacentProbability) < 0.14, "z probability continuity at " + x + "," + z);
             }
         }
+        int shallowAccepted = 0, deepAccepted = 0;
+        for (int x = -240; x <= 240; x++) for (int z = -240; z <= 240; z++) {
+            if (HybridAquaticKelpPlacementPolicy.accept(seed, salt, 6, x, z)) shallowAccepted++;
+            if (HybridAquaticKelpPlacementPolicy.accept(seed, salt, 12, x, z)) deepAccepted++;
+        }
+        require(shallowAccepted == 0, "bull kelp absent from shallow shelf");
+        require(deepAccepted > 100, "bull kelp remains in deep water");
         double mean = accepted / (481.0 * 481.0);
         require(mean > .15 && mean < .65, "neither empty nor dense carpet: " + mean);
         require(minProbability < .01 && maxProbability > .79, "beds and sparse gaps");
@@ -58,7 +74,15 @@ public final class HybridAquaticKelpPlacementPolicyTest {
 def tool(name: str) -> str:
     java_home = Path(os.environ["JAVA_HOME"]) if os.environ.get("JAVA_HOME") else None
     candidate = java_home / "bin" / f"{name}.exe" if java_home else None
-    return str(candidate) if candidate and candidate.is_file() else shutil.which(name) or ""
+    if candidate and candidate.is_file():
+        return str(candidate)
+    # Match the other local kelp harness; Windows' javapath shim is not the JDK.
+    for known in (Path(r"C:\Program Files\Java\jdk-21"),
+                  Path(r"C:\Program Files\Eclipse Adoptium\jdk-21.0.8.9-hotspot")):
+        candidate = known / "bin" / f"{name}.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return shutil.which(name) or ""
 
 
 def run(*args: str) -> str:

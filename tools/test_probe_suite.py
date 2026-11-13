@@ -52,6 +52,39 @@ class ProbeSuiteTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "linked fixture descendant"):
                 prepared_run(self.root, "structure-density", str(run), "server.properties")
 
+    def test_streams_littoral_kelp_receipt_requires_zero_shelf_and_deep_evidence(self) -> None:
+        from tools.streams_probe.run_suite import vanilla_kelp_receipt
+        path = self.make_run("kelp") / "world/td-streams-probe.jsonl"
+        target = {"shelfSixAccepted": 0, "transitionSevenAccepted": 2,
+                  "deepAccepted": 8, "shelfSixNativeStalks": 0,
+                  "transitionSevenNativeStalks": 1, "deepTwelveNativeStalks": 5}
+        row = {"event": "vanilla_kelp_audit", "status": "passed",
+               "targets": {"minecraft:kelp_cold": target, "minecraft:kelp_warm": dict(target)}}
+        path.write_text(json.dumps(row), encoding="utf-8")
+        self.assertEqual(vanilla_kelp_receipt(path), "success")
+        target["shelfSixAccepted"] = 1
+        path.write_text(json.dumps(row), encoding="utf-8")
+        self.assertEqual(vanilla_kelp_receipt(path), "vanilla_kelp_audit_littoral_gate_failed")
+
+    def test_streams_submerged_bed_receipt_requires_settled_physical_water(self) -> None:
+        from tools.streams_probe.run_suite import submerged_river_bed_receipt
+        path = self.make_run("bed") / "world/td-streams-probe.jsonl"
+        row = {"event": "submerged_river_bed_audit", "status": "passed",
+               "method": "actual_loaded_water_bottom_after_settlement", "settledTicks": 100,
+               "fullChunks": 2, "waterBeds": 12, "surfaceWaterBeds": 9, "submergedGrassBeds": 0,
+               "dryExposedGrassBlocks": 7, "treeGroundWritesSkipped": 1}
+        path.write_text(json.dumps(row), encoding="utf-8")
+        self.assertEqual(submerged_river_bed_receipt(path, expected={"94,10", "95,10"}), "success")
+        row["submergedGrassBeds"] = 1
+        path.write_text(json.dumps(row), encoding="utf-8")
+        self.assertEqual(submerged_river_bed_receipt(path, expected={"94,10", "95,10"}),
+                         "submerged_river_bed_audit_physical_evidence_failed")
+        row["submergedGrassBeds"] = 0
+        row["surfaceWaterBeds"] = 0
+        path.write_text(json.dumps(row), encoding="utf-8")
+        self.assertEqual(submerged_river_bed_receipt(path, expected={"94,10", "95,10"}),
+                         "submerged_river_bed_audit_physical_evidence_failed")
+
     def test_sequential_success_status_and_live_lock(self) -> None:
         one, two = self.make_run("one"), self.make_run("two")
         result: list[int] = []
@@ -104,6 +137,28 @@ class ProbeSuiteTest(unittest.TestCase):
         self.assertIn("launch_error", row["error"])
         self.assertIsNone(row["processExit"])
         self.assertIn("launch_error", (run / "launcher-output.txt").read_text(encoding="utf-8"))
+
+    def test_success_records_evidence_and_source_change_rejects_it(self):
+        from build_evidence import PROBE_RECEIPT, read_validation, source_fingerprint
+        source = self.root / "common/src/main/java/Main.java"
+        source.parent.mkdir(parents=True)
+        source.write_text("before")
+        good = self.make_run("evidence")
+        self.assertEqual(run_suite(self.root, "structure-density",
+                                   [self.job(good, '{"success":true}')], {}), 0)
+        row = read_validation(good / PROBE_RECEIPT, source_fingerprint(self.root))
+        self.assertEqual(row["result"]["receipt"], str(Path("world/density-audit.json")))
+        bad = self.make_run("mutated")
+        job = self.job(bad, '{"success":true}')
+        script = ("from pathlib import Path; import sys; "
+                  "Path(sys.argv[1]).write_text('{\"success\":true}'); "
+                  "Path(sys.argv[2]).write_text('after')")
+        job = Job(bad, [sys.executable, "-c", script, str(job.receipt), str(source)],
+                  job.receipt, density_receipt)
+        self.assertEqual(run_suite(self.root, "structure-density", [job], {}), 1)
+        rejected = json.loads((bad / PROBE_RECEIPT).read_text())
+        self.assertFalse(rejected["success"])
+        self.assertEqual(rejected["probeStatus"], "production_sources_changed_during_probe")
 
     def test_all_preflight_checks_run_under_lock_before_any_child(self) -> None:
         one, two = self.make_run("preflight_one"), self.make_run("preflight_two")

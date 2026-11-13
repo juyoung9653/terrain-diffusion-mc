@@ -6,7 +6,8 @@ import java.util.Optional;
 /** Exercises the actual optional Streams signal and cache behavior, without a Minecraft server. */
 public final class PreflightControlTest {
     public static void main(String[] args) throws Exception {
-        var type=Class.forName("dev.streamsreflowing.worldgen.StreamsWorldgen$StructurePlatesPending");
+        var type=Class.forName(args.length == 0
+                ? "dev.streamsreflowing.worldgen.StreamsWorldgen$StructurePlatesPending" : args[0]);
         var constructor=type.getDeclaredConstructors()[0];
         constructor.setAccessible(true);
         Object owners=Array.newInstance(constructor.getParameterTypes()[0].getComponentType(),0);

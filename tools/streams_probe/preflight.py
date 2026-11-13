@@ -63,24 +63,54 @@ def validate_fixture(run: Path, expected_cache: str | None = None) -> dict:
         raise ValueError("input manifest must be an object")
     world = run / "world"
     initialized = (world / "level.dat").is_file()
+    generated_chunks = any((world / name).exists() for name in ("region", "entities", "poi"))
+    prepared_fresh = manifest.get("preparedFreshChunks") is True
     cache = world / "streamsreflowing"
     cache_files = [p for p in cache.rglob("*") if p.is_file()]
     if cache.exists() and (not cache.is_dir() or not cache_files):
         raise ValueError("Streams cache exists but contains no graph files")
-    if expected_cache == "fresh" and (initialized or cache.exists()):
-        raise ValueError("fresh routing requires an unrun world without a Streams cache")
-    if expected_cache == "present" and not cache_files:
+    declared_cache = manifest.get("riverCachePolicy")
+    if declared_cache is not None and declared_cache not in ("fresh", "present"):
+        raise ValueError("invalid declared river cache policy")
+    if (expected_cache is not None and declared_cache is not None
+            and expected_cache != declared_cache and not generated_chunks):
+        raise ValueError("requested river cache policy disagrees with fixture manifest")
+    # A prepared fixture's policy describes its initial copy. Once it has run,
+    # Streams is allowed to create its normal saved cache; inspect the actual
+    # state unless the caller explicitly asks for one.
+    effective_cache = expected_cache or (declared_cache if not generated_chunks else None)
+    if effective_cache == "fresh" and cache.exists():
+        raise ValueError("fresh routing requires no saved Streams cache")
+    if effective_cache == "present" and not cache_files:
         raise ValueError("expected a saved Streams cache under world/streamsreflowing")
-    if not initialized and any((world / name).exists() for name in ("region", "entities", "poi")):
+    if not initialized and generated_chunks:
         raise ValueError("unrun fixture contains generated chunk directories")
+    if effective_cache == "fresh" and (generated_chunks or initialized and not prepared_fresh):
+        raise ValueError("fresh routing requires an unrun world without a Streams cache")
     # Mods do not migrate at server startup. Configs and copied markers can do so.
     groups = [manifest, manifest.get("surfaceMods", {})]
     for group in groups:
         for mod in group.get("mods", []):
             _hash_matches(run / "mods", mod["file"], mod["sha256"])
-        if not initialized:
+        if not initialized or (prepared_fresh and not generated_chunks):
             for name, sha in group.get("configs", {}).items():
                 _hash_matches(run / "config", name, sha)
+    declared = manifest.get("sha256")
+    if isinstance(declared, dict):
+        # Mods must always be the copied binaries, even after a fixture world has
+        # generated chunks and its config/state has legitimately evolved.
+        for relative, expected in declared.items():
+            if isinstance(relative, str) and relative.startswith("mods/"):
+                if not isinstance(expected, str):
+                    raise ValueError("prepared fixture has invalid declared input hashes")
+                _hash_matches(run, relative, expected)
+    if prepared_fresh and not generated_chunks:
+        if not isinstance(declared, dict) or not declared:
+            raise ValueError("prepared fixture has no declared input hashes")
+        for relative, expected in declared.items():
+            if not isinstance(relative, str) or not isinstance(expected, str):
+                raise ValueError("prepared fixture has invalid declared input hashes")
+            _hash_matches(run, relative, expected)
     if not initialized:
         # Accept the provenance written by the existing isolated reproduction helper.
         copied = manifest.get("playerCacheDiagnostic", {}).get("copiedFiles", {})
@@ -97,4 +127,5 @@ def validate_fixture(run: Path, expected_cache: str | None = None) -> dict:
         if scale:
             _hash_matches(world, "data/terrain_diffusion_world_settings.dat", scale["sha256"])
     return {"initialized": initialized, "cacheFiles": len(cache_files),
-            "routingEvidence": "saved" if cache_files else "fresh"}
+            "routingEvidence": "saved" if cache_files else "fresh",
+            "effectiveCachePolicy": effective_cache}

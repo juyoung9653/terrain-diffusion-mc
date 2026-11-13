@@ -109,7 +109,7 @@ public final class StructurePlacementConfig {
     }
 
     public static Policy defaults() {
-        return new Policy(100, 112, 7, 2, 3, 12, 65536, 9, 1.0, SurfaceMode.AUTO);
+        return new Policy(100, 112, 7, 3, 4, 12, 65536, 9, 1.0, SurfaceMode.AUTO);
     }
 
     public static Path configPath() { return PlatformPaths.configDir().resolve(FILE_NAME); }

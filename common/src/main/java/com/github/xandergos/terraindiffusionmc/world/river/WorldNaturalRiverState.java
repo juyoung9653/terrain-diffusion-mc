@@ -37,6 +37,7 @@ public final class WorldNaturalRiverState extends SavedData {
     private static final Map<ServerLevel, Settings> SETTINGS = new ConcurrentHashMap<>();
     private static volatile boolean adapterAvailable;
     private static volatile int adapterVersion = NaturalRiverProfile.LEGACY_ADAPTER_VERSION;
+    private static volatile int adapterMinimumVersion = 1;
 
     /** Loader bootstrap advertises an installed, audited native adapter before any world loads. */
     public static void setAdapterAvailable(boolean available) {
@@ -44,9 +45,14 @@ public final class WorldNaturalRiverState extends SavedData {
     }
 
     public static void setAdapterAvailable(boolean available, int supportedVersion) {
-        if (supportedVersion < 1 || supportedVersion > VERSION) {
+        setAdapterAvailable(available, 1, supportedVersion);
+    }
+
+    public static void setAdapterAvailable(boolean available, int minimumVersion, int supportedVersion) {
+        if (minimumVersion < 1 || minimumVersion > supportedVersion || supportedVersion > VERSION) {
             throw new IllegalArgumentException("Unsupported adapter profile " + supportedVersion);
         }
+        adapterMinimumVersion = minimumVersion;
         adapterVersion = supportedVersion;
         adapterAvailable = available;
     }
@@ -171,6 +177,10 @@ public final class WorldNaturalRiverState extends SavedData {
         if (state.settings.enabled && state.settings.version > adapterVersion) {
             throw new IllegalStateException("Natural river profile " + state.settings.version
                     + " requires a newer Streams adapter; this adapter supports through " + adapterVersion);
+        }
+        if (state.settings.enabled && state.settings.version < adapterMinimumVersion) {
+            throw new IllegalStateException("Natural river profile " + state.settings.version
+                    + " belongs to an older Streams adapter; use a fresh world for profile " + adapterVersion);
         }
         if (state.settings.enabled && state.settings.seed != level.getSeed()) {
             throw new IllegalStateException("Persisted natural river seed does not match this world");

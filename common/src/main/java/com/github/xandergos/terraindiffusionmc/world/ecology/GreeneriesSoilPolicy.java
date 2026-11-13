@@ -12,11 +12,24 @@ import net.minecraft.world.level.block.state.BlockState;
 
 /** Acceptance of native Greeneries grass/fern worldgen attempts on ecological soil. */
 public final class GreeneriesSoilPolicy {
+    private static final long COLUMN_SALT = 0x47524E534F494CL;
+    private static volatile boolean nativeWorldgenPolicyEnabled;
     public static final TagKey<Block> GRASS = tag("greeneries_grass_soils");
     public static final TagKey<Block> SOIL = tag("greeneries_ordinary_soils");
     public static final TagKey<Block> BARREN = tag("greeneries_barren_soils");
 
     private GreeneriesSoilPolicy() { }
+
+    /** Only loaders with the matching native placement hooks enable reconciliation. */
+    public static void setNativeWorldgenPolicyEnabled(boolean enabled) {
+        nativeWorldgenPolicyEnabled = enabled;
+    }
+
+    public static boolean nativeWorldgenPolicyEnabled() { return nativeWorldgenPolicyEnabled; }
+
+    public static boolean acceptsColumn(long seed, int x, int z, float chance) {
+        return FeatureEcologyMath.coordinateChance(seed, x, z, COLUMN_SALT, chance);
+    }
 
     public static float acceptance(BlockState support) {
         return acceptance(support, 0.5F);

@@ -12,7 +12,11 @@ import hashlib
 import shutil
 import tempfile
 import zipfile
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from build_evidence import ROOT, verify_release
 
 
 REQUIRED = {
@@ -105,12 +109,16 @@ def atomic_copy(source: Path, target: Path) -> None:
 
 
 def install(receipt_path: Path, library: Path, mod: Path, mods_dir: Path) -> None:
-    verify(receipt_path, library, mod)
-    # The library goes first: an interrupted install cannot leave a freshly
-    # copied slim mod without its required runtime jar.
-    atomic_copy(library, mods_dir / library.name)
-    atomic_copy(mod, mods_dir / mod.name)
-    atomic_copy(receipt_path, mods_dir / (mod.name + ".onnx-receipt.properties"))
+    from probe_suite import exclusive_lock
+    with exclusive_lock(ROOT):
+        # Check before even creating destination directories or copying the companion.
+        verify_release(mod)
+        verify(receipt_path, library, mod)
+        # The library goes first: an interrupted install cannot leave a freshly
+        # copied slim mod without its required runtime jar.
+        atomic_copy(library, mods_dir / library.name)
+        atomic_copy(mod, mods_dir / mod.name)
+        atomic_copy(receipt_path, mods_dir / (mod.name + ".onnx-receipt.properties"))
 
 
 def main() -> None:

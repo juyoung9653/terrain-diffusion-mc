@@ -76,18 +76,21 @@ class FastTestLauncherTest(unittest.TestCase):
 
     def test_cli_reports_skips_and_failure_in_deterministic_order(self):
         state, fake = self._fake_subprocess({"village"})
+        skipped_ids = {"config", "moss", "preflight"}
         with mock.patch.object(launcher, "REPORT_ROOT", self.output), \
              mock.patch.object(launcher, "command", side_effect=lambda check, _: ["python", check.id]), \
              mock.patch.object(launcher.subprocess, "run", side_effect=fake), \
-             mock.patch.object(launcher, "unavailable", side_effect=lambda check, _: "fixture unavailable" if check.id in ("config", "moss", "preflight") else None):
+             mock.patch.object(launcher, "unavailable", side_effect=lambda check, _: "fixture unavailable" if check.id in skipped_ids else None):
             self.assertEqual(launcher.main(["--jobs", "3"]), 1)
         reports = list(self.output.glob("*/report.json"))
         self.assertEqual(len(reports), 1)
         report = json.loads(reports[0].read_text(encoding="utf-8"))
         self.assertEqual([row["id"] for row in report["results"]], [check.id for check in launcher.CHECKS])
-        self.assertEqual([row["status"] for row in report["results"][-3:]], ["skipped"] * 3)
+        for row in report["results"]:
+            expected = "skipped" if row["id"] in skipped_ids else "failed" if row["id"] == "village" else "passed"
+            self.assertEqual(row["status"], expected, row["id"])
         self.assertEqual(report["max_concurrency"], 3)
-        self.assertEqual(set(state["ids"]), {check.id for check in self.checks})
+        self.assertCountEqual(state["ids"], [check.id for check in launcher.CHECKS if check.id not in skipped_ids])
 
     def test_windows_child_has_no_console_window_flag(self):
         state, fake = self._fake_subprocess()

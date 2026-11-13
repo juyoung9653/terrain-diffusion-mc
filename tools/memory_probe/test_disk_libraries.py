@@ -6,6 +6,8 @@ import zipfile
 from pathlib import Path
 
 import disk_libraries
+import json
+from build_evidence import ROOT, PROBE_RECEIPT, source_fingerprint, check_validations, write_release
 
 SCRATCH = Path(__file__).resolve().parents[2] / ".tmp"
 SCRATCH.mkdir(exist_ok=True)
@@ -37,6 +39,15 @@ class DiskLibrariesTest(unittest.TestCase):
             self.artifact(mod, "Manifest-Version: 1.0\r\n\r\n", {"td/Main.class": b"td"})
             self.receipt(receipt, library, mod)
             disk_libraries.verify(receipt, library, mod)
+            fingerprint = source_fingerprint(ROOT)
+            result = root / "probe-result.json"
+            result.write_text('{"success":true}')
+            proof = root / PROBE_RECEIPT
+            proof.write_text(json.dumps({"schema": 1, "kind": "probe-validation", "success": True,
+                                         "processExit": 0, "probeStatus": "success",
+                                         "sourceFingerprint": fingerprint, "receipt": result.name,
+                                         "receiptSha256": disk_libraries.sha256(result), "inputManifestSha256": None}))
+            write_release(ROOT, mod, fingerprint, check_validations([proof], fingerprint), [])
             destination = root / "mods"
             disk_libraries.install(receipt, library, mod, destination)
             self.assertEqual(library.read_bytes(), (destination / library.name).read_bytes())
