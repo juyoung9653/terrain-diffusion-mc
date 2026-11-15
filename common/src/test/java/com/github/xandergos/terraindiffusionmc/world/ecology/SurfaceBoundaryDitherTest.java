@@ -47,8 +47,8 @@ public final class SurfaceBoundaryDitherTest {
     }
 
     private static void checkClimateOwnership() {
-        EcologyClassifier.Sample coolWet = new EcologyClassifier.Sample(1, .8F, 2F, 1.5F, .65F);
-        EcologyClassifier.Sample hotDry = new EcologyClassifier.Sample(11, .1F, 28F, .10F, .05F);
+        EcologyClassifier.Sample coolWet = new EcologyClassifier.Sample(1, .8F, 2F, 1.5F, .65F, .91F, .18F);
+        EcologyClassifier.Sample hotDry = new EcologyClassifier.Sample(11, .1F, 28F, .10F, .05F, .02F, .80F);
         EcologyClassifier.Sample selected = SurfaceBoundaryDither.selectClimate(true,
                 coolWet, 600F, hotDry, 100F);
         require(selected.biomeId() == hotDry.biomeId(), "a real boundary must use donor climate ownership");
@@ -57,6 +57,9 @@ public final class SurfaceBoundaryDitherTest {
         require(Math.abs(selected.temperature() - 25F) < .0001F,
                 "donor temperature must be lapse-corrected to target elevation");
         require(selected.slope() == coolWet.slope(), "target physical slope must remain local");
+        require(selected.wetness() == coolWet.wetness()
+                        && selected.marineInfluence() == coolWet.marineInfluence(),
+                "target hydrology must remain local when climate is dithered");
 
         var targetMaterial = FeatureEcologyMath.surfaceMaterialAt(coolWet.temperature(), coolWet.moisture(),
                 coolWet.slope(), coolWet.treeCover(), 600F, 91357L, 19, -31, 2);

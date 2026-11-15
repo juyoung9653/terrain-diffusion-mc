@@ -47,7 +47,9 @@ public final class MacroBiomeContextTest {
             BiomeClassifier.TerralithContext tile = c < 32 ? left : right;
             require(a.elevation()[whole] == tile.elevation()[part] && a.slope()[whole] == tile.slope()[part]
                     && a.temperature()[whole] == tile.temperature()[part] && a.precipitation()[whole] == tile.precipitation()[part]
-                    && a.coastal()[whole] == tile.coastal()[part], "whole/subtile context mismatch");
+                    && a.coastal()[whole] == tile.coastal()[part]
+                    && Float.floatToRawIntBits(a.shore().valleyPotential(whole))
+                    == Float.floatToRawIntBits(tile.shore().valleyPotential(part)), "whole/subtile context mismatch");
             require(surface(a, whole, -32 + r, -32 + c) == surface(tile, part, -32 + r, -32 + c), "whole/subtile classification mismatch");
         }
         BiomeClassifier.TerralithContext one = MacroBiomeContext.build(full.elevation, full.climate, full.i0, full.j0, full.h, full.w, 1, 16, -32, -32, 64, 64);
@@ -56,6 +58,8 @@ public final class MacroBiomeContextTest {
         for (int r = 0; r < 64; r++) for (int c = 0; c < 64; c++) {
             int whole = r * 64 + c, part = r * 32 + c % 32; BiomeClassifier.TerralithContext tile = c < 32 ? oneLeft : oneRight;
             require(one.elevation()[whole] == tile.elevation()[part] && one.coastal()[whole] == tile.coastal()[part]
+                    && Float.floatToRawIntBits(one.shore().valleyPotential(whole))
+                    == Float.floatToRawIntBits(tile.shore().valleyPotential(part))
                     && surface(one, whole, -32 + r, -32 + c) == surface(tile, part, -32 + r, -32 + c), "scale-one whole/subtile mismatch");
         }
     }
@@ -102,7 +106,13 @@ public final class MacroBiomeContextTest {
     private static boolean equal(BiomeClassifier.TerralithContext a, BiomeClassifier.TerralithContext b) {
         return java.util.Arrays.equals(a.elevation(),b.elevation()) && java.util.Arrays.equals(a.slope(),b.slope())
                 && java.util.Arrays.equals(a.temperature(),b.temperature()) && java.util.Arrays.equals(a.precipitation(),b.precipitation())
-                && java.util.Arrays.equals(a.precipitationCv(),b.precipitationCv()) && java.util.Arrays.equals(a.coastal(),b.coastal());
+                && java.util.Arrays.equals(a.precipitationCv(),b.precipitationCv()) && java.util.Arrays.equals(a.coastal(),b.coastal())
+                && shoreEqual(a.shore(), b.shore(), a.elevation().length);
+    }
+    private static boolean shoreEqual(ShoreContext a, ShoreContext b, int size) {
+        for (int i = 0; i < size; i++) if (Float.floatToRawIntBits(a.valleyPotential(i))
+                != Float.floatToRawIntBits(b.valleyPotential(i))) return false;
+        return true;
     }
     private static int components(short[] values,int h,int w) { boolean[] seen=new boolean[values.length]; int count=0; int[] queue=new int[values.length]; for(int s=0;s<values.length;s++) if(!seen[s]) { count++; short id=values[s]; int head=0,tail=0;seen[s]=true;queue[tail++]=s;while(head<tail){int n=queue[head++],r=n/w,c=n%w;int[] next={n-w,n+w,n-1,n+1};for(int q:next)if(q>=0&&q<values.length&&((q/w==r)||q==n-w||q==n+w)&&!seen[q]&&values[q]==id){seen[q]=true;queue[tail++]=q;}}}return count; }
     private static Field field(int i0,int j0,int h,int w,boolean ocean) { float[] e=new float[h*w],c=new float[4*h*w]; for(int r=0;r<h;r++)for(int x=0;x<w;x++){int n=r*w+x;int gi=i0+r,gj=j0+x; e[n]=ocean&&Math.abs(gi)<100&&Math.abs(gj)<100?-20:180+((gi*31+gj*17)&31)*9; c[n]=12+((gi+gj)&7);c[2*h*w+n]=500+((gi*19-gj*7)&127)*5;}return new Field(i0,j0,h,w,e,c); }

@@ -4,6 +4,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimate;
 import com.github.xandergos.terraindiffusionmc.pipeline.CoarseBiomeHints;
 import com.github.xandergos.terraindiffusionmc.pipeline.InferenceExecutor;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
+import com.github.xandergos.terraindiffusionmc.world.structure.InstanceStructureCompatibility;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -153,7 +154,11 @@ public final class FastLocateCommand {
                             placements.add(new PlacementTarget(holder, random)); supported = true;
                         }
                     }
-                    if (supported) holder.value().biomes().forEach(biomes::add);
+                    if (supported) {
+                        holder.value().biomes().forEach(biomes::add);
+                        InstanceStructureCompatibility.addEligibleBiomes(biomeSource,
+                                String.valueOf(registry.getKey(holder.value())), biomes);
+                    }
                 }
                 if (placements.isEmpty()) {
                     source.sendFailure(Component.literal("[td-locate] No supported random-spread placements in this dimension: " + id

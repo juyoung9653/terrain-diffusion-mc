@@ -42,14 +42,26 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         String simpleName = mixinClassName.substring(mixinClassName.lastIndexOf('.') + 1);
-        if (simpleName.equals("StreamsStartup2171Mixin") || simpleName.equals("StreamsInference2171Mixin")
-                || simpleName.equals("StreamsNaturalNetwork2171Mixin") || simpleName.equals("StreamsSeagrassFeature2171Mixin")
-                || simpleName.equals("StreamsLandGrass2171Mixin")) {
+        if (simpleName.equals("FastNoiseBiomePaletteMixin")) {
+            return FMLLoader.getLoadingModList().getMods().stream()
+                    .anyMatch(mod -> "zfastnoise".equals(mod.getModId())
+                            && "1.0.13+1.21.1+neoforge".equals(mod.getVersion().toString()));
+        }
+        if (simpleName.equals("StreamsStartup2171Mixin")) {
             return hasNativeTerrainAdapter();
+        }
+        if (simpleName.equals("StreamsInference2171Mixin") || simpleName.equals("StreamsNaturalNetwork2171Mixin")
+                || simpleName.equals("StreamsSeagrassFeature2171Mixin") || simpleName.equals("StreamsLandGrass2171Mixin")) {
+            return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2171);
+        }
+        if (simpleName.equals("StreamsInference2173Mixin") || simpleName.equals("StreamsNaturalNetwork2173Mixin")
+                || simpleName.equals("StreamsSeagrassFeature2173Mixin") || simpleName.equals("StreamsLandGrass2173Mixin")
+                || simpleName.equals("StreamsBankMaterial2173Mixin") || simpleName.equals("StreamsShallowBed2173Mixin")) {
+            return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2173);
         }
         if (MIXINS_2162.contains(simpleName)) return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2162);
         if (mixinClassName.equals("com.github.xandergos.terraindiffusionmc.mixin.TerrainSlabRiverFeatureMixin")) {
-            return hasStreamsVersion(version -> hasModernHooks(version) || is2162(version) || is2171(version))
+            return hasStreamsVersion(version -> hasModernHooks(version) || is2162(version) || isNativeTerrainAdapter(version))
                     && FMLLoader.getLoadingModList().getMods().stream().anyMatch(mod ->
                     "terrain_slabs".equals(mod.getModId()) && "3.1.2".equals(mod.getVersion().toString()));
         }
@@ -107,12 +119,12 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
     }
 
     public static boolean hasStartupAdapter() {
-        return hasStreamsVersion(version -> hasModernHooks(version) || is2162(version) || is2171(version));
+        return hasStreamsVersion(version -> hasModernHooks(version) || is2162(version) || isNativeTerrainAdapter(version));
     }
 
-    /** Audited 2.17.1 hooks retain native routing/carving with TD profile-14 inputs and graph selection. */
+    /** Audited 2.17.1/2.17.3 hooks retain native routing/carving with TD profile-14 inputs and graph selection. */
     public static boolean hasNativeTerrainAdapter() {
-        return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2171);
+        return hasStreamsVersion(StreamsStructureShieldMixinPlugin::isNativeTerrainAdapter);
     }
 
     public static boolean hasPlanformAdapter() {
@@ -120,11 +132,13 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
     }
 
     public static boolean isAuditedVersion(String version) {
-        return isLegacyBankMaterialVersion(version) || hasModernHooks(version) || is2162(version) || is2171(version);
+        return isLegacyBankMaterialVersion(version) || hasModernHooks(version) || is2162(version) || isNativeTerrainAdapter(version);
     }
 
     private static boolean is2162(String version) { return "2.16.2".equals(version); }
     private static boolean is2171(String version) { return "2.17.1".equals(version); }
+    private static boolean is2173(String version) { return "2.17.3".equals(version); }
+    private static boolean isNativeTerrainAdapter(String version) { return is2171(version) || is2173(version); }
 
     private static boolean isLegacyBankMaterialVersion(String version) {
         return "2.13.1".equals(version) || "2.13.5".equals(version);

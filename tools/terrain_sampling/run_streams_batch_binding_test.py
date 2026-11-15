@@ -119,7 +119,7 @@ def main() -> None:
         sources.append(path)
     for name in ("LocalTerrainProvider", "InferenceExecutor", "ExactTerrainSampling", "EcologyData",
                  "EcologyDataCache", "FastNoiseLite", "LaplacianUtils", "BiomeClassifier",
-                 "TerralithBiomeClassifier", "MacroBiomeContext", "BroadEcologyClimate",
+                 "TerralithBiomeClassifier", "MacroBiomeContext", "BroadEcologyClimate", "WetlandEcology",
                  "EcologyClassifier", "ShoreClassifier", "ShoreContext"):
         sources.append(ROOT / "common/src/main/java" / PACKAGE / "pipeline" / (name + ".java"))
     sources += [

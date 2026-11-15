@@ -26,6 +26,16 @@ public final class EcologyClassifierTest {
         reached.add(EcologyClassifier.select(0, 0, 900, .1f, false, 10, 1000, 900).sample().biomeId());
         reached.add(EcologyClassifier.select(0, 0, 2000, 1.1f, false, -5, 250, 2000).sample().biomeId());
         reached.add(EcologyClassifier.select(0, 0, 2000, 1.1f, false, -10, 250, 2000).sample().biomeId());
+        // These are habitat samples rather than arbitrary label fixtures: each exercises the
+        // public selection path with the physical prerequisite of its wetland type.
+        reached.add(EcologyClassifier.select(0, 0, 120, .04f, 20, 1300, 120,
+                Float.POSITIVE_INFINITY, 0, .04f, .90f).sample().biomeId());
+        reached.add(EcologyClassifier.select(0, 0, 120, .04f, 20, 1300, 120,
+                Float.POSITIVE_INFINITY, 0, .04f, .55f).sample().biomeId());
+        reached.add(EcologyClassifier.select(0, 0, 120, .04f, 20, 1300, 120,
+                Float.POSITIVE_INFINITY, 0, .04f, .35f).sample().biomeId());
+        reached.add(EcologyClassifier.select(0, 0, .5f, .01f, 26, 1300, .5f,
+                6, .25f, .01f, 0).sample().biomeId());
         require(reached.size() == EcologyClassifier.BIOMES.size(), "unreachable ecosystems: " + reached);
         require(transitions > 50, "exercise real label boundaries");
         var base = EcologyClassifier.select(0, 0, 300, .1f, false, 15, 800, 300).sample();

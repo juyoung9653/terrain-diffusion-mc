@@ -1,7 +1,7 @@
 # Streams Reflowing integration probe
 
 Opt-in dedicated-server diagnostic for Minecraft 1.21.1 / NeoForge 21.1.249 (default),
-audited Streams Reflowing versions through 2.17.1 and the current Terrain Diffusion source tree. Normal
+audited Streams Reflowing versions through 2.17.3 and the current Terrain Diffusion source tree. Normal
 builds do not include the diagnostic Java directory. Do not package a release
 with `probe.init.gradle` enabled.
 
@@ -9,6 +9,21 @@ To match a different installed loader, pass the same `--neoforge-version` to
 `prepare.py` and `run_suite.py`; the runner rejects a manifest/version mismatch.
 NeoForge 21.1.264 also needs its dependencies populated in the repository Gradle
 cache before the offline suite can run.
+
+For Lush Cave Ruins acceptance, include the installed LCR JAR in a fresh fixture
+and record it in the input manifest, then add `--lush-cave-ruins-audit` to the
+normal river lifecycle. The audit uses native random-spread locate (at most six
+placement-region rings by default; `--center-chunk` also centers this lookup), checks the actual generation anchor biome,
+loads every touched chunk to FULL and counts physical mud bricks. It also checks
+each piece's center against the local surface and round-trips the structure NBT.
+This is not a visual review of every room or a whole-modpack compatibility test.
+Failures retain candidate evidence in `world/td-lush-cave-ruins-audit-failed.json`.
+The opt-in anchor observer records the accepted `GenerationStub` during native
+generation. Do not require its position to lie inside the root piece or replay
+generation to infer it: LCR's named bottom jigsaw can produce an eligibility
+anchor one block above the root bounding box. The audit also checks the native
+spacing/separation and 441 candidate positions for the 1,000-block reference
+distance requirement; saved structures from older layouts are not covered.
 
 `run_suite.py` checks the selected patched `neoforge-<version>-merged.jar`
 against the production tree-ground selector before launching any Gradle child,
@@ -23,10 +38,21 @@ scale does not reproduce coastal heights or biomes. Preparation records both a
 fresh scale marker and, when necessary, a matching world-preset override. Verify
 the saved dimension type and scale marker before comparing screenshot coordinates.
 
-For Streams 2.17.1, run `audit_2171.py`, `test_2171_adapter.py`,
-`test_2171_inference.py`, `test_2171_network.py`, `test_2171_seagrass.py`
-(with `--jar <installed-jar>`) and `test_2171_gate.py` first.
-Prepare a fresh fixture with `--streams-version 2.17.1` and the installed
+The normal `run_suite.py` entry point automatically runs `audit_2171.py`,
+`test_2171_adapter.py`, `test_2171_inference.py`, `test_2171_network.py`,
+`test_2171_seagrass.py` and `test_2171_gate.py` for Streams 2.17.1/2.17.3.
+It identifies the actual fixture JAR by mod metadata and uses the selected JDK.
+A failed check, duplicate JAR or unaudited future version stops before Gradle
+launches Minecraft. `--preflight-only` runs these checks without generating a
+world; use a valid prepared fixture, not a previously run fixture with extra
+runtime-created input directories. Legacy 2.13.1/2.13.5/2.13.8/2.15.2/2.16.2 retain their
+existing validation routes and are explicitly reported as `legacy_not_covered`.
+The scripts select the exact adapter from the JAR metadata. 2.17.3 has separate
+sampler, graph and flora hooks: its wetness interface, watershed persistence
+helper and flora feature were renamed. Never enable the 2.17.1 private targets
+by widening their gate. The static audit requires all three inference invocation
+targets in the actual `engine` method, including the watershed helper.
+Prepare a fresh fixture with the matching `--streams-version` and the installed
 `streamsreflowing.properties`. Use `--natural-rivers true` for V14, or `false`
 for an otherwise identical native baseline. The `streams_profile` receipt must
 confirm the requested profile and exact terrain. V14 also requires the observed
@@ -36,6 +62,47 @@ Fresh V14 checks also require a nonzero completed `natural_network_policy`
 counter with no failures. A matching config alone does not prove the graph hook
 ran: 2.17.1's normal engine calls the five-argument domain builder; its
 six-argument plate-key builder is a different path.
+
+For 2.17.3, automatic preflight also runs `test_2173_bank_material.py`,
+`test_2173_bed_hook.py`, `test_2173_raised_cap_policy.py` and
+`test_river_regression_contract.py`. The old 2.16.2
+bank-material and shallow-bed hooks remain version-gated and cannot protect a
+2.17.3 world. The new cap hook covers all twelve exposed-top helper calls plus
+the direct recap and vegetation writes; the depth hook follows the renamed
+shared helper and its four callers. Keep the exact-version gate tests when
+updating Streams, and inspect actual cap/bed blocks after water settlement.
+Registry, network and biome checks alone do not cover these visual regressions.
+The geometry guard rejects redundant
+air caps only above original dry ground already containing the planned water;
+it retains channel floors, lower-bank containment and existing solid/fluid blocks.
+
+`--river-regression-audit` is a targeted post-settlement check for the November
+15 screenshot seed `7756831701670037456`, scale 1, profile 14. It requires
+explicit chunks and `--settle-water`, and checks the desert bank near
+`-1009,971` and shallow channel near `-1106,1156` against their native plans.
+Use identical initial river-cache inputs for before/after comparisons. Never
+repair or regenerate the player's original chunks to run this check.
+For climate assertions, sample the generator biome at its first-air height and
+the original `NaturalEcology` field. Streams may replace the saved biome with
+`minecraft:river`; ecology land IDs are one-based (`BIOMES.indexOf(label) + 1`).
+The audit uses `RiverRegressionContract`; automatic preflight tests its real
+classifier mapping and the Y71-to-Y72 quart boundary before game startup.
+Normal Gradle `runServer` already compiles diagnostic Java before launching the
+game; no additional full Gradle build is needed for this check.
+
+Validated builds targeting Streams 2.17.3 require this physical river receipt
+with settled water, matching prepared JAR bytes and frozen diagnostic inputs.
+The installer repeats that requirement against the destination's actual Streams
+JAR before copying files. Unrelated successful probes cannot replace it. Old
+receipts without diagnostic-input hashes remain historical evidence and must
+not be backfilled; obtain new evidence with the current runner for a new release.
+The 2026-11-15 `river-regression-fixed3` full-pipeline run passed on 12 fresh
+chunks after 100 actual ticks with the installed gameplay mods and 85 copied
+river graphs. At `-1009,971`, sand ended at Y71 with air at Y72–73, replacing
+the raised grass/fern cap; adjacent channel water remained Y71 over solid Y70.
+At `-1106,1156`, water Y91 stood over bed Y90, matching the native shallow plan
+instead of the reproduced two-water-block pit. These are generated/saved-block
+checks, not client shader screenshots or automatic repair of existing saves.
 
 For submerged grass beds, first run `tools/ecology/test_tree_ground.py`.
 The full instance reproduced the November 13 screenshot at `1508,80,171`:
@@ -87,10 +154,12 @@ establish a matched full-instance regression.
 Add `--vanilla-kelp-audit` to the same launch for native registered cold/warm kelp
 placement on virtual oceans at depths 1, 6, 7 and 12. This is a placement check,
 not coastal visual acceptance; it does not require Hybrid Aquatic.
-Structure preflight must also propagate the exact 2.17.1
-`StreamsWorldgen$NoDecompilePermissionEver_002` plate-readiness signal. Treating
+Structure preflight must also propagate the exact plate-readiness signal:
+2.17.1 uses `StreamsWorldgen$NoDecompilePermissionEver_002`, while 2.17.3 uses
+`StreamsWorldgen$SourceGivenToAuthorizedOnly_002`. The former name is an unrelated
+input record in 2.17.3; select test signals by JAR version. Treating
 it as an ordinary failure caches an empty unified-village reservation. Run
-`tools/structure_placement/run_preflight_tests.py <2.17.1-jar>` and require a
+`tools/structure_placement/run_preflight_tests.py <installed-jar>` and require a
 native structure start after the pending plates complete; a successful build
 with zero starts does not validate structure adaptation.
 `--network-audit --natural-center=X,Z --natural-radius=N` exports bounded native
@@ -1512,6 +1581,14 @@ full-pack screenshot or shader output.
 
 For chunk disconnects, inspect `debug/disconnect-*-client.txt` as well as crash
 reports: a failed chunk packet can disconnect singleplayer without a JVM crash.
+Fast Noise (`zfastnoise`) `1.0.13+1.21.1+neoforge` writes incompatible local
+biome palettes above eight entries. The version-gated `FastNoiseBiomePaletteMixin`
+reuses its 64 sampled holders through native biome palette construction before
+the invalid data is published; smaller palettes keep the original fast path.
+Validate the installed producer, not only vanilla container roundtrips:
+`python -B tools/chunk_profile/run.py run NAME --fastnoise-biome-audit` checks the producer's
+cardinality boundaries, actual generated chunks and client packet delivery;
+the explicit `restart` action verifies the saved biome fingerprint after reopening.
 The NeoForge client captures the first failed chunk update per process in
 `debug/td-chunk-packet/latest.bin` and `latest.txt` (coordinates and byte count).
 This is diagnostic evidence, not recovery; the original exception still propagates.

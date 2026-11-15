@@ -410,21 +410,273 @@ def requested_thread_dump(target, pid, mtime_ns):
     return record
 
 
-def run(args):
+def _tree_hashes(root):
+    """Hash a clone-local mutable tree after the first successful lifecycle."""
+    if not root.exists():
+        return {}
+    return {path.relative_to(root).as_posix(): launch.sha256(path)
+            for path in sorted(root.rglob('*')) if path.is_file()}
+
+
+def _audit_passed(receipt):
+    audit = receipt.get('fastnoiseBiomeAudit') if isinstance(receipt, dict) else None
+    if not isinstance(audit, dict) or audit.get('status') != 'passed':
+        return False
+    is_restart = receipt.get('verifyRestart') is True
+    if not is_restart:
+        cardinalities = audit.get('cardinalities')
+        required = {1, 2, 3, 4, 7, 8, 9, 10, 16, 17, 32, 33, 64}
+        if (not isinstance(cardinalities, list) or not required.issubset(set(cardinalities))
+                or len(cardinalities) < 25):
+            return False
+    # The concrete generated target is recorded per phase, separately from the
+    # synthetic 1..64 cardinality cases at the receipt root.
+    if is_restart and audit.get('mode') != 'saved-chunk-reload':
+        return False
+    delivery = receipt.get('fastnoiseClientDelivery')
+    if (not isinstance(delivery, dict) or delivery.get('status') != 'passed'
+            or not delivery.get('actualClientPacket') or receipt.get('saveFlushed') is not True):
+        return False
+    chunks = [sample for phase in receipt.get('phases', ()) if isinstance(phase, dict)
+              for sample in phase.get('chunks', ()) if isinstance(sample, dict)]
+    audits = [sample.get('fastnoiseBiomeAudit') for sample in chunks]
+    return (bool(chunks)
+            and all(isinstance(audit, dict) and audit.get('status') == 'passed'
+                    and audit.get('biomeFingerprint')
+                    and isinstance(audit.get('maxBiomeCardinality'), int)
+                    for audit in audits)
+            and any(audit['maxBiomeCardinality'] > 8 for audit in audits))
+
+
+def _wetland_spatial_audit_passed(receipt, target):
+    """Validate the fresh, clone-local spatial CSV referenced by its receipt."""
+    audit = receipt.get('wetlandSpatialAudit') if isinstance(receipt, dict) else None
+    if (not isinstance(audit, dict) or audit.get('status') != 'passed'
+            or not isinstance(audit.get('samples'), int) or audit['samples'] < 262144
+            or audit.get('file') != 'wetland-spatial.csv'
+            or not isinstance(audit.get('csvSha256'), str)):
+        return False
+    csv = target / audit['file']
+    return csv.is_file() and launch.sha256(csv) == audit['csvSha256']
+
+
+def _wetland_sites(value):
+    """Accept exactly four block-coordinate sites in the diagnostic's wire format."""
+    if value is None:
+        return None
+    if not re.fullmatch(r'-?\d+,-?\d+(;-?\d+,-?\d+){3}', value):
+        raise RuntimeError('--wetland-sites requires exactly four x,z pairs separated by semicolons')
+    return value
+
+
+def _wetland_site_string(audit):
+    sites = audit.get('sites', [])
+    names = ['reed', 'mangrove', 'freshwater', 'riparian']
+    if ([site.get('name') for site in sites] != names
+            or any(not isinstance(site.get('center'), list) or len(site['center']) != 2
+                   or any(type(number) is not int for number in site['center']) for site in sites)):
+        raise RuntimeError('Wetland receipt requires four named integer-coordinate sites')
+    return ';'.join(','.join(map(str, site['center'])) for site in sites)
+
+
+def _wetland_input_hashes(manifest):
+    """Compare prepared inputs, allowing only the TD implementation to change."""
+    td = 'mods/' + manifest['terrain_diffusion_artifact']['source_filename']
+    hashes = {Path(name).as_posix(): entry['sha256'] for name, entry in manifest['files'].items()}
+    hashes.update(manifest.get('input_overrides', {}))
+    if td not in hashes or not manifest.get('fresh_level_dat_sha256'):
+        raise RuntimeError('Wetland baseline lacks prepared artifact/world identity')
+    hashes.pop(td)
+    hashes['saves/chunk-profile/level.dat'] = manifest['fresh_level_dat_sha256']
+    return hashes
+
+
+def _wetland_inputs(args, manifest, restart):
+    """Reject mismatched coordinate provenance before compilation or game launch."""
+    sites = _wetland_sites(getattr(args, 'wetland_sites', None))
+    seed = getattr(args, 'wetland_seed', None)
+    baseline = getattr(args, 'wetland_baseline', None)
+    enabled = getattr(args, 'wetland_spatial_audit', False)
+    if (sites is not None or seed is not None or baseline is not None) and not enabled:
+        raise RuntimeError('Wetland sites/seed/baseline require --wetland-spatial-audit')
+    if baseline is not None:
+        if restart:
+            raise RuntimeError('--wetland-baseline is for fresh comparisons, not restart')
+        baseline = Path(baseline).resolve()
+        previous = json.loads((baseline / 'input-manifest.json').read_text(encoding='utf-8'))
+        process = json.loads((baseline / 'process.json').read_text(encoding='utf-8'))
+        result = json.loads((baseline / 'launch-result.json').read_text(encoding='utf-8'))
+        receipt = json.loads((baseline / 'receipt.json').read_text(encoding='utf-8'))
+        if (result.get('exit_code') != 0 or result.get('timed_out') is not False
+                or result.get('passed') is not True or receipt.get('status') != 'success'
+                or not process.get('wetland_spatial_audit')
+                or not _wetland_spatial_audit_passed(receipt, baseline)):
+            raise RuntimeError('Wetland baseline requires successful retained spatial evidence')
+        audit = receipt['wetlandSpatialAudit']
+        for key in ('seed', 'scale', 'versions'):
+            if key not in previous or previous[key] != manifest.get(key):
+                raise RuntimeError(f'Wetland baseline {key} differs from prepared inputs')
+        if audit.get('seed') != manifest['seed']:
+            raise RuntimeError('Wetland baseline receipt seed differs from prepared inputs')
+        if _wetland_input_hashes(previous) != _wetland_input_hashes(manifest):
+            raise RuntimeError('Wetland baseline mods/settings/models/initial caches differ')
+        # Chunk order and diagnostic switches also affect the inference workload.
+        for key in ('side', 'chunk_x', 'chunk_z', 'regions', 'request_telemetry',
+                    'streams_settle_seconds', 'streams_ground_marine', 'streams_batch_sampling',
+                    'streams_ground_marine_audit', 'fastnoise_biome_audit'):
+            if key not in process or process[key] != getattr(args, key):
+                raise RuntimeError(f'Wetland baseline launch setting differs: {key}')
+        for key, value in (('settle_seconds', args.settle), ('phase_timeout_seconds', args.phase_timeout)):
+            if process.get(key) != value:
+                raise RuntimeError(f'Wetland baseline lacks matching launch setting: {key}')
+        prior_sites = _wetland_site_string(audit)
+        if sites is not None and sites != prior_sites:
+            raise RuntimeError('Wetland comparison sites differ from baseline')
+        sites = prior_sites
+        if seed is not None and seed != manifest['seed']:
+            raise RuntimeError('Wetland coordinate seed differs from prepared world')
+        seed = manifest['seed']
+    if sites is not None and seed is None:
+        raise RuntimeError('--wetland-sites requires --wetland-seed or --wetland-baseline')
+    if seed is not None and seed != manifest['seed']:
+        raise RuntimeError('Wetland coordinate seed differs from prepared world')
+    return sites, None if baseline is None else str(baseline)
+
+
+def _audit_preflight(target, fastnoise, wetland):
+    """Cheap source/fixture checks fail closed before diagnostic build or GPU use."""
+    checks = []
+    if fastnoise:
+        checks.append('tools/streams_probe/test_fastnoise_gate.py')
+    if wetland:
+        checks.extend(('tools/test_macro_context.py',
+                       'tools/terrain_sampling/test_analyze_wetland_spatial.py'))
+    if not checks:
+        return
+    evidence = {'status': 'running', 'scope': 'repository source checks; runtime JAR audited in game',
+                'checks': []}
+    for index, script in enumerate(checks):
+        log_path = target / f'audit-preflight-{index}.log'
+        with log_path.open('w', encoding='utf-8') as log:
+            completed = subprocess.run([sys.executable, '-B', str(ROOT / script)], cwd=ROOT,
+                                       stdout=log, stderr=subprocess.STDOUT, creationflags=FLAGS)
+        evidence['checks'].append({'script': script, 'exit_code': completed.returncode,
+                                   'log': log_path.name})
+        evidence['status'] = 'failed' if completed.returncode else 'running'
+        save(target / 'audit-preflight.json', evidence)
+        if completed.returncode:
+            raise RuntimeError(f'Audit preflight failed before game launch: {script}; see {log_path}')
+    evidence['status'] = 'passed'
+    save(target / 'audit-preflight.json', evidence)
+
+
+def _wetland_report(receipt, target, manifest, sites, baseline):
+    """Require measured grid geometry, then retain metrics separately from visual acceptance."""
+    if not _wetland_spatial_audit_passed(receipt, target):
+        raise RuntimeError('Wetland spatial receipt or CSV hash is invalid')
+    audit = receipt['wetlandSpatialAudit']
+    measured_sites = _wetland_site_string(audit)
+    if (audit.get('seed') != manifest['seed'] or audit.get('samples') != 262144
+            or audit.get('windows') != 4 or audit.get('sideBlocks') != 1024
+            or audit.get('stepBlocks') != 4 or (sites is not None and sites != measured_sites)):
+        raise RuntimeError('Wetland runtime seed/sites/grid differs from requested inputs')
+    spec = importlib.util.spec_from_file_location('wetland_analysis',
+                                                 ROOT / 'tools/terrain_sampling/analyze_wetland_spatial.py')
+    analyzer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(analyzer)
+    report = analyzer.analyse(target / audit['file'], target / 'wetland-analysis')
+    if set(report['windows']) != {site['name'] for site in audit['sites']}:
+        raise RuntimeError('Wetland CSV window names differ from runtime receipt')
+    for site in audit['sites']:
+        window = report['windows'][site['name']]
+        x, z = site['center']
+        if (window['sampleCount'] != 65536 or window['gridStepBlocks'] != 4
+                or window['extentBlocks'] != {'x': [x - 512, x + 512], 'z': [z - 512, z + 512]}):
+            raise RuntimeError(f'Wetland CSV geometry differs from receipt: {site["name"]}')
+    report['provenance'] = {'seed': manifest['seed'], 'scale': manifest['scale'],
+                            'sites': measured_sites, 'csvSha256': audit['csvSha256'],
+                            'inputManifestSha256': launch.sha256(target / 'input-manifest.json'),
+                            'tdArtifact': manifest['terrain_diffusion_artifact'], 'baseline': baseline}
+    save(target / 'wetland-analysis/summary.json', report)
+    return {'status': 'measured', 'qualityAcceptance': 'review_required',
+            'summary': 'wetland-analysis/summary.json',
+            'summarySha256': launch.sha256(target / 'wetland-analysis/summary.json')}
+
+
+def _freeze_restart_inputs(target):
+    snapshot = {
+        'version': 1,
+        'mutable': {name: _tree_hashes(target / name)
+                    for name in ('config', 'terrain-diffusion-models', 'saves/chunk-profile')},
+        'mods': _tree_hashes(target / 'mods'),
+    }
+    save(target / 'restart-input-manifest.json', snapshot)
+    return snapshot
+
+
+def _verify_restart_inputs(target, snapshot):
+    for name, expected in snapshot['mutable'].items():
+        actual = _tree_hashes(target / name)
+        if actual != expected:
+            raise RuntimeError(f'Restart input changed after freeze: {name}')
+    if _tree_hashes(target / 'mods') != snapshot['mods']:
+        raise RuntimeError('Restart mod set changed after freeze')
+
+
+def _verify_initial_mods(target, manifest, diagnostic_sha256):
+    """Bind a reload to exactly the active artifacts selected at preparation."""
+    expected = {}
+    for relative, entry in manifest['files'].items():
+        if Path(relative).parent.as_posix() != 'mods':
+            continue
+        expected[Path(relative).name] = manifest.get('input_overrides', {}).get(relative, entry['sha256'])
+    actual = {path.name: launch.sha256(path) for path in (target / 'mods').glob('*.jar')}
+    diagnostic_names = [name for name, digest in actual.items() if digest == diagnostic_sha256]
+    if len(diagnostic_names) != 1:
+        raise RuntimeError('Prior diagnostic JAR is missing, duplicated, or changed')
+    expected[diagnostic_names[0]] = diagnostic_sha256
+    if actual != expected:
+        raise RuntimeError('Restart mod artifacts differ from the initial manifest')
+
+
+def _requested_chunks(regions, side, fallback_x, fallback_z):
+    starts = [(fallback_x, fallback_z)] if not regions else [tuple(map(int, pair.split(','))) for pair in regions.split(';')]
+    return [(x + dx, z + dz) for x, z in starts for dx in range(side) for dz in range(side)]
+
+
+def _saved_chunk_headers_present(world, chunks):
+    """A restart must read prior FULL chunks rather than silently regenerate them."""
+    for chunk_x, chunk_z in chunks:
+        path = world / 'region' / f'r.{chunk_x >> 5}.{chunk_z >> 5}.mca'
+        if not path.is_file() or path.stat().st_size < 4096:
+            return False
+        with path.open('rb') as region:
+            index = ((chunk_z & 31) * 32 + (chunk_x & 31)) * 4
+            region.seek(index)
+            if region.read(4)[:3] == b'\0\0\0':
+                return False
+    return True
+
+
+def run(args, restart=False):
     target = WORK / launch.safe_name(args.name)
     manifest = json.loads((target / 'input-manifest.json').read_text(encoding='utf-8'))
-    if not manifest['complete'] or (target / 'process.json').exists():
+    if not manifest['complete'] or (not restart and (target / 'process.json').exists()):
         raise RuntimeError('Run requires a prepared, unrun fixture')
+    wetland_sites, wetland_baseline = _wetland_inputs(args, manifest, restart)
     if args.streams_settle_seconds and not args.request_telemetry:
         raise RuntimeError('--streams-settle-seconds requires --request-telemetry for the native trace')
     if any(p.info['name'] in ('java.exe', 'javaw.exe') for p in psutil.process_iter(['name'])):
         raise RuntimeError('Java is running; inspect before starting the GPU workload')
-    for relative, entry in manifest['files'].items():
-        normalized = Path(relative).as_posix()
-        expected = manifest['fresh_level_dat_sha256'] if normalized == 'saves/chunk-profile/level.dat' else manifest.get('input_overrides', {}).get(normalized, entry['sha256'])
-        if launch.sha256(target / relative) != expected:
-            raise RuntimeError(f'Prepared input changed: {relative}')
-    expected_mods = manifest.get('expected_active_mod_jars', manifest.get('active_mod_jars'))
+    if not restart:
+        for relative, entry in manifest['files'].items():
+            normalized = Path(relative).as_posix()
+            expected = manifest['fresh_level_dat_sha256'] if normalized == 'saves/chunk-profile/level.dat' else manifest.get('input_overrides', {}).get(normalized, entry['sha256'])
+            if launch.sha256(target / relative) != expected:
+                raise RuntimeError(f'Prepared input changed: {relative}')
+    fastnoise_biome_audit = getattr(args, 'fastnoise_biome_audit', False)
+    wetland_spatial_audit = getattr(args, 'wetland_spatial_audit', False)
+    expected_mods = manifest.get('expected_active_mod_jars', manifest.get('active_mod_jars')) + (1 if restart else 0)
     if len(list((target / 'mods').glob('*.jar'))) != expected_mods:
         raise RuntimeError('Prepared staged mod set changed')
     streams_ablation = manifest.get('streams_ablation', {'enabled': False, 'removed_artifact': None})
@@ -446,8 +698,56 @@ def run(args):
         fp16_decoder_identity(target / staged)
     elif precision.get('mode') != 'fp32' or precision.get('decoder_candidate') is not None:
         raise RuntimeError('Decoder precision manifest is invalid')
-    jar = build()
-    shutil.copy2(jar, target / 'mods' / jar.name)
+    process_name = 'restart-process.json' if restart else 'process.json'
+    receipt_name = 'restart-receipt.json' if restart else 'receipt.json'
+    progress_name = 'restart-progress.json' if restart else 'progress.json'
+    result_name = 'restart-launch-result.json' if restart else 'launch-result.json'
+    launcher_name = 'restart-launcher.log' if restart else 'launcher.log'
+    gpu_name = 'restart-gpu.csv' if restart else 'gpu.csv'
+    resources_name = 'restart-resources.csv' if restart else 'resources.csv'
+    if restart:
+        if (target / process_name).exists():
+            raise RuntimeError('Restart requires no prior restart attempt for this fixture')
+        prior = json.loads((target / 'process.json').read_text(encoding='utf-8'))
+        prior_result = json.loads((target / 'launch-result.json').read_text(encoding='utf-8'))
+        prior_receipt = json.loads((target / 'receipt.json').read_text(encoding='utf-8'))
+        if prior_result.get('exit_code') or prior_result.get('timed_out') or prior_receipt.get('status') != 'success':
+            raise RuntimeError('Restart requires a prior successful profile run')
+        if not fastnoise_biome_audit:
+            raise RuntimeError('Restart requires --fastnoise-biome-audit')
+        if not prior.get('fastnoise_biome_audit') or not _audit_passed(prior_receipt):
+            raise RuntimeError('Restart requires a prior successful Fast Noise biome audit')
+        if wetland_spatial_audit != bool(prior.get('wetland_spatial_audit')):
+            raise RuntimeError('Restart wetland spatial audit flag must match the prior run')
+        if wetland_spatial_audit and not _wetland_spatial_audit_passed(prior_receipt, target):
+            raise RuntimeError('Restart requires a prior successful wetland spatial audit')
+        if wetland_sites is not None and wetland_sites != prior.get('wetland_sites'):
+            raise RuntimeError('Restart wetland sites must match the prior run')
+        if (args.side, args.chunk_x, args.chunk_z, args.regions) != (prior['side'], prior['chunk_x'], prior['chunk_z'], prior['regions']):
+            raise RuntimeError('Restart target must match the prior audited run')
+        _verify_initial_mods(target, manifest, prior['diagnostic_sha256'])
+        diagnostic = next(path for path in (target / 'mods').glob('*.jar')
+                          if launch.sha256(path) == prior['diagnostic_sha256'])
+        requested = _requested_chunks(prior['regions'], prior['side'], prior['chunk_x'], prior['chunk_z'])
+        if not _saved_chunk_headers_present(target / 'saves/chunk-profile', requested):
+            raise RuntimeError('Restart requires prior generated chunks in the copied saved-world region files')
+        # Minecraft rotates latest.log on launch. Retain the first lifecycle's
+        # game logs before starting the independent saved-chunk reload process.
+        for name in ('latest.log', 'debug.log'):
+            source = target / 'logs' / name
+            preserved = target / 'logs' / f'pre-restart-{name}'
+            if source.is_file() and not preserved.exists():
+                shutil.copy2(source, preserved)
+        snapshot_path = target / 'restart-input-manifest.json'
+        if not snapshot_path.is_file():
+            raise RuntimeError('Restart input snapshot is missing from the successful first run')
+        snapshot = json.loads(snapshot_path.read_text(encoding='utf-8'))
+        _verify_restart_inputs(target, snapshot)
+        jar = diagnostic
+    else:
+        _audit_preflight(target, fastnoise_biome_audit, wetland_spatial_audit)
+        jar = build()
+        shutil.copy2(jar, target / 'mods' / jar.name)
     cfg = dict(line.split('=', 1) for line in (target / 'source-instance.cfg').read_text(encoding='utf-8').splitlines() if '=' in line)
     if cfg.get('JvmArgs') != '-XX:+UseZGC -XX:+ZGenerational':
         raise RuntimeError('Unexpected source JVM settings')
@@ -455,11 +755,21 @@ def run(args):
         libraries=launch.DEFAULT_LIBRARIES, assets=launch.DEFAULT_ASSETS, java=launch.DEFAULT_JAVA,
         collector='zgc', heap_min_mib=int(cfg['MinMemAlloc']), heap_max_mib=int(cfg['MaxMemAlloc']), property=[
             'td.inference.metrics=true', 'chunkprofile.world=chunk-profile',
-            f'chunkprofile.output={target / "receipt.json"}', f'chunkprofile.side={args.side}',
+            f'chunkprofile.output={target / receipt_name}', f'chunkprofile.side={args.side}',
+            f'chunkprofile.progress={target / progress_name}',
             f'chunkprofile.chunkX={args.chunk_x}', f'chunkprofile.chunkZ={args.chunk_z}',
             'chunkprofile.prefetch=8', f'chunkprofile.settleSeconds={args.settle}',
             f'chunkprofile.streamsSettleSeconds={args.streams_settle_seconds}',
             f'chunkprofile.timeoutSeconds={args.phase_timeout}'])
+    if fastnoise_biome_audit:
+        runtime.property.append('chunkprofile.fastnoiseBiomeAudit=true')
+    if wetland_spatial_audit and not restart:
+        runtime.property.append('chunkprofile.wetlandSpatialAudit=true')
+    if wetland_sites is not None and not restart:
+        runtime.property.append(f'chunkprofile.wetlandSites={wetland_sites}')
+    if restart:
+        runtime.property.extend(('chunkprofile.verifyRestart=true',
+                                 f'chunkprofile.priorReceipt={target / "receipt.json"}'))
     if args.request_telemetry:
         runtime.property.append('td.inference.requestTelemetry=true')
     if args.streams_ground_marine is not None:
@@ -473,25 +783,34 @@ def run(args):
             raise RuntimeError('Regions must be a semicolon-separated list of chunk X,Z pairs')
         runtime.property.append(f'chunkprofile.regions={args.regions}')
     _, native_jars, _ = launch.production_libraries(runtime.libraries)
-    launch.extract_natives(native_jars, target / 'natives')
-    command = launch.make_command(runtime, target, target / 'natives')
+    # The extractor deliberately requires a new directory. Keep the first
+    # lifecycle's native files intact when launching the independent reload.
+    natives = target / ('restart-natives' if restart else 'natives')
+    launch.extract_natives(native_jars, natives)
+    command = launch.make_command(runtime, target, natives)
     (target / 'logs').mkdir(exist_ok=True)
-    with (target / 'logs/launcher.log').open('w', encoding='utf-8') as log:
+    with (target / 'logs' / launcher_name).open('w', encoding='utf-8') as log:
         process = subprocess.Popen(command, cwd=target, stdout=log, stderr=subprocess.STDOUT, creationflags=FLAGS)
-    save(target / 'process.json', {'pid': process.pid, 'start_epoch': time.time(), 'diagnostic_sha256': launch.sha256(jar),
+    save(target / process_name, {'pid': process.pid, 'start_epoch': time.time(), 'diagnostic_sha256': launch.sha256(jar),
         'side': args.side, 'chunk_x': args.chunk_x, 'chunk_z': args.chunk_z, 'prefetch': 8,
         'regions': args.regions, 'shaders_disabled_for_diagnostic': manifest.get('shaders_disabled_for_diagnostic', False),
         'request_telemetry': args.request_telemetry,
         'streams_settle_seconds': args.streams_settle_seconds,
+        'settle_seconds': args.settle,
         'phase_timeout_seconds': args.phase_timeout,
         'streams_ground_marine': args.streams_ground_marine,
         'streams_batch_sampling': args.streams_batch_sampling,
         'streams_ground_marine_audit': args.streams_ground_marine_audit,
+        'fastnoise_biome_audit': fastnoise_biome_audit,
+        'wetland_spatial_audit': wetland_spatial_audit,
+        'wetland_sites': wetland_sites,
+        'wetland_baseline': wetland_baseline,
+        'restart': restart,
         'streams_ablation': streams_ablation,
         'heap_min_mib':runtime.heap_min_mib, 'heap_max_mib':runtime.heap_max_mib})
     print(f'Launched isolated chunk profile PID {process.pid}', flush=True)
     gpu = None
-    gpu_stream = (target / 'gpu.csv').open('w', encoding='utf-8')
+    gpu_stream = (target / gpu_name).open('w', encoding='utf-8')
     try:
         gpu = subprocess.Popen(['nvidia-smi', '--query-gpu=timestamp,utilization.gpu,utilization.memory,memory.used,power.draw',
             '--format=csv,noheader,nounits', '--loop=1'], stdout=gpu_stream, stderr=subprocess.DEVNULL, creationflags=FLAGS)
@@ -499,7 +818,7 @@ def run(args):
         pass
     started = time.monotonic()
     watched = psutil.Process(process.pid)
-    resources = (target / 'resources.csv').open('w', encoding='utf-8')
+    resources = (target / resources_name).open('w', encoding='utf-8')
     resources.write('epoch,elapsed,process_cpu_seconds,rss,available_ram\n')
     last_report = -60
     timed_out = False
@@ -533,7 +852,7 @@ def run(args):
             except OSError as failure:
                 thread_dump_requests.append({'error': failure.__class__.__name__, 'operation': 'request_file_watch'})
             if elapsed-last_report >= 60:
-                progress = target / 'progress.json'
+                progress = target / progress_name
                 info = json.loads(progress.read_text(encoding='utf-8')) if progress.exists() else {'stage':'client_startup'}
                 print(json.dumps({'elapsed_s':round(elapsed), 'progress':info}, ensure_ascii=True), flush=True)
                 last_report = elapsed
@@ -544,21 +863,36 @@ def run(args):
             gpu.terminate()
             gpu.wait(timeout=10)
         gpu_stream.close()
-    receipt = target / 'receipt.json'
+    receipt = target / receipt_name
     value = json.loads(receipt.read_text(encoding='utf-8')) if receipt.exists() else None
     unchanged = all(launch.sha256(Path(manifest['source_world']) / name) == digest for name,digest in manifest['source_world_metadata_sha256'].items())
     result = {'exit_code':process.returncode, 'timed_out':timed_out, 'receipt':value,
               'source_world_metadata_unchanged':unchanged, 'thread_dump_requests':thread_dump_requests}
-    save(target / 'launch-result.json', result)
     print(json.dumps({'exit_code':process.returncode,'timed_out':timed_out,'receipt_status':None if value is None else value.get('status'),
                       'source_world_metadata_unchanged':unchanged}), flush=True)
-    if process.returncode or timed_out or value is None or value.get('status') != 'success' or not unchanged:
+    passed = not (process.returncode or timed_out or value is None or value.get('status') != 'success'
+                   or not unchanged or (fastnoise_biome_audit and not _audit_passed(value))
+                   or (wetland_spatial_audit and not restart
+                       and not _wetland_spatial_audit_passed(value, target)))
+    if wetland_spatial_audit and not restart and not process.returncode and not timed_out and value is not None:
+        try:
+            result['wetland_analysis'] = _wetland_report(value, target, manifest, wetland_sites, wetland_baseline)
+        except (RuntimeError, ValueError, OSError) as failure:
+            result['wetland_analysis'] = {'status': 'failed', 'error': str(failure)}
+            passed = False
+    result['passed'] = passed
+    save(target / result_name, result)
+    if not restart and passed and fastnoise_biome_audit:
+        # Freeze only after the first lifecycle has stopped and its receipt has
+        # passed. A user change between the two lifecycles is therefore rejected.
+        _freeze_restart_inputs(target)
+    if not passed:
         raise RuntimeError('Profile run did not pass; inspect retained logs and receipt')
 
 
 def main():
     p=argparse.ArgumentParser(description=__doc__)
-    p.add_argument('action',choices=['prepare','run'])
+    p.add_argument('action',choices=['prepare','run','restart'])
     p.add_argument('name')
     p.add_argument('--world')
     p.add_argument('--no-shaders', action='store_true', help='disable only Iris shaders in the prepared private clone')
@@ -568,6 +902,16 @@ def main():
                    help='force this decoder precision only in a new clone')
     p.add_argument('--request-telemetry', action='store_true',
                    help='opt in to TD request-shape telemetry for this cloned diagnostic run')
+    p.add_argument('--fastnoise-biome-audit', action='store_true',
+                   help='require the Fast Noise 1.0.13 biome-palette boundary and generated-chunk audit')
+    p.add_argument('--wetland-spatial-audit', action='store_true',
+                   help='require a fresh 4x256x256 wetland spatial CSV audit; restart verifies the first receipt')
+    p.add_argument('--wetland-sites',
+                   help='exactly four block-coordinate sites: x,z;x,z;x,z;x,z')
+    p.add_argument('--wetland-seed', type=int,
+                   help='seed that supplied manually selected wetland sites; must match prepared world')
+    p.add_argument('--wetland-baseline', type=Path,
+                   help='successful fixture directory to inherit wetland sites and check comparison inputs')
     p.add_argument('--without-streams', action='store_true',
                    help='prepare a clone-only StreamsReflowing removal ablation; source instance is unchanged')
     p.add_argument('--streams-ground-marine', choices=('true', 'false'),
@@ -593,7 +937,10 @@ def main():
         p.error('--phase-timeout must be from 30 through 1800')
     WORK.mkdir(parents=True,exist_ok=True)
     with exclusive_lock(ROOT):
-        (prepare if args.action=='prepare' else run)(args)
+        if args.action == 'prepare':
+            prepare(args)
+        else:
+            run(args, restart=args.action == 'restart')
 
 
 if __name__=='__main__':

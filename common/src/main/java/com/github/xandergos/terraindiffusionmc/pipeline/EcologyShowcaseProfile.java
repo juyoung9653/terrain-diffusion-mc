@@ -26,7 +26,11 @@ public final class EcologyShowcaseProfile {
             Map.entry("snowy_boreal_woodland", new Climate(-4.0F, .80F)),
             Map.entry("snowy_tundra", new Climate(-5.0F, .40F)),
             Map.entry("alpine_tundra", new Climate(-6.0F, .50F)),
-            Map.entry("glacial_highlands", new Climate(-12.0F, .35F)));
+            Map.entry("glacial_highlands", new Climate(-12.0F, .35F)),
+            Map.entry("reed_marsh", new Climate(16.0F, 1.35F)),
+            Map.entry("freshwater_swamp", new Climate(20.0F, 1.35F)),
+            Map.entry("mangrove_swamp", new Climate(28.0F, 1.35F)),
+            Map.entry("riparian_forest", new Climate(16.0F, 1.20F)));
 
     private EcologyShowcaseProfile() {
     }
@@ -54,8 +58,18 @@ public final class EcologyShowcaseProfile {
         float elevation = name.equals("montane_forest") ? 900.0F : 100.0F;
         var sample = EcologyClassifier.select(x, z, elevation, slope, false,
                 climate.temperature(), rainfall, elevation).sample();
+        float wetness = switch (name) {
+            case "reed_marsh" -> .98f;
+            case "freshwater_swamp" -> .60f;
+            case "riparian_forest" -> .30f;
+            default -> 0;
+        };
+        float marine = name.equals("mangrove_swamp") ? .95f : 0;
+        var habitat = new EcologyClassifier.Sample(sample.biomeId(), sample.treeCover(), sample.temperature(),
+                sample.moisture(), sample.slope(), wetness, marine);
         return new EcologyClassifier.Sample(EcologyClassifier.BIOMES.indexOf(name) + 1,
-                name.equals("alpine_tundra") || name.equals("glacial_highlands") ? 0 : sample.treeCover(),
-                sample.temperature(), sample.moisture(), sample.slope());
+                name.equals("alpine_tundra") || name.equals("glacial_highlands") ? 0
+                        : WetlandEcology.treeCover(sample.treeCover(), WetlandEcology.weights(habitat)),
+                sample.temperature(), sample.moisture(), sample.slope(), wetness, marine);
     }
 }

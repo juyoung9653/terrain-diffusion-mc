@@ -19,9 +19,15 @@ public final class EcologyData {
     public EcologyData(int width, int height, short[] biomeIds, short[] terrainBiomeIds,
                        float[] cover, float[] temperature, float[] moisture, float[] slope,
                        float[] snowRetention, float[] openWaterFraction) {
+        this(width, height, biomeIds, terrainBiomeIds, cover, temperature, moisture, slope,
+                snowRetention, openWaterFraction, new float[width * height], new float[width * height]);
+    }
+    public EcologyData(int width, int height, short[] biomeIds, short[] terrainBiomeIds,
+                       float[] cover, float[] temperature, float[] moisture, float[] slope,
+                       float[] snowRetention, float[] openWaterFraction, float[] wetness, float[] marineInfluence) {
         this.width = width; this.height = height; this.values = Math.multiplyExact(width, height);
         this.hot = new Snapshot(biomeIds, terrainBiomeIds, cover, temperature, moisture, slope,
-                snowRetention, openWaterFraction);
+                snowRetention, openWaterFraction, wetness, marineInfluence);
     }
     public int biomeId(int x, int z) { return snapshot().biomeIds[z * width + x]; }
     public short terrainBiomeId(int x, int z) { return snapshot().terrainBiomeIds[z * width + x]; }
@@ -31,13 +37,14 @@ public final class EcologyData {
     public EcologyClassifier.Sample sample(int x, int z) {
         Snapshot fields = snapshot(); int i = z * width + x;
         return new EcologyClassifier.Sample(fields.biomeIds[i], fields.cover[i], fields.temperature[i],
-                fields.moisture[i], fields.slope[i]);
+                fields.moisture[i], fields.slope[i], fields.wetness[i], fields.marineInfluence[i]);
     }
     EcologyData crop(int x, int z, int w, int h) {
         Snapshot source = snapshot(); int size = w * h;
         short[] ids = new short[size], terrain = new short[size];
         float[] trees = new float[w * h], temp = new float[w * h], moist = new float[w * h], slopes = new float[w * h];
         float[] retention = new float[w * h], openWater = new float[w * h];
+        float[] wet = new float[w * h], marine = new float[w * h];
         for (int r = 0; r < h; r++) {
             int from = (z + r) * width + x, to = r * w;
             System.arraycopy(source.biomeIds, from, ids, to, w);
@@ -48,8 +55,10 @@ public final class EcologyData {
             System.arraycopy(source.slope, from, slopes, to, w);
             System.arraycopy(source.snowRetention, from, retention, to, w);
             System.arraycopy(source.openWaterFraction, from, openWater, to, w);
+            System.arraycopy(source.wetness, from, wet, to, w);
+            System.arraycopy(source.marineInfluence, from, marine, to, w);
         }
-        return new EcologyData(w, h, ids, terrain, trees, temp, moist, slopes, retention, openWater);
+        return new EcologyData(w, h, ids, terrain, trees, temp, moist, slopes, retention, openWater, wet, marine);
     }
 
     void retainCold(EcologyDataCache cache) { cache.retain(this); }
@@ -89,13 +98,15 @@ public final class EcologyData {
 
     static final class Snapshot {
         final short[] biomeIds, terrainBiomeIds;
-        final float[] cover, temperature, moisture, slope, snowRetention, openWaterFraction;
+        final float[] cover, temperature, moisture, slope, snowRetention, openWaterFraction, wetness, marineInfluence;
         Snapshot(short[] biomeIds, short[] terrainBiomeIds, float[] cover, float[] temperature,
-                 float[] moisture, float[] slope, float[] snowRetention, float[] openWaterFraction) {
+                 float[] moisture, float[] slope, float[] snowRetention, float[] openWaterFraction,
+                 float[] wetness, float[] marineInfluence) {
             this.biomeIds = biomeIds; this.terrainBiomeIds = terrainBiomeIds;
             this.cover = cover; this.temperature = temperature; this.moisture = moisture;
             this.slope = slope; this.snowRetention = snowRetention;
             this.openWaterFraction = openWaterFraction;
+            this.wetness = wetness; this.marineInfluence = marineInfluence;
         }
     }
 

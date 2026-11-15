@@ -51,7 +51,7 @@ class GreeneriesCompatibilityTest(unittest.TestCase):
             self.assertFalse(data["replace"])
             climate.extend(data["values"])
         self.assertEqual(set(climate), actual_biomes)
-        self.assertEqual(len(climate), 19)
+        self.assertEqual(len(climate), 23)
         # Native selectors own common/rare membership; do not inject native patches again.
         for path in (resources / "terrain-diffusion-mc/neoforge/biome_modifier").rglob("*.json"):
             data = json.loads(path.read_text())
@@ -74,10 +74,14 @@ class GreeneriesCompatibilityTest(unittest.TestCase):
             for name, (source, _, _) in generator.SPECS.items():
                 original = json.loads(jar.read(f"data/minecraft/worldgen/biome/{source}.json"))["features"][9]
                 expected = [f for f in original if f != "minecraft:glow_lichen" and not f.startswith("minecraft:trees_")]
+                if name in generator.WETLAND_BIOMES:
+                    expected = [f for f in expected if f in (
+                        "minecraft:patch_grass_normal", "minecraft:patch_grass_forest")]
                 modifier = json.loads((resources / f"neoforge/biome_modifier/greeneries_native/{name}.json").read_text())
                 actual = modifier["features"]
                 self.assertEqual([f.replace("minecraft:", "terrain-diffusion-mc:greeneries_native/") for f in expected], actual)
-                self.assertTrue(any("flower" in f for f in actual), name)
+                if any("flower" in f for f in expected):
+                    self.assertTrue(any("flower" in f for f in actual), name)
                 for feature in expected:
                     path = feature.split(":", 1)[1]
                     clone = json.loads((resources / f"worldgen/placed_feature/greeneries_native/{path}.json").read_text())

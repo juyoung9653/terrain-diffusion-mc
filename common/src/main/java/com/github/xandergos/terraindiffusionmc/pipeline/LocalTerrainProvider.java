@@ -1331,22 +1331,24 @@ public final class LocalTerrainProvider {
         float[] snowRetention = EcologyClassifier.snowRetention(paddedElevation, h, w, metersPerBlock);
         short[] biomes = new short[n], terrain = new short[n];
         float[] cover = new float[n], temperature = new float[n], moisture = new float[n], slopes = new float[n];
-        float[] openWater = new float[n];
+        float[] openWater = new float[n], wetness = new float[n], marine = new float[n];
         for (int r = 0; r < h; r++) for (int c = 0; c < w; c++) {
             int index = r * w + c, x = j0 + c, z = i0 + r;
             var broad = climate.sample(x, z);
             var selection = EcologyClassifier.select(x, z, elevation[index], gradients[index] / metersPerBlock,
                     broad.temperature(), broad.precipitation(), broad.elevation(),
-                    shore.waterDistanceBlocks(index), shore.openWaterFraction(index), shore.reliefSlope(index));
+                    shore.waterDistanceBlocks(index), shore.openWaterFraction(index), shore.reliefSlope(index),
+                    shore.valleyPotential(index));
             var sample = selection.sample();
             biomes[index] = (short) sample.biomeId(); terrain[index] = selection.terrainBiomeId();
             cover[index] = sample.treeCover(); temperature[index] = sample.temperature();
             moisture[index] = sample.moisture(); slopes[index] = sample.slope();
             openWater[index] = shore.openWaterFraction(index);
+            wetness[index] = sample.wetness(); marine[index] = sample.marineInfluence();
         }
         return new HeightmapData(data.heightmap, data.biomeIds, data.terralithBiomeIds,
                 new EcologyData(w, h, biomes, terrain, cover, temperature, moisture, slopes,
-                        snowRetention, openWater), w, h);
+                        snowRetention, openWater, wetness, marine), w, h);
     }
 
     private float[] addElevationNoise(float[] elevSmooth, float[] elevPadded,

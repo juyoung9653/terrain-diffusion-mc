@@ -22,14 +22,15 @@ public final class TerrainReplayCodecTest {
                 new short[][]{{-1, 2, 3, 4}, {4, 3, 2, 1}},
                 new float[][]{{-0f, 0f, Float.intBitsToFloat(0x7fc12345), Float.POSITIVE_INFINITY},
                     {1f, -1f, Float.NEGATIVE_INFINITY, Float.MIN_VALUE}, {2, 3, 4, 5}, {5, 6, 7, 8}, {9, 10, 11, 12},
-                    {Float.intBitsToFloat(0x3e99999a), .5f, 1f, 0f}});
+                    {Float.intBitsToFloat(0x3e99999a), .5f, 1f, 0f},
+                    {.1f, .35f, .65f, .95f}, {.75f, .5f, .25f, 0f}});
     }
     static HeightmapData nativeTile() {
         Tile t = tile();
         return new HeightmapData(t.heightmap(), t.biomeIds(), t.terralithBiomeIds(),
                 new EcologyData(2, 2, t.ecologyIds()[0], t.ecologyIds()[1], t.ecologyValues()[0],
                     t.ecologyValues()[1], t.ecologyValues()[2], t.ecologyValues()[3], t.ecologyValues()[4],
-                    t.ecologyValues()[5]), 2, 2);
+                    t.ecologyValues()[5], t.ecologyValues()[6], t.ecologyValues()[7]), 2, 2);
     }
     static void resign(byte[] bytes) throws Exception {
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(Arrays.copyOf(bytes, bytes.length - 32));
@@ -49,7 +50,7 @@ public final class TerrainReplayCodecTest {
                 rejected(() -> TerrainReplayCodec.decode(key, Arrays.copyOf(bytes, bytes.length - 1)));
                 byte[] trailing = Arrays.copyOf(bytes, bytes.length + 1); resign(trailing);
                 rejected(() -> TerrainReplayCodec.decode(key, trailing));
-                byte[] version = bytes.clone(); version[7] = 3; resign(version);
+                byte[] version = bytes.clone(); version[7] = 2; resign(version);
                 rejected(() -> TerrainReplayCodec.decode(key, version));
                 byte[] dimensions = bytes.clone(); dimensions[71] ^= 1; resign(dimensions);
                 rejected(() -> TerrainReplayCodec.decode(key, dimensions));
@@ -97,8 +98,9 @@ public final class TerrainReplayCodecTest {
                         check(data.ecology.biomeId(x, z) == tile().ecologyIds()[0][at]);
                         check(data.ecology.terrainBiomeId(x, z) == tile().ecologyIds()[1][at]);
                         float[] actual = {sample.treeCover(), sample.temperature(), sample.moisture(), sample.slope(),
-                                data.ecology.snowRetention(x, z), data.ecology.openWaterFraction(x, z)};
-                        for (int plane = 0; plane < 6; plane++) check(Float.floatToRawIntBits(actual[plane])
+                                data.ecology.snowRetention(x, z), data.ecology.openWaterFraction(x, z),
+                                sample.wetness(), sample.marineInfluence()};
+                        for (int plane = 0; plane < 8; plane++) check(Float.floatToRawIntBits(actual[plane])
                                 == Float.floatToRawIntBits(tile().ecologyValues()[plane][at]));
                     }
                 }

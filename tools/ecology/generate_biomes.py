@@ -26,12 +26,28 @@ SPECS = {
     "snowy_tundra": ("snowy_plains", "snowy_plains", -.5),
     "alpine_tundra": ("snowy_plains", "snowy_slopes", -.5),
     "glacial_highlands": ("snowy_plains", "frozen_peaks", -.7),
+    # Wetland identities remain separate from their continuous placement fields.
+    # These source biomes contribute only safe native ecological resources; TD's
+    # own features decide the final soil, canopy, and water-margin placement.
+    "reed_marsh": ("swamp", "swamp", .8),
+    "freshwater_swamp": ("swamp", "swamp", .8),
+    "mangrove_swamp": ("mangrove_swamp", "mangrove_swamp", .9),
+    "riparian_forest": ("forest", "forest", .7),
 }
+
+# A source biome's structure tags express that source's native distribution, not
+# the distribution of a TD ecological derivative.  Structure eligibility is
+# owned by TD's world-local compatibility policy, so do not widen it merely by
+# cloning wetland resources.
+WETLAND_BIOMES = frozenset(("reed_marsh", "freshwater_swamp", "mangrove_swamp",
+                            "riparian_forest"))
+WETLAND_IDS = frozenset(f"terrain-diffusion-mc:ecology/{name}" for name in WETLAND_BIOMES)
 
 VEGETAL_FEATURES = [
     "minecraft:glow_lichen",
     "terrain-diffusion-mc:eco_trees",
     "terrain-diffusion-mc:eco_groundcover",
+    "terrain-diffusion-mc:eco_wetland_groundcover",
 ]
 
 CANOPY_FLOOR_FEATURES = {
@@ -49,6 +65,14 @@ def write_groundcover_resources(output):
         },
         "placed_feature/eco_groundcover.json": {
             "feature": "terrain-diffusion-mc:eco_groundcover",
+            "placement": [],
+        },
+        "configured_feature/eco_wetland_groundcover.json": {
+            "type": "terrain-diffusion-mc:eco_wetland_groundcover",
+            "config": {},
+        },
+        "placed_feature/eco_wetland_groundcover.json": {
+            "feature": "terrain-diffusion-mc:eco_wetland_groundcover",
             "placement": [],
         },
     }
@@ -116,11 +140,21 @@ def generate(vanilla, output, neoforge_output=None):
         if "/tags/worldgen/biome/" not in path:
             continue
         direct = {v if isinstance(v, str) else v.get("id") for v in body.get("values", [])}
-        additions = [name for name, base in names.items() if base in direct]
-        if not additions:
-            continue
+        structure_tag = "/tags/worldgen/biome/has_structure/" in path
+        stronghold_bias = path.endswith("/stronghold_biased_to.json")
+        additions = [name for name, base in names.items()
+                     if base in direct and not (name in WETLAND_IDS
+                                                and (structure_tag or stronghold_bias))]
         target = output / path
         old = json.loads(target.read_text(encoding="utf-8")) if target.exists() else {"replace": False, "values": []}
+        values = old["values"]
+        if structure_tag or stronghold_bias:
+            # Remove resources emitted by an earlier generator version as well.
+            old["values"] = [value for value in values
+                             if (value if isinstance(value, str) else value.get("id")) not in WETLAND_IDS]
+        changed = old["values"] != values
+        if not additions and not changed:
+            continue
         existing = {v if isinstance(v, str) else v.get("id") for v in old["values"]}
         old["values"].extend(value for value in additions if value not in existing)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +198,12 @@ def write_native_groundcover(output, name, features, resources):
     for feature in features:
         if feature in VEGETAL_FEATURES:
             continue
+        # Wetland water plants are produced by the universally appended TD
+        # feature, whose density follows the continuous hydrology fields.
+        # Keep Greeneries' optional per-label fallback grass-only.
+        if name in WETLAND_BIOMES and feature not in (
+                "minecraft:patch_grass_normal", "minecraft:patch_grass_forest"):
+            continue
         path = feature.split(":", 1)[1]
         native.append("terrain-diffusion-mc:greeneries_native/" + path)
         placed = copy.deepcopy(resources[f"data/minecraft/worldgen/placed_feature/{path}.json"])
@@ -196,7 +236,7 @@ def write_native_biome_tags(output):
             "is_temperate/overworld": [], "is_plains": []}
     for name, (source, tag_source, _) in SPECS.items():
         climate = "cold" if source in ("taiga", "snowy_taiga", "snowy_plains") else (
-            "hot" if source in ("savanna", "jungle", "desert") else "temperate")
+            "hot" if source in ("savanna", "jungle", "desert", "mangrove_swamp") else "temperate")
         biome = "terrain-diffusion-mc:ecology/" + name
         tags[f"is_{climate}/overworld"].append(biome)
         if tag_source == "plains":

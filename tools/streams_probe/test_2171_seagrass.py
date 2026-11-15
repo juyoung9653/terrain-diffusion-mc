@@ -1,18 +1,20 @@
-﻿"""Static and handler-level regression for Streams Reflowing 2.17.1 aquatic flora gating."""
+"""Static and handler-level regression for Streams Reflowing 2.17.1 aquatic flora gating."""
 from __future__ import annotations
 
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import unittest
 
 from test_2171_adapter import find_jdk
+from audit_2171 import audit_2171
 
 ROOT = Path(__file__).resolve().parents[2]
 MIXIN = ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin/StreamsSeagrassFeature2171Mixin.java"
-OUT = ROOT / "build/streams-2171-review/seagrass-test"
+OUT_ROOT = ROOT / "build/streams-2171-review"
 TARGET = "dev.streamsreflowing.worldgen.AllRightsReservedNiceJohn_004"
 PLACE_COLUMN = ("(Lnet/minecraft/world/level/WorldGenLevel;"
                 "Lnet/minecraft/util/RandomSource;"
@@ -83,24 +85,45 @@ class SeagrassStaticContractTest(unittest.TestCase):
         self.assertIn("Lnet/minecraft/world/level/block/state/BlockState;I)Z", source)
         self.assertEqual(2, source.count("SubmergedPlantPlacementGuard.allowsPlacement"))
 
+    def test_2173_land_grass_writers(self) -> None:
+        if self.version != "2.17.3":
+            return
+        text = javap(self.jdk, self.jar)
+        short = ("(Lnet/minecraft/world/level/WorldGenLevel;Lnet/minecraft/core/BlockPos;"
+                 "Lnet/minecraft/world/level/block/state/BlockState;)Z")
+        tall = "(Lnet/minecraft/world/level/WorldGenLevel;Lnet/minecraft/core/BlockPos;)Z"
+        self.assertIn("descriptor: " + short, text)
+        self.assertIn("descriptor: " + tall, text)
+        self.assertIn("WorldGenLevel.setBlock", method_for_descriptor(text, short))
+        self.assertIn("DoublePlantBlock.placeAt", method_for_descriptor(text, tall))
+        land = (ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin/"
+                "StreamsLandGrass2173Mixin.java").read_text(encoding="utf-8-sig")
+        descriptors = re.sub(r'"\s*\+\s*"', "", land)
+        self.assertIn('targets = "' + TARGET + '"', land)
+        self.assertIn(short, descriptors)
+        self.assertIn(tall, descriptors)
+        self.assertEqual(2, land.count("GreeneriesPlacementGuard.acceptsNaturalGrass"))
 
-def compile_and_run(jdk: Path) -> None:
-    source = OUT / "src"
+
+def compile_and_run(jdk: Path, out: Path) -> None:
+    source = out / "src"
     source.mkdir(parents=True, exist_ok=True)
     files: list[Path] = []
     for name, contents in STUBS.items():
+        if name == "SeagrassHarness.java":
+            contents = contents.replace("StreamsSeagrassFeature2171Mixin", MIXIN.stem)
         target = source / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(contents, encoding="utf-8")
         files.append(target)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    subprocess.run([str(jdk / "bin/javac.exe"), "--release", "21", "-d", str(OUT), str(MIXIN), *map(str, files)],
+    subprocess.run([str(jdk / "bin/javac.exe"), "--release", "21", "-d", str(out), str(MIXIN), *map(str, files)],
                    cwd=ROOT, check=True, creationflags=flags)
-    result = subprocess.run([str(jdk / "bin/java.exe"), "-ea", "-cp", str(OUT), "SeagrassHarness"],
+    result = subprocess.run([str(jdk / "bin/java.exe"), "-ea", "-cp", str(out), "SeagrassHarness"],
                             cwd=ROOT, text=True, capture_output=True, check=True, creationflags=flags)
     if "Seagrass2171Harness: PASS" not in result.stdout:
         raise AssertionError(result.stdout + result.stderr)
-    print(result.stdout.strip())
+    print(result.stdout.strip() + " [" + MIXIN.stem + "]")
 
 
 def main() -> None:
@@ -108,10 +131,23 @@ def main() -> None:
     parser.add_argument("--jar", required=True, type=Path)
     parser.add_argument("--java-home", type=Path)
     args = parser.parse_args()
+    receipt = audit_2171(find_jdk(args.java_home), args.jar.resolve())
+    if not receipt["passed"]:
+        raise SystemExit("Streams static audit failed: " + "; ".join(receipt["failures"]))
+    version = receipt["version"]
+    global MIXIN, TARGET
+    if version == "2.17.3":
+        MIXIN = ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin/StreamsSeagrassFeature2173Mixin.java"
+        TARGET = "dev.streamsreflowing.worldgen.SeeAiNoticeConstant_005"
     SeagrassStaticContractTest.jar = args.jar.resolve()
     SeagrassStaticContractTest.jdk = find_jdk(args.java_home)
-    unittest.main(argv=[sys.argv[0]], exit=False)
-    compile_and_run(SeagrassStaticContractTest.jdk)
+    SeagrassStaticContractTest.version = version
+    result = unittest.main(argv=[sys.argv[0]], exit=False,
+                           testRunner=unittest.TextTestRunner(stream=sys.stdout))
+    if not result.result.wasSuccessful():
+        raise SystemExit(1)
+    compile_and_run(SeagrassStaticContractTest.jdk,
+                    OUT_ROOT / ("seagrass-test-" + version.replace(".", "")))
 
 
 if __name__ == "__main__":

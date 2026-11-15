@@ -17,6 +17,11 @@ import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.Collections;
+import java.util.Set;
+import java.util.WeakHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
@@ -24,10 +29,11 @@ import java.util.concurrent.atomic.LongAdder;
 /**
  * Thin wrapper around ONNX Runtime with aggressive VRAM optimization.
  *
- * <p>Only one model is resident in GPU VRAM at a time (GPU-slot swapping).
+ * <p>With stage offloading enabled, one model occupies the shared GPU slot.
  * Model weights are kept in CPU RAM between inference calls and uploaded to
  * GPU on demand. This keeps peak VRAM to a single model's footprint instead
- * of all three simultaneously.
+ * of all three simultaneously. GPU sessions are also released after five minutes
+ * without inference, and recreated on demand. Persistent models reload from disk.
  */
 public final class OnnxModel implements AutoCloseable {
 
@@ -84,6 +90,44 @@ public final class OnnxModel implements AutoCloseable {
     private static final Object GPU_SLOT_LOCK = new Object();
     private static OnnxModel gpuSlotHolder = null;
     private static OrtSession activeGpuSession = null;
+    private static final Set<OnnxModel> GPU_MODELS = Collections.newSetFromMap(new WeakHashMap<>());
+    private static final long GPU_IDLE_NANOS = TimeUnit.MINUTES.toNanos(5);
+    private static long lastGpuActivityNanos = System.nanoTime();
+
+    static {
+        Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "terrain-diffusion-gpu-idle");
+            thread.setDaemon(true);
+            return thread;
+        }).scheduleWithFixedDelay(OnnxModel::evictIdleGpuSessions, 1, 1, TimeUnit.SECONDS);
+    }
+
+    private static void evictIdleGpuSessions() {
+        synchronized (GPU_SLOT_LOCK) {
+            if (System.nanoTime() - lastGpuActivityNanos < GPU_IDLE_NANOS) return;
+            for (OnnxModel model : GPU_MODELS) {
+                try {
+                    if (model.gpuSession != null) {
+                        model.gpuSession.close();
+                        model.gpuSession = null;
+                        LOG.info("Unloaded idle GPU model '{}' after 5 minutes", model.name);
+                    }
+                } catch (Exception e) {
+                    LOG.warn("Could not unload idle GPU model '{}'", model.name, e);
+                }
+            }
+            if (activeGpuSession != null) {
+                try {
+                    activeGpuSession.close();
+                    activeGpuSession = null;
+                    gpuSlotHolder = null;
+                    LOG.info("Unloaded idle GPU model slot after 5 minutes");
+                } catch (Exception e) {
+                    LOG.warn("Could not unload idle GPU model slot", e);
+                }
+            }
+        }
+    }
 
     private final OrtEnvironment env;
     /**
@@ -95,6 +139,8 @@ public final class OnnxModel implements AutoCloseable {
     private final String name;
     private OrtSession cpuSession;    // non-null in CPU-only mode
     private OrtSession gpuSession;    // non-null when offload_models=false
+    private boolean persistentGpu;
+    private Path sessionModelPath;
     private volatile boolean closed;
 
     private static final class OptimizedModelLoadResult {
@@ -131,6 +177,7 @@ public final class OnnxModel implements AutoCloseable {
                 initialOptimizedModelLoadResult = optimizeModelAtRuntime(sourceModelBytes, false);
             }
             byte[] loadedModelBytes;
+            OptimizedModelLoadResult loadedModel = initialOptimizedModelLoadResult;
             try {
                 initializeModelSession(initialOptimizedModelLoadResult.modelBytes, start);
                 loadedModelBytes = initialOptimizedModelLoadResult.modelBytes;
@@ -145,9 +192,19 @@ public final class OnnxModel implements AutoCloseable {
                 OptimizedModelLoadResult rebuiltOptimizedModelLoadResult = optimizeModelAtRuntime(sourceModelBytes, true);
                 initializeModelSession(rebuiltOptimizedModelLoadResult.modelBytes, start);
                 loadedModelBytes = rebuiltOptimizedModelLoadResult.modelBytes;
+                loadedModel = rebuiltOptimizedModelLoadResult;
             }
+            sessionModelPath = loadedModel.optimizedModelPath != null
+                    ? loadedModel.optimizedModelPath : modelFilePath.toAbsolutePath();
             this.optimizedModelBytes = loadedModelBytes;
             releaseOptimizedModelBytesAfterPersistentSession();
+            synchronized (GPU_SLOT_LOCK) {
+                if (cpuSession == null) {
+                    persistentGpu = gpuSession != null;
+                    GPU_MODELS.add(this);
+                    lastGpuActivityNanos = System.nanoTime();
+                }
+            }
         } catch (Exception e) {
             throw new RuntimeException("Failed to load ONNX model: " + modelFilePath, e);
         }
@@ -156,9 +213,8 @@ public final class OnnxModel implements AutoCloseable {
     /**
      * Offloaded models recreate a GPU session after another model uses the
      * shared slot, so their bytes must remain available. A successfully created
-     * CPU or non-offloaded GPU session is persistent and is always selected by
-     * {@link #run(Object[][])} before the shared-slot path, even if a later
-     * configuration read would differ.
+     * CPU session needs no reload; a non-offloaded GPU session reloads from disk
+     * after idle eviction. Its mode stays fixed even if configuration later differs.
      */
     private void releaseOptimizedModelBytesAfterPersistentSession() {
         if (cpuSession != null || gpuSession != null) {
@@ -201,7 +257,7 @@ public final class OnnxModel implements AutoCloseable {
         } catch (Exception optimizationException) {
             LOG.warn("Runtime ONNX optimization failed for '{}', using source model bytes: {}",
                     name, optimizationException.getMessage());
-            return new OptimizedModelLoadResult(sourceModelBytes, optimizedModelPath, false);
+            return new OptimizedModelLoadResult(sourceModelBytes, null, false);
         }
     }
 
@@ -319,18 +375,32 @@ public final class OnnxModel implements AutoCloseable {
      * @return the output tensor as a flat float array
      */
     public float[] run(Object[][] inputs) {
-        if (closed) {
-            throw new IllegalStateException("ONNX model '" + name + "' is closed");
-        }
-        if (cpuSession != null) {
-            return runWithSession(cpuSession, inputs);
-        }
-        if (gpuSession != null) {
-            return runWithSession(gpuSession, inputs);
-        }
         synchronized (GPU_SLOT_LOCK) {
-            claimGpuSlot();
-            return runWithSession(activeGpuSession, inputs);
+            if (closed) {
+                throw new IllegalStateException("ONNX model '" + name + "' is closed");
+            }
+            if (cpuSession != null) {
+                return runWithSession(cpuSession, inputs);
+            }
+            try {
+                if (persistentGpu) {
+                    if (gpuSession == null) {
+                        try (OrtSession.SessionOptions options = new OrtSession.SessionOptions()) {
+                            options.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+                            addGpuProvider(options);
+                            gpuSession = createMeasuredSession(Files.readAllBytes(sessionModelPath), options);
+                            LOG.info("Reloaded GPU model '{}' after idle unload", name);
+                        } catch (Exception e) {
+                            throw new RuntimeException("Failed to reload GPU model: " + name, e);
+                        }
+                    }
+                    return runWithSession(gpuSession, inputs);
+                }
+                claimGpuSlot();
+                return runWithSession(activeGpuSession, inputs);
+            } finally {
+                lastGpuActivityNanos = System.nanoTime();
+            }
         }
     }
 
@@ -489,21 +559,23 @@ public final class OnnxModel implements AutoCloseable {
 
     @Override
     public void close() {
-        closed = true;
         synchronized (GPU_SLOT_LOCK) {
+            closed = true;
+            GPU_MODELS.remove(this);
             if (gpuSlotHolder == this && activeGpuSession != null) {
                 try { activeGpuSession.close(); } catch (OrtException ignored) {}
                 activeGpuSession = null;
                 gpuSlotHolder = null;
             }
-        }
-        if (cpuSession != null) {
-            try { cpuSession.close(); } catch (OrtException ignored) {}
-            cpuSession = null;
-        }
-        if (gpuSession != null) {
-            try { gpuSession.close(); } catch (OrtException ignored) {}
-            gpuSession = null;
+            if (cpuSession != null) {
+                try { cpuSession.close(); } catch (OrtException ignored) {}
+                cpuSession = null;
+            }
+            if (gpuSession != null) {
+                try { gpuSession.close(); } catch (OrtException ignored) {}
+                gpuSession = null;
+            }
+            optimizedModelBytes = null;
         }
     }
 }

@@ -20,6 +20,9 @@ gradle.projectsEvaluated {
             }
             maxHeapSize = '6G'
             args 'nogui'
+            if (gradle.rootProject.findProperty('tdProbe.lushCaveRuinsAudit')?.toString() == 'true') {
+                args '--mixin', 'td-lush-ruins-trace.mixins.json'
+            }
             if (gradle.rootProject.findProperty('tdProbe.iceTrace')?.toString() == 'true'
                     || gradle.rootProject.findProperty('tdProbe.bankWriteTrace')?.toString() == 'true') {
                 args '--mixin', 'td-ice-trace.mixins.json'

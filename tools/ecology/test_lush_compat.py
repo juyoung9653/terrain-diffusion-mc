@@ -46,19 +46,23 @@ class LushCompatibilityTest(unittest.TestCase):
         paths = list((ROOT / "common/src/main/resources/data/terrain-diffusion-mc/worldgen/biome/ecology").glob("*.json"))
         generated = {f"terrain-diffusion-mc:ecology/{path.stem}" for path in paths}
         self.assertEqual(generated, self.biomes)
-        self.assertEqual(19, len(generated))
+        self.assertEqual(23, len(generated))
         self.assertTrue(self.biomes.isdisjoint({
             "minecraft:desert", "minecraft:beach", "minecraft:forest",
             "minecraft:plains", "minecraft:sunflower_plains",
         }))
         for path in paths:
             with self.subTest(biome=path.stem):
-                self.assertIn("terrain-diffusion-mc:eco_groundcover", load(path)["features"][9])
+                features = load(path)["features"][9]
+                self.assertIn("terrain-diffusion-mc:eco_groundcover", features)
+                self.assertIn("terrain-diffusion-mc:eco_wetland_groundcover", features)
+                self.assertLess(features.index("terrain-diffusion-mc:eco_groundcover"),
+                                features.index("terrain-diffusion-mc:eco_wetland_groundcover"))
 
     def test_installed_lush_injection_is_removed_in_same_generation_step(self):
         configured = os.environ.get("LUSH_JAR")
         mods = Path(os.environ.get("APPDATA", "")) / "PrismLauncher/instances/1.21.1 neoforge rpg/minecraft/mods"
-        jar_path = Path(configured) if configured else next(mods.glob("lush-*.jar"), None)
+        jar_path = Path(configured) if configured else next(mods.glob("lush-neoforge-*.jar"), None)
         if jar_path is None:
             self.skipTest("Set LUSH_JAR for installed-mod integration validation")
         with zipfile.ZipFile(jar_path) as jar:

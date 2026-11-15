@@ -28,6 +28,7 @@ METADATA = ("level.dat", "data/terrain_diffusion_world_settings.dat",
             "data/terrain_diffusion_hybrid_aquatic.properties")
 WORLD_DATAPACKS = "datapacks"
 MANIFEST = "input-manifest.json"
+ARCHIVED_MODEL_INPUTS = "archived-model-inputs.json"
 NAME = re.compile(r"[A-Za-z0-9_-]+\Z")
 NEOFORGE_VERSION = re.compile(r"\d+\.\d+\.\d+\Z")
 
@@ -64,6 +65,12 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _reject_archived_model_inputs(fixture_path: Path, role: str) -> None:
+    """Do not parse archive metadata: presence of the marker blocks reuse."""
+    if os.path.lexists(fixture_path / ARCHIVED_MODEL_INPUTS):
+        raise ValueError(f"{role} model inputs archived; restore using the marker's archive instructions before copying")
 
 
 def _atomic_copy(source: Path, target: Path, expected: str) -> None:
@@ -227,6 +234,9 @@ def prepare(source: Path, target: Path, *, center: str | None = None,
     _real_components(target, root)
     if not source.is_dir():
         raise ValueError(f"source fixture does not exist: {source}")
+    _reject_archived_model_inputs(source, "source")
+    if target.exists():
+        _reject_archived_model_inputs(target, "target")
     if center is not None and not re.fullmatch(r"-?\d+,-?\d+", center):
         raise ValueError("center must be X,Z integers")
     if radius is not None and radius < 1:

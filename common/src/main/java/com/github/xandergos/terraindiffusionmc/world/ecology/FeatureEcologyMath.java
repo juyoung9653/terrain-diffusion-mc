@@ -185,6 +185,35 @@ public final class FeatureEcologyMath {
         return surfaceMaterial(temperature, bankMoisture, slope, treeCover, elevation, seed, x, z, scale);
     }
 
+    /**
+     * Fraction of an exposed natural-soil column that may retain mud.  The inputs are
+     * continuous habitat weights rather than biome labels, so crossing a quart
+     * biome boundary cannot make a soil seam.  Callers still have to reject water,
+     * shore minerals, structures, and unsuitable existing substrate.
+     */
+    public static float wetlandMudChance(float reedMarsh, float freshwaterSwamp,
+                                         float mangrove, float riparian,
+                                         float temperature, float slope) {
+        float warmEnough = smoothRange(-1.0F, 5.0F, temperature);
+        float stableGround = 1.0F - smoothRange(.10F, .38F, slope);
+        float habitat = .32F * clamp01(reedMarsh)
+                + .62F * clamp01(freshwaterSwamp)
+                + .78F * clamp01(mangrove)
+                + .28F * clamp01(riparian);
+        return clamp01(habitat * warmEnough * stableGround);
+    }
+
+    /** Wet-bank plant density; it does not imply that a water-dependent plant may survive. */
+    public static float wetlandBankPlantChance(float reedMarsh, float freshwaterSwamp,
+                                               float mangrove, float riparian,
+                                               float temperature, float slope) {
+        float growth = smoothRange(-3.0F, 7.0F, temperature);
+        float stableGround = 1.0F - smoothRange(.12F, .45F, slope);
+        float habitat = .70F * clamp01(reedMarsh) + .52F * clamp01(freshwaterSwamp)
+                + .26F * clamp01(mangrove) + .38F * clamp01(riparian);
+        return clamp01(.30F * habitat * growth * stableGround);
+    }
+
     /** Overlapping plant communities. No biome ID, chunk coordinate or hard climate selector is used. */
     public static float coldGroundcoverAcceptance(float temperature) {
         return smoothRange(-12, -4, temperature) * (1 - .85F * EcologyClassifier.coldState(temperature));

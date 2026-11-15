@@ -1,7 +1,7 @@
 """Bind local probe results to production sources and the built NeoForge JAR.
 
-These local receipts detect stale/mismatched evidence, not malicious forgery or
-missing test coverage. Selecting sufficient checks remains a reviewer decision.
+These local receipts detect stale/mismatched evidence, not malicious forgery.
+Streams 2.17.3 has mandatory river coverage; other coverage remains a reviewer decision.
 """
 from __future__ import annotations
 
@@ -36,7 +36,28 @@ def source_fingerprint(root: Path) -> str:
     return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
 
-def read_validation(path: Path, fingerprint: str) -> dict:
+def input_fingerprint(root: Path, inputs: tuple[Path, ...]) -> str:
+    """Snapshot selected diagnostic inputs, including missing paths and new files."""
+    root = root.resolve()
+    files = {}
+    for raw in inputs:
+        path = (root / raw).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError(f"diagnostic input outside workspace: {raw}")
+        key = path.relative_to(root).as_posix()
+        if path.is_dir():
+            files[key + "/"] = "directory"
+            for child in sorted(path.rglob("*")):
+                if child.is_file() and "__pycache__" not in child.parts and child.suffix != ".pyc":
+                    if not child.resolve().is_relative_to(root):
+                        raise ValueError(f"diagnostic input outside workspace: {child}")
+                    files[child.relative_to(root).as_posix()] = sha256(child)
+        else:
+            files[key] = sha256(path) if path.is_file() else None
+    return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+
+
+def read_validation(path: Path, fingerprint: str, root: Path = ROOT) -> dict:
     row = json.loads(path.read_text(encoding="utf-8"))
     if (row.get("schema") != 1 or row.get("kind") != "probe-validation"
             or row.get("success") is not True or row.get("processExit") != 0
@@ -44,6 +65,13 @@ def read_validation(path: Path, fingerprint: str) -> dict:
         raise ValueError(f"missing successful probe evidence: {path}")
     if row.get("sourceFingerprint") != fingerprint:
         raise ValueError(f"validation source differs from current production inputs: {path}")
+    if "diagnosticInputs" in row or "diagnosticInputsSha256" in row:
+        inputs = row.get("diagnosticInputs")
+        if (not isinstance(inputs, list) or not inputs
+                or any(not isinstance(item, str) or Path(item).is_absolute() for item in inputs)
+                or input_fingerprint(root, tuple(Path(item) for item in inputs))
+                != row.get("diagnosticInputsSha256")):
+            raise ValueError(f"validation diagnostic inputs changed: {path}")
     receipt = (path.parent / row["receipt"]).resolve()
     if not receipt.is_relative_to(path.parent.resolve()) or sha256(receipt) != row.get("receiptSha256"):
         raise ValueError(f"validation result was replaced or changed: {path}")
@@ -53,8 +81,11 @@ def read_validation(path: Path, fingerprint: str) -> dict:
     return {"path": str(path.resolve()), "sha256": sha256(path), "result": row}
 
 
-def check_validations(paths: list[Path], fingerprint: str) -> list[dict]:
-    return [read_validation(path, fingerprint) for path in paths]
+def check_validations(paths: list[Path], fingerprint: str, root: Path = ROOT) -> list[dict]:
+    entries = [read_validation(path, fingerprint, root) for path in paths]
+    from streams_probe.release_checks import require_streams_coverage
+    require_streams_coverage(entries, root=root)
+    return entries
 
 
 def assert_release_jar(mod: Path) -> None:
@@ -76,7 +107,9 @@ def write_release(root: Path, mod: Path, fingerprint: str, validations: list[dic
         path = Path(entry["path"])
         if sha256(path) != entry["sha256"]:
             raise ValueError("probe evidence changed during build")
-        read_validation(path, fingerprint)
+        read_validation(path, fingerprint, root)
+    from streams_probe.release_checks import require_streams_coverage
+    require_streams_coverage(validations, root=root)
     assert_release_jar(mod)
     target = mod.with_name(mod.name + RELEASE_SUFFIX)
     value = {"schema": 1, "kind": "validated-neoforge-build", "sourceFingerprint": fingerprint,
@@ -101,6 +134,8 @@ def verify_release(mod: Path, root: Path = ROOT) -> dict:
         evidence = Path(entry["path"])
         if sha256(evidence) != entry["sha256"]:
             raise ValueError("installation probe evidence changed")
-        read_validation(evidence, fingerprint)
+        read_validation(evidence, fingerprint, root)
+    from streams_probe.release_checks import require_streams_coverage
+    require_streams_coverage(row["validations"], root=root)
     assert_release_jar(mod)
     return row

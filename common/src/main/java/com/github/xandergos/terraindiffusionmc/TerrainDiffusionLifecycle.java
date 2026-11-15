@@ -12,6 +12,7 @@ import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoSurfaceFeature;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoTreesFeature;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoGroundcoverFeature;
+import com.github.xandergos.terraindiffusionmc.world.ecology.EcoWetlandGroundcoverFeature;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -41,6 +42,7 @@ public final class TerrainDiffusionLifecycle {
     public static final ResourceLocation ECO_TREES_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_trees");
     public static final ResourceLocation ECO_SURFACE_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_surface");
     public static final ResourceLocation ECO_GROUNDCOVER_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_groundcover");
+    public static final ResourceLocation ECO_WETLAND_GROUNDCOVER_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_wetland_groundcover");
     private static boolean initialized;
 
     private TerrainDiffusionLifecycle() {
@@ -87,6 +89,7 @@ public final class TerrainDiffusionLifecycle {
         registrar.register(ECO_TREES_ID, new EcoTreesFeature());
         registrar.register(ECO_SURFACE_ID, new EcoSurfaceFeature());
         registrar.register(ECO_GROUNDCOVER_ID, new EcoGroundcoverFeature());
+        registrar.register(ECO_WETLAND_GROUNDCOVER_ID, new EcoWetlandGroundcoverFeature());
     }
 
     @FunctionalInterface

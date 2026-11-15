@@ -45,10 +45,12 @@ def level_nbt(existing_showcase=None, dimension_type="terrain-diffusion-mc:terra
 
 class PrepareShowcasesTest(unittest.TestCase):
     def test_cold_profiles_keep_existing_ids(self):
-        self.assertEqual(len(showcases.ECOLOGY_BIOMES), 19)
+        self.assertEqual(len(showcases.ECOLOGY_BIOMES), 23)
         self.assertEqual(showcases.ECOLOGY_BIOMES[11], "snowy_boreal_forest")
-        self.assertEqual(showcases.ECOLOGY_BIOMES[15:], (
+        self.assertEqual(showcases.ECOLOGY_BIOMES[15:19], (
             "snowy_boreal_woodland", "snowy_tundra", "alpine_tundra", "glacial_highlands"))
+        self.assertEqual(showcases.ECOLOGY_BIOMES[19:], (
+            "reed_marsh", "freshwater_swamp", "mangrove_swamp", "riparian_forest"))
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

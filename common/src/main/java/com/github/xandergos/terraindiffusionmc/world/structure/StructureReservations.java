@@ -23,6 +23,7 @@ public final class StructureReservations {
     // in vanilla createStructures, never in this terrain-free reservation enumeration.
     private static final Set<String> VERIFIED_SPREAD_SUBCLASSES=Set.of(
             "com.github.L_Ender.cataclysm.world.structures.placements.CataclysmRandomSpread",
+            "net.mehvahdjukaar.supplementaries.common.worldgen.RandomSpreadStructurePlacementWithExclusion",
             "com.yungnickyoung.minecraft.betterdeserttemples.world.placement.BetterDesertTemplePlacement",
             "com.yungnickyoung.minecraft.betterjungletemples.world.placement.BetterJungleTemplePlacement",
             "com.yungnickyoung.minecraft.betterstrongholds.world.placement.BetterStrongholdsPlacement");
@@ -71,6 +72,7 @@ public final class StructureReservations {
         this.config=config;
         List<SetPlan> plans = new ArrayList<>();
         for (Holder<StructureSet> holder : state.possibleStructureSets()) {
+            if (LushCaveRuinsCompatibility.isNativeOnlySet(holder.value())) continue;
             String id = holder.unwrapKey().map(k -> k.location().toString())
                     .orElseGet(() -> UnifiedVillageSets.syntheticId(holder.value()));
             if (id == null) { LogUtils.getLogger().warn("TD structure reservation rejects unregistered structure set"); continue; }

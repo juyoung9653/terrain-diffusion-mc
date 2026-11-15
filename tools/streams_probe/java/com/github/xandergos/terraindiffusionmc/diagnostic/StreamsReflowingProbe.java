@@ -108,6 +108,10 @@ public final class StreamsReflowingProbe {
                     && !Boolean.getBoolean("td.streamsProbe.settleWater")) {
                 throw new IllegalArgumentException("riverBedMaterialAudit requires settleWater");
             }
+            if (Boolean.getBoolean("td.streamsProbe.riverRegressionAudit")
+                    && !Boolean.getBoolean("td.streamsProbe.settleWater")) {
+                throw new IllegalArgumentException("riverRegressionAudit requires settleWater");
+            }
             if (Boolean.getBoolean("td.streamsProbe.vanillaKelpAudit"))
                 emit(receipts, server.submit(() -> VanillaKelpAudit.run(level))
                         .get(config.timeoutSeconds, TimeUnit.SECONDS));
@@ -278,10 +282,32 @@ public final class StreamsReflowingProbe {
                 })
                         .get(config.timeoutSeconds, TimeUnit.SECONDS);
                 emit(receipts, nativeConfig.receipt());
-                emit(receipts, json("native_streams_mode", "version", "2.17.1", "tdNaturalProfile", profile,
+                String streamsVersion = net.neoforged.fml.ModList.get().getModContainerById("streamsreflowing")
+                        .orElseThrow().getModInfo().getVersion().toString();
+                emit(receipts, json("native_streams_mode", "version", streamsVersion, "tdNaturalProfile", profile,
                         "exactTerrain", exact, "status", exact ? "passed" : "failed"));
                 if (!exact || !profileMatchesRequest || !nativeConfig.passed())
                     throw new IllegalStateException("Native Streams profile or exact-terrain contract failed");
+            }
+            if (Boolean.getBoolean("td.streamsProbe.lushCaveRuinsAudit")) {
+                var audit = LushCaveRuinsAudit.run(server, level);
+                emit(receipts, audit.toString());
+                if (!"passed".equals(audit.get("status").getAsString()))
+                    throw new IllegalStateException("Lush Cave Ruins natural generation audit failed");
+            }
+            if (Boolean.getBoolean("td.streamsProbe.wetlandCompatAudit")) {
+                var structures = server.submit(() -> ModStructureCompatibilityAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                emit(receipts, structures.toString());
+                var wetland = server.submit(() -> WetlandBiomeAudit.run(level))
+                        .get(config.timeoutSeconds, TimeUnit.SECONDS);
+                emit(receipts, wetland.toString());
+                if (!"passed".equals(structures.get("status").getAsString())
+                        || !"passed".equals(wetland.get("status").getAsString()))
+                    throw new IllegalStateException("wetland or mod structure compatibility audit failed");
+                // This dedicated audit has its own bounded FULL-chunk evidence,
+                // and must not launch the unrelated river route search.
+                return;
             }
             boolean riverPreview = Boolean.getBoolean("td.streamsProbe.riverPreview");
             if (Boolean.getBoolean("td.streamsProbe.naturalRiverAudit")) NaturalRiverAudit.export(level);
@@ -665,6 +691,10 @@ public final class StreamsReflowingProbe {
                         "selectedChunks", selected.size()));
                 if (Boolean.getBoolean("td.streamsProbe.riverBedMaterialAudit")) {
                     emit(receipts, server.submit(() -> SubmergedRiverBedAudit.run(level, selected,
+                            settled.tick - startTick)).get(config.timeoutSeconds, TimeUnit.SECONDS));
+                }
+                if (Boolean.getBoolean("td.streamsProbe.riverRegressionAudit")) {
+                    emit(receipts, server.submit(() -> RiverRegressionAudit.run(level, selected,
                             settled.tick - startTick)).get(config.timeoutSeconds, TimeUnit.SECONDS));
                 }
             }

@@ -112,7 +112,9 @@ def install(receipt_path: Path, library: Path, mod: Path, mods_dir: Path) -> Non
     from probe_suite import exclusive_lock
     with exclusive_lock(ROOT):
         # Check before even creating destination directories or copying the companion.
-        verify_release(mod)
+        release = verify_release(mod)
+        from streams_probe.release_checks import require_streams_coverage
+        require_streams_coverage(release["validations"], root=ROOT, installed_mods=mods_dir)
         verify(receipt_path, library, mod)
         # The library goes first: an interrupted install cannot leave a freshly
         # copied slim mod without its required runtime jar.

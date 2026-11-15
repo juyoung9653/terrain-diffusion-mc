@@ -9,9 +9,15 @@ public final class EcologyClassifier {
             "boreal_forest", "boreal_woodland", "cold_grassland",
             "dry_woodland", "dry_grassland", "tropical_forest", "tropical_woodland", "desert",
             "snowy_boreal_forest", "temperate_rainforest", "montane_forest", "steppe",
-            "snowy_boreal_woodland", "snowy_tundra", "alpine_tundra", "glacial_highlands");
+            "snowy_boreal_woodland", "snowy_tundra", "alpine_tundra", "glacial_highlands",
+            "reed_marsh", "freshwater_swamp", "mangrove_swamp", "riparian_forest");
     private static final FastNoiseLite VARIATION = variation();
-    public record Sample(int biomeId, float treeCover, float temperature, float moisture, float slope) { }
+    public record Sample(int biomeId, float treeCover, float temperature, float moisture, float slope,
+                         float wetness, float marineInfluence) {
+        public Sample(int biomeId, float treeCover, float temperature, float moisture, float slope) {
+            this(biomeId, treeCover, temperature, moisture, slope, 0, 0);
+        }
+    }
     public record Selection(Sample sample, short terrainBiomeId) { }
 
     private EcologyClassifier() { }
@@ -146,6 +152,13 @@ public final class EcologyClassifier {
     public static Selection select(int x, int z, float elevation, float slope,
                                    float regionalTemperature, float regionalRainfall, float regionalElevation,
                                    float waterDistance, float openWater, float relief) {
+        return select(x, z, elevation, slope, regionalTemperature, regionalRainfall, regionalElevation,
+                waterDistance, openWater, relief, 0);
+    }
+
+    public static Selection select(int x, int z, float elevation, float slope,
+                                   float regionalTemperature, float regionalRainfall, float regionalElevation,
+                                   float waterDistance, float openWater, float relief, float valleyPotential) {
         // The model temperature already reflects its coarse altitude. Correct only the local difference.
         float temperature = localTemperature(elevation, regionalTemperature, regionalElevation);
         float regionalMoisture = clamp(regionalRainfall / (500f + 20f * Math.max(0, regionalTemperature)), 0, 2);
@@ -160,9 +173,16 @@ public final class EcologyClassifier {
                     elevation, slope, temperature, regionalRainfall, 0, false);
             return terrain(water, temperature, moisture, slope);
         }
+        // Valley potential already excludes sloping habitat at landscape scale.
+        // Reapplying the block-scale slope here fragments its transition into speckles.
+        float wetness = WetlandEcology.wetness(temperature, moisture, valleyPotential);
+        if (openWater > 0 && Float.isFinite(waterDistance)) wetness *= smooth(0, 24, waterDistance);
+        float marine = WetlandEcology.marineInfluence(elevation, slope, temperature, moisture,
+                waterDistance, openWater, relief);
         short shore = ShoreClassifier.select(x, z, elevation, slope, temperature, moisture,
                 waterDistance, openWater, relief);
-        if (shore != 0) return terrain(shore, temperature, moisture, slope);
+        if (shore != 0 && marine < .15f) return terrain(shore, temperature, moisture, slope);
+        if (shore != 0) wetness *= smooth(.15f, .45f, marine);
         float cold = coldState(temperature);
         float alpine = alpineExposure(temperature, slope, relief);
 
@@ -193,12 +213,19 @@ public final class EcologyClassifier {
         else if (id == 1 && regionalElevation >= 700) id = 14;
         else if (id == 1 && regionalMoisture >= 1.45f) id = 13;
         else if (id == 3 && regionalTemperature <= 17 && regionalMoisture < .52f) id = 15;
-        return new Selection(new Sample(id, clamp(cover, 0, 1), temperature, moisture, slope), (short) 0);
+        Sample habitat = new Sample(id, clamp(cover, 0, 1), temperature, moisture, slope, wetness, marine);
+        id = WetlandEcology.biomeId(id, habitat);
+        cover = WetlandEcology.treeCover(cover, WetlandEcology.weights(habitat));
+        // A retained shore cannot receive trees. Once marine habitat takes over,
+        // grow its canopy in after the beach-to-land terrain transition.
+        if (shore != 0) cover *= smooth(.15f, .45f, marine);
+        return new Selection(new Sample(id, cover, temperature, moisture, slope, wetness, marine), (short) 0);
     }
 
     private static Selection terrain(short id, float temperature, float moisture, float slope) {
         return new Selection(new Sample(0, 0, temperature, moisture, slope), id);
     }
+
 
     public static float smooth(float low, float high, float value) {
         float t = clamp((value - low) / (high - low), 0, 1);

@@ -27,6 +27,7 @@ PROFILES = (
     "dry_woodland", "dry_grassland", "tropical_forest", "tropical_woodland", "desert",
     "snowy_boreal_forest", "temperate_rainforest", "montane_forest", "steppe",
     "snowy_boreal_woodland", "snowy_tundra", "alpine_tundra", "glacial_highlands",
+    "reed_marsh", "freshwater_swamp", "mangrove_swamp", "riparian_forest",
 )
 SEEDS = (91357, 0, -71421)
 SCALES = (2, 5)
@@ -43,6 +44,7 @@ BIOME_COLORS = {
         (71, 151, 72), (225, 201, 118),
         (178, 207, 205), (30, 100, 64), (78, 113, 91), (182, 181, 102),
         (190, 214, 207), (212, 218, 205), (173, 185, 193), (223, 235, 243),
+        (91, 132, 64), (48, 96, 66), (38, 107, 83), (55, 125, 69),
     ))
 }
 JAVA_SOURCES = (
@@ -50,6 +52,7 @@ JAVA_SOURCES = (
     "common/src/main/java/com/github/xandergos/terraindiffusionmc/pipeline/TerralithBiomeClassifier.java",
     "common/src/main/java/com/github/xandergos/terraindiffusionmc/pipeline/ShoreClassifier.java",
     "common/src/main/java/com/github/xandergos/terraindiffusionmc/pipeline/EcologyClassifier.java",
+    "common/src/main/java/com/github/xandergos/terraindiffusionmc/pipeline/WetlandEcology.java",
     "common/src/main/java/com/github/xandergos/terraindiffusionmc/pipeline/EcologyShowcaseProfile.java",
     "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/ecology/FeatureEcologyMath.java",
     "tools/ecology/EcologyOfflineAtlas.java",

@@ -10,6 +10,7 @@ final class MacroBiomeContext {
     static final int COAST_BLOCKS = 24;
     private static final int ANCHOR_JITTER = 32;
     private static final int CONTEXT_PAD = 192;
+    private static final int HABITAT_RADIUS = 16;
     private static final int[] RING_64_I = new int[16], RING_64_J = new int[16], RING_96_I = new int[16], RING_96_J = new int[16];
     static {
         for (int k = 0; k < 16; k++) {
@@ -36,10 +37,14 @@ final class MacroBiomeContext {
                     scale, fieldI0 + r, fieldJ0 + c);
 
         int[] oceanDistance = coastDistance(smooth, fieldH, fieldW, height, width);
+        // Habitat follows a valley floor, not individual block-scale bumps.
+        // Keep this field separate: coast distance, climate anchors and terrain
+        // continue to use the original samples. The global halo keeps tile overlaps exact.
+        float[] habitat = habitatHeights(smooth, fieldH, fieldW);
         int n = height * width;
         float[] e = new float[n], slope = new float[n], temp = new float[n], precip = new float[n], cv = new float[n];
         boolean[] coast = new boolean[n];
-        float[] distance = new float[n], open = new float[n], relief = new float[n];
+        float[] distance = new float[n], open = new float[n], relief = new float[n], valley = new float[n];
         AnchorTable anchors = new AnchorTable(i0, j0, height, width);
         for (int r = 0; r < height; r++) for (int c = 0; c < width; c++) {
             int worldI = i0 + r, worldJ = j0 + c;
@@ -57,6 +62,23 @@ final class MacroBiomeContext {
             coast[out] = oceanDistance[local] <= COAST_BLOCKS * COAST_BLOCKS;
             // The bounded distance transform is exact only within the coast radius.
             distance[out] = coast[out] ? (float) Math.sqrt(oceanDistance[local]) : Float.POSITIVE_INFINITY;
+            // The same global halo is used on both sides of a tile border. Opposite
+            // samples cancel planar hillsides; a concave valley floor retains water.
+            int center = (worldI - fieldI0) * fieldW + worldJ - fieldJ0;
+            float centerHeight = habitat[center];
+            float crossValley = 0;
+            for (int k = 0; k < 8; k++) {
+                float left = habitat[(worldI + RING_64_I[k] - fieldI0) * fieldW
+                        + worldJ + RING_64_J[k] - fieldJ0];
+                float right = habitat[(worldI + RING_64_I[k + 8] - fieldI0) * fieldW
+                        + worldJ + RING_64_J[k + 8] - fieldJ0];
+                crossValley = Math.max(crossValley, Math.min(left, right) - centerHeight);
+            }
+            float dx = (habitat[center + HABITAT_RADIUS] - habitat[center - HABITAT_RADIUS])
+                    / (2 * HABITAT_RADIUS * physicalPixelSize);
+            float dz = (habitat[center + HABITAT_RADIUS * fieldW] - habitat[center - HABITAT_RADIUS * fieldW])
+                    / (2 * HABITAT_RADIUS * physicalPixelSize);
+            valley[out] = WetlandEcology.inlandPotential((float) Math.sqrt(dx * dx + dz * dz), crossValley);
             if (!coast[out]) continue;
             int wet = 0;
             float lo = Float.POSITIVE_INFINITY, hi = Float.NEGATIVE_INFINITY;
@@ -72,7 +94,32 @@ final class MacroBiomeContext {
             }
             open[out] = wet / 16f; relief[out] = (hi - lo) / (192f * physicalPixelSize);
         }
-        return new BiomeClassifier.TerralithContext(e, slope, temp, precip, cv, coast, new ShoreContext(distance, open, relief));
+        return new BiomeClassifier.TerralithContext(e, slope, temp, precip, cv, coast, new ShoreContext(distance, open, relief, valley));
+    }
+
+    /** Separable box mean; only interior values inside the existing global halo are used. */
+    static float[] habitatHeights(float[] source, int height, int width) {
+        int radius = HABITAT_RADIUS, diameter = 2 * radius + 1;
+        float[] rows = new float[source.length], result = new float[source.length];
+        for (int r = 0; r < height; r++) {
+            double sum = 0;
+            for (int c = -radius; c <= radius; c++) sum += source[r * width + Math.max(0, Math.min(width - 1, c))];
+            for (int c = 0; c < width; c++) {
+                rows[r * width + c] = (float) (sum / diameter);
+                sum += (double) source[r * width + Math.min(width - 1, c + radius + 1)]
+                        - source[r * width + Math.max(0, c - radius)];
+            }
+        }
+        for (int c = 0; c < width; c++) {
+            double sum = 0;
+            for (int r = -radius; r <= radius; r++) sum += rows[Math.max(0, Math.min(height - 1, r)) * width + c];
+            for (int r = 0; r < height; r++) {
+                result[r * width + c] = (float) (sum / diameter);
+                sum += (double) rows[Math.min(height - 1, r + radius + 1) * width + c]
+                        - rows[Math.max(0, r - radius) * width + c];
+            }
+        }
+        return result;
     }
 
     /** Per-build geometry and derived macro samples.  This deliberately has no

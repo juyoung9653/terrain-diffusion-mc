@@ -101,6 +101,100 @@ GPU/process samples and the source-preservation result. A failure does not make
 the generated fixture reusable: prepare a new destination. An interrupted parent
 can leave its recorded Java PID running; inspect that task-owned process first.
 
+### Fast Noise biome-palette regression
+
+For the installed Fast Noise 1.0.13 compatibility patch, add
+`--fastnoise-biome-audit` to `run`. It requires both the synthetic 1--64 biome
+cardinality boundary audit and a per-chunk audit of every requested generated
+chunk, including an observed client delivery of the selected target chunk. The
+receipt must contain a passed root `fastnoiseBiomeAudit`, a passed
+`fastnoiseClientDelivery`, and passed `fastnoiseBiomeAudit` maps for every phase
+chunk; a normal successful chunk profile receipt is not enough for this check.
+
+The strict runner additionally requires a generated section with more than eight
+biomes. Habitat changes can remove that counterexample: the coherence fix reduced
+the original target from ten to seven. Its final Minecraft process, all five FULL
+chunks, 25 producer boundary cases and spatial receipt succeeded, but the launcher
+correctly rejected that missing coverage condition. Retain that result as such;
+do not label the strict launch a pass or invent a restart snapshot. The preceding
+ten-biome fresh/reload test used byte-identical compiled palette-fix code. For
+habitat-only comparisons use `--wetland-spatial-audit`; it has separate evidence
+requirements and does not promise a naturally generated high-cardinality target.
+
+After that successful run, use the same coordinates and flag with `restart` to
+test the copied saved world without generating replacement chunks:
+
+```powershell
+python -B tools/chunk_profile/run.py restart zfastnoise-palette-fix-20261115 `
+  --fastnoise-biome-audit --regions=372,-7 --side 1 --chunk-x 372 --chunk-z -7 `
+  --settle 45 --timeout 1800 --phase-timeout 900
+```
+
+Restart refuses an altered mod set, a changed diagnostic JAR, an absent or
+failed first receipt, a different target, and missing saved region entries. It
+records immutable first-run evidence separately in `process.json`, `receipt.json`
+and `launch-result.json`; restart evidence is written to `restart-*.json` and
+`logs/restart-launcher.log`; it retains `pre-restart-latest.log` and
+`pre-restart-debug.log` if present before Minecraft rotates them. The successful
+first run records hashes of the clone-local configuration, model, copied-world
+and mod trees in `restart-input-manifest.json`; restart verifies those hashes
+before it launches.
+This is a saved-chunk reload test, not an original-player-save test.
+
+### Wetland spatial audit
+
+Add `--wetland-spatial-audit` to a fresh `run` to export and verify the
+clone-local `wetland-spatial.csv` evidence file. Before building or launching the
+diagnostic, the runner automatically executes `tools/test_macro_context.py`
+(including habitat continuity and rectangular/overlap fixtures) and the spatial
+analyzer tests. A failure stops the launch and leaves `audit-preflight.json` and
+its logs. Selecting `--fastnoise-biome-audit` also runs the version-gate check.
+These are repository source checks; the selected runtime JAR still requires the
+in-game audits, including actual palette cardinality and independent expected
+samples. They do not certify a different JAR from source-test success alone.
+
+After the game exits, the runner verifies the CSV hash, seed, named sites and
+actual grid geometry: exactly four 256x256 windows at four-block spacing. It
+automatically writes `wetland-analysis/summary.json` and maps (when Pillow is
+available), and references the summary hash in `launch-result.json`. The report
+includes connected area, isolated-cell fraction, neighboring wetness changes
+and boundary weight changes. Missing/invalid measurements fail the run;
+`qualityAcceptance: review_required` means distribution and visual quality still
+need review. There is no universal biome-area pass threshold.
+
+```powershell
+python -B tools/chunk_profile/run.py run wetland-spatial-20261115 `
+  --wetland-spatial-audit --regions=372,-7 --side 1 --chunk-x 372 --chunk-z -7 `
+  --wetland-sites='-2400,-2560;-1152,-2304;-1664,-1952;320,-1696' `
+  --wetland-seed=-6488320557633928975 `
+  --settle 45 --timeout 1800 --phase-timeout 900
+```
+
+This enables correctness mode in the diagnostic, so its timing is not an
+isolated performance measurement. If a saved-chunk restart is also requested,
+pass the same flag: the restart does not sample again, and instead requires the
+first receipt and its retained CSV to validate. A failed first run remains
+preserved evidence and cannot be reused; prepare a new fixture for another fresh
+attempt.
+
+For a paired comparison, use `--wetland-baseline <successful-fixture-directory>`
+instead of manually copying coordinates. The runner inherits the four sites and
+rejects mismatched seed, scale, loader versions, prepared files (mods, settings,
+models and initial caches), ordered chunk requests or recorded launch settings
+before building or launching. Only the TD JAR may differ. The baseline must have
+`passed: true` in `launch-result.json`, intact CSV evidence, and recorded settle
+settings; older runs without these fields are historical evidence, not accepted
+baselines. Do not manufacture missing receipts. Prepare both fixtures from the
+same inputs and use the same launch settings. This checks recorded conditions;
+it does not establish bit-identical GPU output or rendered scenery.
+
+For manually chosen sites, `--wetland-sites` accepts exactly four `x,z` pairs
+separated by semicolons and requires `--wetland-seed` matching the prepared
+world. Without either option, sites are discovered in the current world.
+Sites/seed/baseline options require `--wetland-spatial-audit`. A restart reuses
+the first evidence; do not pass `--wetland-baseline` again. If explicit sites
+are supplied on restart, they must match the first-run process metadata.
+
 ## Interpret the measurements
 
 - ONNX run counters measure host-observed calls, including synchronization, not

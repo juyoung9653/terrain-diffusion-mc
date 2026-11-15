@@ -10,8 +10,7 @@ from audit_2171 import audit_2171
 from test_2171_adapter import find_jdk
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / "build" / "streams-2171-review" / "inference-test"
-MIXIN = ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin/StreamsInference2171Mixin.java"
+OUT_ROOT = ROOT / "build" / "streams-2171-review"
 
 STUBS = {
     "org/spongepowered/asm/mixin/Mixin.java": "package org.spongepowered.asm.mixin; import java.lang.annotation.*; @Retention(RetentionPolicy.RUNTIME) @Target(ElementType.TYPE) public @interface Mixin { String[] targets(); boolean remap() default true; }",
@@ -39,14 +38,29 @@ def main() -> None:
     jdk, jar = find_jdk(args.java_home), args.jar.resolve()
     receipt = audit_2171(jdk, jar)
     if not receipt["passed"]:
-        raise SystemExit("Streams 2.17.1 static audit failed: " + "; ".join(receipt["failures"]))
-    source = OUT / "src"; source.mkdir(parents=True, exist_ok=True)
+        raise SystemExit("Streams static audit failed: " + "; ".join(receipt["failures"]))
+    version = receipt["version"]
+    mixin = ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin" / ("StreamsInference2173Mixin.java" if version == "2.17.3" else "StreamsInference2171Mixin.java")
+    wetness = "LicensedCodeNotForAnalysis_002" if version == "2.17.3" else "SourceGivenToAuthorizedOnly_002"
+    mixin_source = mixin.read_text(encoding="utf-8")
+    if wetness not in mixin_source:
+        raise AssertionError("selected inference mixin does not bind the native wetness interface: " + wetness)
+    type_result = subprocess.run([str(jdk / "bin/javap.exe"), "-p", "-classpath", str(jar),
+                                  "dev.streamsreflowing.core.terrain." + wetness], cwd=ROOT,
+                                 text=True, capture_output=True, check=True,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if wetness not in type_result.stdout:
+        raise AssertionError("native wetness interface unavailable: " + wetness)
+    out = OUT_ROOT / ("inference-test-" + version.replace(".", ""))
+    source = out / "src"; source.mkdir(parents=True, exist_ok=True)
     files=[]
     for name, content in STUBS.items():
+        if name == "InferenceHarness.java":
+            content = content.replace("StreamsInference2171Mixin", "StreamsInference2173Mixin" if version == "2.17.3" else "StreamsInference2171Mixin")
         target=source/name; target.parent.mkdir(parents=True, exist_ok=True); target.write_text(content,encoding="utf-8"); files.append(target)
     flags=getattr(subprocess,"CREATE_NO_WINDOW",0)
-    subprocess.run([str(jdk/"bin/javac.exe"),"--release","21","-d",str(OUT),str(MIXIN),*map(str,files)],cwd=ROOT,check=True,creationflags=flags)
-    result=subprocess.run([str(jdk/"bin/java.exe"),"-ea","-cp",str(OUT),"InferenceHarness"],cwd=ROOT,text=True,capture_output=True,check=True,creationflags=flags)
+    subprocess.run([str(jdk/"bin/javac.exe"),"--release","21","-d",str(out),str(mixin),*map(str,files)],cwd=ROOT,check=True,creationflags=flags)
+    result=subprocess.run([str(jdk/"bin/java.exe"),"-ea","-cp",str(out),"InferenceHarness"],cwd=ROOT,text=True,capture_output=True,check=True,creationflags=flags)
     if "InferenceHarness: PASS" not in result.stdout: raise AssertionError(result.stdout+result.stderr)
     print(result.stdout.strip())
 if __name__ == "__main__": main()

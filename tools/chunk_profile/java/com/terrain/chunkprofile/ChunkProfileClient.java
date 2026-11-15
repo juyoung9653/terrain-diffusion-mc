@@ -25,6 +25,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.client.Minecraft;
@@ -50,6 +51,12 @@ public final class ChunkProfileClient {
     private static ChunkProfileClient INSTANCE;
     private final String world = System.getProperty("chunkprofile.world", "chunk-profile");
     private final Path output = Path.of(System.getProperty("chunkprofile.output", "chunk-profile-receipt.json"));
+    private final Path progress = Path.of(System.getProperty("chunkprofile.progress", output.resolveSibling("progress.json").toString()));
+    private final boolean fastnoiseBiomeAudit = Boolean.getBoolean("chunkprofile.fastnoiseBiomeAudit");
+    private final boolean wetlandSpatialAudit = Boolean.getBoolean("chunkprofile.wetlandSpatialAudit");
+    private final boolean correctnessAudit = fastnoiseBiomeAudit || wetlandSpatialAudit;
+    private final boolean verifyRestart = Boolean.getBoolean("chunkprofile.verifyRestart");
+    private final Map<String,String> priorBiomeFingerprints = new LinkedHashMap<>();
     private final int firstX = integer("chunkprofile.chunkX", 1024, -1875000, 1875000);
     private final int firstZ = integer("chunkprofile.chunkZ", 1024, -1875000, 1875000);
     private final int side = integer("chunkprofile.side", 8, 1, 16);
@@ -107,10 +114,12 @@ public final class ChunkProfileClient {
         if (!launched && now - readyNanos >= settleNanos && now >= nextReadinessCheckNanos) {
             nextReadinessCheckNanos = now + 1_000_000_000L;
             lastIdleSnapshot = readinessSnapshot();
-            boolean idle = readinessIdle(lastIdleSnapshot);
+            // Correctness audits require loaded chunks, not an isolated timing baseline.
+            // Streams may keep background inference active for minutes after world entry.
+            boolean idle = correctnessAudit || readinessIdle(lastIdleSnapshot);
             if (idle) { if (idleSinceNanos < 0L) idleSinceNanos = now; }
             else idleSinceNanos = -1L;
-            lifecycle(idle ? "awaiting_idle_confirmation" : streamsSettleNanos > 0 ? "awaiting_td_streams_quiescence" : "awaiting_td_idle", now - readyNanos, lastIdleSnapshot);
+            lifecycle(correctnessAudit ? "correctness_audit_starting" : idle ? "awaiting_idle_confirmation" : streamsSettleNanos > 0 ? "awaiting_td_streams_quiescence" : "awaiting_td_idle", now - readyNanos, lastIdleSnapshot);
         }
         if (!launched && idleSinceNanos >= 0L && now - idleSinceNanos >= requiredIdleNanos()) {
             launched = true;
@@ -122,7 +131,7 @@ public final class ChunkProfileClient {
     }
 
     private void lifecycle(String status, long elapsedNanos, Map<String,Object> inference) {
-        try { atomic(output.resolveSibling("progress.json"), Map.of("status",status,"settleElapsedSeconds",seconds(elapsedNanos),"requiredIdleSeconds",seconds(requiredIdleNanos()),"inference",inference,"updatedUtc",Instant.now().toString())); }
+        try { atomic(progress, Map.of("status",status,"settleElapsedSeconds",seconds(elapsedNanos),"requiredIdleSeconds",seconds(requiredIdleNanos()),"inference",inference,"updatedUtc",Instant.now().toString())); }
         catch (IOException failure) { fail("progress_write_failed:" + failure.getClass().getSimpleName()); }
     }
     private static long asLong(Object value) { return value instanceof Number number ? number.longValue() : -1L; }
@@ -163,8 +172,18 @@ public final class ChunkProfileClient {
         List<Region> requested = regions.isEmpty() ? List.of(new Region(firstX, firstZ)) : regions;
         Map<String,Object> root = new LinkedHashMap<>(); List<Map<String,Object>> phases = new ArrayList<>();
         root.put("phases", phases); root.put("world", world); root.put("requestedRegions", requested.stream().map(r -> List.of(r.x,r.z)).toList());
+        root.put("verifyRestart", verifyRestart);
+        root.put("timingIsolated", !correctnessAudit);
         try {
-            if (streamsSettleNanos > 0) {
+            if (verifyRestart) {
+                if (!fastnoiseBiomeAudit) throw new IllegalStateException("Restart requires the biome audit");
+                loadPriorBiomeFingerprints();
+                root.put("fastnoiseBiomeAudit", Map.of("status", "passed", "mode", "saved-chunk-reload"));
+            } else if (fastnoiseBiomeAudit) {
+                root.put("fastnoiseBiomeAudit", server.submit(() -> FastNoiseBiomeAudit.run(server.overworld()))
+                        .get(120, TimeUnit.SECONDS));
+            }
+            if (streamsSettleNanos > 0 && !correctnessAudit) {
                 Map<String,Object> recheck = readinessSnapshot();
                 root.put("initialStreamsQuiescenceRevalidation", recheck);
                 if (!readinessIdle(recheck)) {
@@ -174,7 +193,7 @@ public final class ChunkProfileClient {
             }
             for (int index=0; index<requested.size(); index++) {
                 Region region = requested.get(index);
-                if (index > 0) {
+                if (index > 0 && !correctnessAudit) {
                     resetStreamsTraceObservation();
                     Map<String,Object> boundary = awaitIdleBoundary(index, requested.size());
                     if (!Boolean.TRUE.equals(boundary.get("idleVerified"))) {
@@ -187,6 +206,16 @@ public final class ChunkProfileClient {
                 if (!"success".equals(phases.getLast().get("status"))) break;
             }
             root.put("status", phases.size()==requested.size() && phases.stream().allMatch(p -> "success".equals(p.get("status"))) ? "success" : "failed");
+            if (fastnoiseBiomeAudit && "success".equals(root.get("status"))) {
+                root.put("fastnoiseClientDelivery", verifyClientDelivery(server, requested.getFirst()));
+                server.submit(() -> server.saveEverything(false, true, true)).get(180, TimeUnit.SECONDS);
+                root.put("saveFlushed", true);
+            }
+            if (wetlandSpatialAudit && !verifyRestart && "success".equals(root.get("status"))) {
+                atomic(progress, Map.of("status", "wetland_spatial_sampling"));
+                root.put("wetlandSpatialAudit", WetlandSpatialAudit.run(server.overworld(),
+                        output.resolveSibling("wetland-spatial.csv")));
+            }
         } catch (Throwable failure) { root.put("status","failed"); root.put("error",failure.toString()); LOG.error("Chunk profile phases failed", failure); }
         finally {
             if (streamsGroundMarineAudit) {
@@ -197,8 +226,54 @@ public final class ChunkProfileClient {
                     root.put("streamsGroundMarineAuditError", "unavailable, zero eligible samples, or nonzero mismatches");
                 }
             }
-            try { atomic(output,root); atomic(output.resolveSibling("progress.json"),Map.of("status",root.get("status"),"completedPhases",phases.size(),"totalPhases",requested.size())); } catch(IOException e){LOG.error("Chunk profile root receipt write failed",e);} finished=true; Minecraft.getInstance().execute(() -> Minecraft.getInstance().stop());
+            try { atomic(output,root); atomic(progress,Map.of("status",root.get("status"),"completedPhases",phases.size(),"totalPhases",requested.size())); } catch(IOException e){LOG.error("Chunk profile root receipt write failed",e);} finished=true; Minecraft.getInstance().execute(() -> Minecraft.getInstance().stop());
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void loadPriorBiomeFingerprints() throws IOException {
+        Path prior = Path.of(System.getProperty("chunkprofile.priorReceipt"));
+        Map<String,Object> receipt = JSON.fromJson(Files.readString(prior), Map.class);
+        if (!"success".equals(receipt.get("status"))) throw new IllegalStateException("Prior audit did not pass");
+        for (Map<String,Object> phase : (List<Map<String,Object>>) receipt.get("phases")) {
+            for (Map<String,Object> row : (List<Map<String,Object>>) phase.get("chunks")) {
+                List<Number> coordinate = (List<Number>) row.get("chunk");
+                Map<String,Object> audit = (Map<String,Object>) row.get("fastnoiseBiomeAudit");
+                if (!"passed".equals(audit.get("status"))) throw new IllegalStateException("Prior chunk audit did not pass");
+                priorBiomeFingerprints.put(coordinate.get(0).intValue() + "," + coordinate.get(1).intValue(),
+                        (String) audit.get("biomeFingerprint"));
+            }
+        }
+    }
+
+    /** Exercise the actual integrated-server packet path, not only a synthetic receiver. */
+    private Map<String,Object> verifyClientDelivery(MinecraftServer server, Region region) throws Exception {
+        String expected = server.submit(() -> {
+            var level = server.overworld();
+            var chunk = level.getChunk(region.x, region.z);
+            var player = server.getPlayerList().getPlayers().getFirst();
+            player.setGameMode(net.minecraft.world.level.GameType.SPECTATOR);
+            player.teleportTo(region.x * 16 + 8.5, level.getSeaLevel() + 80.0, region.z * 16 + 8.5);
+            return FastNoiseBiomeAudit.biomeFingerprint(chunk);
+        }).get(60, TimeUnit.SECONDS);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        while (System.nanoTime() < deadline) {
+            CompletableFuture<String> received = new CompletableFuture<>();
+            Minecraft.getInstance().execute(() -> {
+                try {
+                    var client = Minecraft.getInstance();
+                    if (client.level == null || client.player == null || client.getSingleplayerServer() == null)
+                        throw new IllegalStateException("Client disconnected during packet audit");
+                    var chunk = client.level.getChunkSource().getChunk(region.x, region.z, ChunkStatus.FULL, false);
+                    received.complete(chunk == null ? null : FastNoiseBiomeAudit.biomeFingerprint(chunk));
+                } catch (Throwable failure) { received.completeExceptionally(failure); }
+            });
+            String fingerprint = received.get(30, TimeUnit.SECONDS);
+            if (expected.equals(fingerprint)) return Map.of("status", "passed", "chunk", List.of(region.x, region.z),
+                    "biomeFingerprint", fingerprint, "actualClientPacket", true);
+            Thread.sleep(250);
+        }
+        throw new IllegalStateException("Client did not receive exact target biomes before timeout");
     }
 
     /** A phase boundary requires TD idleness, and optionally observed native Streams quiescence. */
@@ -229,6 +304,7 @@ public final class ChunkProfileClient {
             report.put("world", world); report.put("phaseIndex",phaseIndex); report.put("phaseCount",phaseCount); report.put("target", Map.of("firstChunk", List.of(region.x, region.z), "side", side, "count", chunks.size(), "prefetch", prefetch));
             report.put("readiness", Map.of("settleSecondsRequested", seconds(settleNanos), "streamsSettleSecondsRequested", seconds(streamsSettleNanos), "maxSettleSeconds",seconds(maxSettleNanos), "waitBeforeFirstTicketSeconds",seconds(readinessWait), "idleConfirmationSeconds",seconds(requiredIdleNanos()),"lastInferenceSnapshot",idleSnapshot));
             report.put("availableProcessors", Runtime.getRuntime().availableProcessors());
+            report.put("timingIsolated", !correctnessAudit);
             report.put("timingScope", "loaded-chunk precheck through all FULL futures and ticket cleanup; baseline and cache-key snapshots are outside this interval; normal integrated-server activity continues");
             report.put("processCpuScope", "whole JVM process CPU delta, including all mod and native work during the measurement window");
             report.put("tdBefore", tdMetrics()); report.put("onnxBefore", onnxMetrics());
@@ -248,8 +324,8 @@ public final class ChunkProfileClient {
                 return result;
             }).get(180, TimeUnit.SECONDS);
             report.put("alreadyLoadedBefore", alreadyFull);
-            if (!alreadyFull.isEmpty()) throw new IllegalStateException("fresh target violation: chunks already loaded " + alreadyFull);
-            atomic(output.resolveSibling("progress.json"), Map.of("status","running","phaseIndex",phaseIndex,"phaseCount",phaseCount,"completed",0,"total",chunks.size(),"startedUtc",Instant.now().toString()));
+            if (!verifyRestart && !alreadyFull.isEmpty()) throw new IllegalStateException("fresh target violation: chunks already loaded " + alreadyFull);
+            atomic(progress, Map.of("status","running","phaseIndex",phaseIndex,"phaseCount",phaseCount,"completed",0,"total",chunks.size(),"startedUtc",Instant.now().toString()));
             sampler.start();
             int distance = 33 - ChunkLevel.byStatus(ChunkStatus.FULL);
             for (int offset=0; offset<chunks.size(); offset += prefetch) {
@@ -267,7 +343,16 @@ public final class ChunkProfileClient {
                         ChunkPos p=batch.get(index); long waitStart=System.nanoTime();
                         ChunkAccess result=futures.get(index).get(Math.max(1, timeoutSeconds-(System.nanoTime()-started)/1_000_000_000L), TimeUnit.SECONDS).orElseThrow(() -> new IllegalStateException("FULL chunk unavailable: "+p));
                         long done=System.nanoTime();
-                        Map<String,Object> sample = server.submit(() -> chunkSample(level, p, result)).get(30, TimeUnit.SECONDS);
+                        Map<String,Object> sample = server.submit(() -> {
+                            Map<String,Object> row = chunkSample(level, p, result);
+                            if (fastnoiseBiomeAudit) {
+                                Map<String,Object> audit = FastNoiseBiomeAudit.auditChunk(level, level.getChunk(p.x, p.z));
+                                if (verifyRestart && !audit.get("biomeFingerprint").equals(priorBiomeFingerprints.get(p.x + "," + p.z)))
+                                    throw new IllegalStateException("Saved biome fingerprint changed: " + p);
+                                row.put("fastnoiseBiomeAudit", audit);
+                            }
+                            return row;
+                        }).get(30, TimeUnit.SECONDS);
                         sample.put("waitSeconds",seconds(done-waitStart));
                         sample.put("sinceStartSeconds",seconds(done-started));
                         sample.put("status","full");
@@ -279,7 +364,7 @@ public final class ChunkProfileClient {
                     long cleanupDone=System.nanoTime();
                     batches.add(Map.of("first",List.of(batch.getFirst().x,batch.getFirst().z),"count",batch.size(),"ticketSeconds",seconds(ticketsDone-ticketsStart),"submissionSeconds",seconds(submitted-ticketsDone),"waitAndCleanupSeconds",seconds(cleanupDone-submitted),"totalSeconds",seconds(cleanupDone-batchStart)));
                 }
-                atomic(output.resolveSibling("progress.json"), Map.of("status","running","phaseIndex",phaseIndex,"phaseCount",phaseCount,"completed",rows.size(),"total",chunks.size(),"lastBatch",batches.getLast()));
+                atomic(progress, Map.of("status","running","phaseIndex",phaseIndex,"phaseCount",phaseCount,"completed",rows.size(),"total",chunks.size(),"lastBatch",batches.getLast()));
             }
             report.put("terrainStructureFingerprint", terrainStructureFingerprint(rows));
             report.put("status","success");

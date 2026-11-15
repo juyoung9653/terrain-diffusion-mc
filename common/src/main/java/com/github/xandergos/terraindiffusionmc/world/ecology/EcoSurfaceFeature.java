@@ -5,6 +5,7 @@ import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
+import com.github.xandergos.terraindiffusionmc.pipeline.WetlandEcology;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -105,6 +106,17 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 } else if (dryGravelShore) {
                     changed |= placeSupportedMineral(level, top, Blocks.GRAVEL.defaultBlockState(), Blocks.STONE.defaultBlockState());
                 } else {
+                    WetlandEcology.Weights wetland = WetlandEcology.weights(sample);
+                    boolean mud = !dryShore && !dryGravelShore && !dryOriginalLandBeach
+                            && (surface.is(Blocks.GRASS_BLOCK) || surface.is(Blocks.DIRT)
+                            || surface.is(Blocks.COARSE_DIRT) || surface.is(Blocks.PODZOL))
+                            && (material == FeatureEcologyMath.SurfaceMaterial.GRASS
+                            || material == FeatureEcologyMath.SurfaceMaterial.COARSE_DIRT)
+                            && FeatureEcologyMath.coordinateChance(level.getSeed(), x, z,
+                            0x4D55445F5745544CL, FeatureEcologyMath.wetlandMudChance(
+                                    wetland.reedMarsh(), wetland.freshwaterSwamp(),
+                                    wetland.mangrove(), wetland.riparian(),
+                                    sample.temperature(), sample.slope()));
                     BlockState target = switch (material) {
                         case COARSE_DIRT -> Blocks.COARSE_DIRT.defaultBlockState();
                         case PODZOL -> Blocks.PODZOL.defaultBlockState();
@@ -112,6 +124,7 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         case STONE -> Blocks.STONE.defaultBlockState();
                         default -> Blocks.GRASS_BLOCK.defaultBlockState();
                     };
+                    if (mud) target = Blocks.MUD.defaultBlockState();
                     changed |= replace(level, top, target);
                     // A neighbouring patch can arrive before this chunk paints its soil.
                     // Apply the same column decision used for a plant arriving afterwards.

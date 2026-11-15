@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    "terrain-diffusion-mc:ecology/reed_marsh",
+    "terrain-diffusion-mc:ecology/freshwater_swamp",
+    "terrain-diffusion-mc:ecology/mangrove_swamp"
+  ]
+}

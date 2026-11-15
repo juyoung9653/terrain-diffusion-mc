@@ -12,10 +12,11 @@ import re
 import subprocess
 import time
 from typing import Callable, Iterator
-from build_evidence import PROBE_RECEIPT, sha256, source_fingerprint
+from build_evidence import PROBE_RECEIPT, input_fingerprint, sha256, source_fingerprint
 
 
 NAME = re.compile(r"[A-Za-z0-9_-]+\Z")
+ARCHIVED_MODEL_INPUTS = "archived-model-inputs.json"
 
 
 def is_link(path: Path) -> bool:
@@ -92,6 +93,10 @@ def prepared_run(root: Path, family: str, raw: str, marker: str) -> Path:
             raise ValueError(f"refusing symlinked run path: {part}")
     if not lexical.is_dir() or not (lexical / marker).is_file():
         raise ValueError(f"run is not prepared ({marker} missing): {lexical}")
+    # Do not parse this marker. Its presence prevents a historical fixture from
+    # being mutated by downloading or regenerating missing archived inputs.
+    if os.path.lexists(lexical / ARCHIVED_MODEL_INPUTS):
+        raise ValueError("model inputs archived; restore using the marker's archive instructions before launching")
     if is_link(lexical / marker) or lexical.resolve(strict=True) != lexical:
         raise ValueError(f"refusing symlinked prepared run: {lexical}")
     for name in ("world", "config", "defaultconfigs", "mods", "terrain-diffusion-models"):
@@ -176,6 +181,18 @@ def streams_receipt(path: Path) -> str:
     return "success" if len(terminal) == 1 and terminal[0].get("status") == "success" else "not_success"
 
 
+def diagnostic_input_names(root: Path, inputs: tuple[Path, ...]) -> list[str]:
+    """Canonical repository-relative names recorded with probe evidence."""
+    root = root.resolve()
+    names: list[str] = []
+    for raw in inputs:
+        path = (raw if raw.is_absolute() else root / raw).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError(f"diagnostic input outside workspace: {raw}")
+        names.append(path.relative_to(root).as_posix())
+    return names
+
+
 @dataclass(frozen=True)
 class Job:
     run: Path
@@ -183,6 +200,8 @@ class Job:
     receipt: Path
     check_receipt: Callable[[Path], str]
     prepare: Callable[[], None] | None = None
+    # Probe-only sources, such as diagnostic Java or a Gradle init script.
+    diagnostic_inputs: tuple[Path, ...] = ()
 
 
 def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], heartbeat_seconds: int = 30) -> int:
@@ -195,20 +214,29 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
         raise ValueError(f"refusing symlinked status path: {status}")
     completed: list[dict[str, object]] = []
     with exclusive_lock(root):
+        suite_source_before = source_fingerprint(root)
+        # Freeze probe-only sources before any preflight can compile or alter them.
+        diagnostic_before = [input_fingerprint(root, job.diagnostic_inputs) for job in jobs]
         # Validate every job before launching any child, while fixture state is locked.
         for job in jobs:
             if job.prepare is not None:
                 job.prepare()
+        for index, job in enumerate(jobs):
+            if input_fingerprint(root, job.diagnostic_inputs) != diagnostic_before[index]:
+                raise ValueError(f"diagnostic inputs changed during preflight: {job.run.name}")
+        if source_fingerprint(root) != suite_source_before:
+            raise ValueError("production sources changed during preflight")
         suite_started = utc_now()
         suite_begun = time.monotonic()
-        for job in jobs:
+        for index, job in enumerate(jobs):
             if is_link(job.receipt) or is_link(job.receipt.parent):
                 raise ValueError(f"refusing symlinked receipt: {job.receipt}")
             log = job.run / "launcher-output.txt"
             if is_link(log):
                 raise ValueError(f"refusing symlinked launcher log: {log}")
             prior = job.receipt.stat().st_mtime_ns if job.receipt.exists() else None
-            source_before = source_fingerprint(root)
+            source_before = suite_source_before
+            diagnostic_before_job = diagnostic_before[index]
             manifest = job.run / "input-manifest.json"
             manifest_before = sha256(manifest) if manifest.is_file() else None
             started_ns = time.time_ns()
@@ -216,6 +244,10 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
             started = utc_now()
             active = {"name": job.run.name, "started": started, "elapsedSeconds": 0}
             atomic_json(status, {"started": suite_started, "active": active, "completed": completed})
+            if source_fingerprint(root) != suite_source_before:
+                raise ValueError(f"production sources changed before probe: {job.run.name}")
+            if input_fingerprint(root, job.diagnostic_inputs) != diagnostic_before_job:
+                raise ValueError(f"diagnostic inputs changed before probe: {job.run.name}")
             code: int | None = None
             launch_error: str | None = None
             try:
@@ -253,6 +285,8 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
                         receipt_status = f"invalid_receipt:{type(exc).__name__}: {exc}"
             if source_fingerprint(root) != source_before:
                 receipt_status = "production_sources_changed_during_probe"
+            if input_fingerprint(root, job.diagnostic_inputs) != diagnostic_before_job:
+                receipt_status = "diagnostic_inputs_changed_during_probe"
             if (sha256(manifest) if manifest.is_file() else None) != manifest_before:
                 receipt_status = "fixture_manifest_changed_during_probe"
             ok = code == 0 and receipt_status == "success"
@@ -266,6 +300,9 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
             atomic_json(job.run / PROBE_RECEIPT, {
                 **summary, "schema": 1, "kind": "probe-validation",
                 "sourceFingerprint": source_before, "inputManifestSha256": manifest_before,
+                **({"diagnosticInputsSha256": diagnostic_before_job,
+                    "diagnosticInputs": diagnostic_input_names(root, job.diagnostic_inputs)}
+                   if job.diagnostic_inputs else {}),
                 "receipt": str(job.receipt.relative_to(job.run)),
                 "receiptSha256": sha256(job.receipt) if job.receipt.is_file() else None,
                 "command": job.command, "javaHome": env.get("JAVA_HOME"),

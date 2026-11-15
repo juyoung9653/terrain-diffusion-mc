@@ -51,13 +51,13 @@ def run(root: Path, *, java_home: Path | None = None,
         validations: list[Path] | None = None) -> int:
     command, env = build_plan(root, java_home=java_home, gradle_user_home=gradle_user_home)
     if check_only:
-        check_validations(validations or [], source_fingerprint(root))
+        check_validations(validations or [], source_fingerprint(root), root)
         print(json.dumps({"command": command, "JAVA_HOME": env["JAVA_HOME"],
                           "GRADLE_USER_HOME": env["GRADLE_USER_HOME"]}))
         return 0
     with exclusive_lock(root.resolve()):
         fingerprint = source_fingerprint(root)
-        evidence = check_validations(validations or [], fingerprint)
+        evidence = check_validations(validations or [], fingerprint, root)
         completed = subprocess.run(command, cwd=root, env=env, shell=False,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if completed.returncode == 0:

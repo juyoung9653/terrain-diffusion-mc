@@ -1,6 +1,7 @@
 {
   "replace": false,
   "values": [
-    "terrain-diffusion-mc:ecology/desert"
+    "terrain-diffusion-mc:ecology/desert",
+    "terrain-diffusion-mc:ecology/mangrove_swamp"
   ]
 }

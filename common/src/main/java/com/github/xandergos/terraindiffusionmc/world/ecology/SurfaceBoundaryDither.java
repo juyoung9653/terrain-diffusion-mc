@@ -49,6 +49,6 @@ public final class SurfaceBoundaryDither {
         float elevationDelta = Math.max(0, targetElevation) - Math.max(0, donorElevation);
         float temperature = donor.temperature() - TEMPERATURE_LAPSE_PER_METRE * elevationDelta;
         return new EcologyClassifier.Sample(donor.biomeId(), donor.treeCover(), temperature,
-                donor.moisture(), target.slope());
+                donor.moisture(), target.slope(), target.wetness(), target.marineInfluence());
     }
 }

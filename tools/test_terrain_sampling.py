@@ -88,7 +88,7 @@ def main():
     for name,text in STUBS.items():
         path=generated/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text,encoding="utf-8");sources.append(path)
     for name in ("LocalTerrainProvider","InferenceExecutor","ExactTerrainSampling","EcologyData","EcologyDataCache","FastNoiseLite","LaplacianUtils",
-                 "BiomeClassifier","TerralithBiomeClassifier","MacroBiomeContext","BroadEcologyClimate","EcologyClassifier",
+                 "BiomeClassifier","TerralithBiomeClassifier","MacroBiomeContext","BroadEcologyClimate","EcologyClassifier","WetlandEcology",
                  "ShoreClassifier","ShoreContext","EcologyShowcaseProfile"):
         sources.append(ROOT/"common/src/main/java"/PACKAGE/"pipeline"/(name+".java"))
     sources.append(ROOT/"tools/terrain_sampling/LocalTerrainProviderCacheTest.java")

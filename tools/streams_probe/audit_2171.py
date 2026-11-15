@@ -1,19 +1,31 @@
-"""Fail-closed static boundary audit for native-first Streams Reflowing 2.17.1.
+"""Fail-closed static boundary audit for Streams Reflowing 2.17.1 and 2.17.3.
 
 This records the small set of upstream contracts TD needs to select its terrain
 sampler and retain a world-local store path.  It deliberately does not audit or
 patch Streams' native river graph, bank, bed, or structure-protection behaviour.
+The separate test_2173_bank_material.py and test_2173_bed_hook.py audits cover
+the exact 2.17.3 bank/bed adapters; this base audit cannot substitute for them.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import re
+import subprocess
 import tomllib
 import zipfile
 from pathlib import Path
 
-from audit_2162 import _javap, _method_for_descriptor
+from audit_2162 import _method_for_descriptor
+
+
+def _javap(java_home: Path, jar: Path, class_name: str, *flags: str) -> str:
+    result = subprocess.run([str(java_home / "bin/javap.exe"), *flags, "-classpath", str(jar), class_name],
+                            capture_output=True, text=True, check=True,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if "AccessDeniedException" in result.stderr or not result.stdout.strip():
+        raise RuntimeError(f"javap failed for {class_name}: {result.stderr}")
+    return result.stdout
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -98,13 +110,18 @@ def _network_mixin_source() -> str:
 
 
 def audit_2171(java_home: Path, jar: Path) -> dict[str, object]:
-    """Return compact, reviewable evidence for the actual Streams 2.17.1 JAR."""
+    """Return evidence for the actual, exactly versioned native-adapter JAR."""
     jar = jar.resolve()
     if not jar.is_file():
         raise RuntimeError(f"missing Streams 2.17.1 JAR: {jar}")
     failures: list[str] = []
     version = _version(jar)
-    _require(version == "2.17.1", f"expected streamsreflowing 2.17.1, found {version!r}", failures)
+    _require(version in {"2.17.1", "2.17.3"}, f"expected audited streamsreflowing 2.17.1/2.17.3, found {version!r}", failures)
+    wetness = "LicensedCodeNotForAnalysis_002" if version == "2.17.3" else "SourceGivenToAuthorizedOnly_002"
+    engine_factory = ENGINE_FACTORY.replace("SourceGivenToAuthorizedOnly_002", wetness)
+    if version == "2.17.3":
+        engine_factory = engine_factory.replace("StreamsWorldgen$SeeAiNoticeConstant_002", "StreamsWorldgen$NoDecompilePermissionEver_002")
+    engine_constructor = RIVER_ENGINE_CONSTRUCTOR.replace("SourceGivenToAuthorizedOnly_002", wetness)
     text = {
         "worldgen": _javap(java_home, jar, WORLDGEN, "-p", "-s", "-c"),
         "carver": _javap(java_home, jar, CARVER, "-p", "-s", "-c"),
@@ -119,7 +136,7 @@ def audit_2171(java_home: Path, jar: Path) -> dict[str, object]:
     selector = _method_for_descriptor(text["worldgen"], CALIBRATION_SELECTOR)
     engine = _method_for_descriptor(text["worldgen"],
                                     "(Lnet/minecraft/world/level/WorldGenLevel;)Ldev/streamsreflowing/core/RiverEngine;")
-    factory = _method_for_descriptor(text["worldgen"], ENGINE_FACTORY)
+    factory = _method_for_descriptor(text["worldgen"], engine_factory)
     _require(bool(host), "host terrain-sampler selector descriptor changed", failures)
     _require(bool(selector), "exact-calibration selector descriptor changed", failures)
     selector_compact = " ".join(selector.split())
@@ -138,29 +155,44 @@ def audit_2171(java_home: Path, jar: Path) -> dict[str, object]:
              "2.17.1 startup mixin no longer targets the audited platform selector", failures)
     _require(HOST_SAMPLER in mixin_source and CALIBRATION_SELECTOR in mixin_source,
              "2.17.1 startup mixin method descriptors drifted from the audit", failures)
-    _require(ENGINE_FACTORY in text["worldgen"], "2.17.1 engine factory descriptor changed", failures)
-    factory_ctor_calls = factory.count('RiverEngine."<init>":' + RIVER_ENGINE_CONSTRUCTOR)
-    direct_engine_ctor_calls = engine.count('RiverEngine."<init>":' + RIVER_ENGINE_CONSTRUCTOR)
+    _require(engine_factory in text["worldgen"], "native engine factory descriptor changed", failures)
+    factory_ctor_calls = factory.count('RiverEngine."<init>":' + engine_constructor)
+    direct_engine_ctor_calls = engine.count('RiverEngine."<init>":' + engine_constructor)
     _require(factory_ctor_calls == 1,
              f"factory RiverEngine constructor call count is {factory_ctor_calls}, expected 1", failures)
     _require(direct_engine_ctor_calls == 1,
              f"engine RiverEngine constructor call count is {direct_engine_ctor_calls}, expected 1", failures)
-    inference_source = _inference_mixin_source()
+    inference_source = (INFERENCE_MIXIN.with_name("StreamsInference2173Mixin.java").read_text(encoding="utf-8")
+                        if version == "2.17.3" else _inference_mixin_source())
+    _require(wetness in inference_source, "inference mixin wetness binding differs from native interface", failures)
+    # Audit every exact INVOKE owner/name/descriptor inside engine(), including
+    # domain pinning: unchanged argument layouts can hide a renamed helper class.
+    invoke_targets = re.findall(r'target\s*=\s*((?:"[^"]*"\s*\+?\s*)+)', inference_source)
+    _require(len(invoke_targets) == 3, "expected three inference invocation targets", failures)
+    invocation_counts = {}
+    for expression in invoke_targets:
+        target = "".join(re.findall(r'"([^"]*)"', expression))
+        owner, method = target[1:].split(";", 1)
+        name, descriptor = method.split("(", 1)
+        call = owner + "." + ('"<init>"' if name == "<init>" else name) + ":(" + descriptor
+        invocation_counts[target] = engine.count(call)
+        _require(engine.count(call) == 1, f"engine invocation target missing or ambiguous: {target}", failures)
     _require("method = \"engine(Lnet/minecraft/world/level/WorldGenLevel;)\"" in inference_source
              and 'target = "Ldev/streamsreflowing/core/RiverEngine;<init>(J"' in inference_source,
              "2.17.1 inference mixin no longer targets the audited engine constructor", failures)
     _require(STORE_CONSTRUCTOR in text["store"], "2.17.1 world-local store constructor changed", failures)
-    _require(RIVER_ENGINE_CONSTRUCTOR in text["engine"], "RiverEngine native constructor changed", failures)
+    _require(engine_constructor in text["engine"], "RiverEngine native constructor changed", failures)
     five_arg = ("(Ldev/streamsreflowing/core/plate/ProprietaryNiceJohn_001;"
                 "Ldev/streamsreflowing/core/terrain/TerrainSampler;"
-                "Ldev/streamsreflowing/core/terrain/SourceGivenToAuthorizedOnly_002;"
+                f"Ldev/streamsreflowing/core/terrain/{wetness};"
                 "Ldev/streamsreflowing/core/config/StreamsConfig;J)"
                 "Ldev/streamsreflowing/core/river/RiverNetwork;")
     live_builder_calls = text["engine"].count("NoDecompilePermissionEver_001.proprietary1:" + five_arg)
     _require(live_builder_calls >= 1, "RiverEngine no longer calls the live five-argument graph builder", failures)
-    network_source = _network_mixin_source()
+    network_source = (NETWORK_MIXIN.with_name("StreamsNaturalNetwork2173Mixin.java").read_text(encoding="utf-8")
+                      if version == "2.17.3" else _network_mixin_source())
     _require("ProprietaryNiceJohn_001" in network_source
-             and "SourceGivenToAuthorizedOnly_002" in network_source
+             and wetness in network_source
              and "Streams2171NetworkAdapter.refine(domain" in network_source,
              "2.17.1 network mixin no longer targets/preserves the live builder domain", failures)
     _require("descriptor: (IDIIIIIZ)Ldev/streamsreflowing/core/config/StreamsConfig;" in text["config"],
@@ -184,11 +216,12 @@ def audit_2171(java_home: Path, jar: Path) -> dict[str, object]:
         "calibrationSelector": bool(selector),
         "exactPlatformOffBranch": re.search(exact_branch, selector_compact) is not None,
         "exactPlatformCallCount": selector.count("IPlatformHelper.allRightsReserved7:()Z"),
-        "engineFactory": ENGINE_FACTORY in text["worldgen"],
+        "engineFactory": engine_factory in text["worldgen"],
         "factoryRiverEngineConstructorCalls": factory_ctor_calls,
         "engineDirectRiverEngineConstructorCalls": direct_engine_ctor_calls,
+        "inferenceInvocationCounts": invocation_counts,
         "storeConstructor": STORE_CONSTRUCTOR in text["store"],
-        "nativeEngineConstructor": RIVER_ENGINE_CONSTRUCTOR in text["engine"],
+        "nativeEngineConstructor": engine_constructor in text["engine"],
         "liveFiveArgGraphBuilderCalls": live_builder_calls,
         "nativeDepthHelper": DEPTH_HELPER in text["depth"],
         "nativePieceShield": {
@@ -196,7 +229,7 @@ def audit_2171(java_home: Path, jar: Path) -> dict[str, object]:
             "boundingBox": shield.count("StructurePiece.getBoundingBox:()Lnet/minecraft/world/level/levelgen/structure/BoundingBox;"),
         },
     }
-    return {"version": "2.17.1", "jar": str(jar), "sha256": hashlib.sha256(jar.read_bytes()).hexdigest(),
+    return {"version": version, "jar": str(jar), "sha256": hashlib.sha256(jar.read_bytes()).hexdigest(),
             "passed": not failures, "failures": failures, "evidence": evidence}
 
 

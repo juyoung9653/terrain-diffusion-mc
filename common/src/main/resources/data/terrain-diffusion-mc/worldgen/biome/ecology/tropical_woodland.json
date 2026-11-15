@@ -82,7 +82,8 @@
     [
       "minecraft:glow_lichen",
       "terrain-diffusion-mc:eco_trees",
-      "terrain-diffusion-mc:eco_groundcover"
+      "terrain-diffusion-mc:eco_groundcover",
+      "terrain-diffusion-mc:eco_wetland_groundcover"
     ],
     [
       "minecraft:freeze_top_layer"

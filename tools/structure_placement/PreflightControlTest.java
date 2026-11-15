@@ -8,7 +8,11 @@ public final class PreflightControlTest {
     public static void main(String[] args) throws Exception {
         var type=Class.forName(args.length == 0
                 ? "dev.streamsreflowing.worldgen.StreamsWorldgen$StructurePlatesPending" : args[0]);
-        var constructor=type.getDeclaredConstructors()[0];
+        require(RuntimeException.class.isAssignableFrom(type),"selected signal is throwable");
+        var constructor=java.util.Arrays.stream(type.getDeclaredConstructors())
+                .filter(candidate -> candidate.getParameterCount()==1
+                        && candidate.getParameterTypes()[0].isArray())
+                .findFirst().orElseThrow(()->new AssertionError("expected array-owner constructor"));
         constructor.setAccessible(true);
         Object owners=Array.newInstance(constructor.getParameterTypes()[0].getComponentType(),0);
         RuntimeException pending=(RuntimeException)constructor.newInstance(owners);

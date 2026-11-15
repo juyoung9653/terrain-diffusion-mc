@@ -22,6 +22,8 @@ from streams_probe.preflight import coordinate_pairs, select_chunks, validate_fi
 from streams_probe.restart_snapshot import capture_snapshot, compare_snapshots
 from streams_probe.tree_ground_runtime import validate_tree_ground_runtime
 from streams_probe.aquatic_preflight import validate_aquatic_fixture
+from streams_probe.compat_preflight import validate_streams_compat
+from streams_probe.release_checks import diagnostic_inputs
 
 
 def cold_audit_receipt(path: Path, *, weather: bool, spatial: bool,
@@ -77,6 +79,116 @@ def native_water_settlement_receipt(path: Path, *, expected: set[str]) -> str:
         return "native_water_settlement_ticks_missing"
     if tickable != len(expected) or selected != len(expected):
         return "native_water_settlement_chunk_count_mismatch"
+    return "success"
+
+
+def river_regression_receipt(path: Path, *, expected: set[str]) -> str:
+    """Require the two screenshot regressions to be checked after real settling."""
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "river_regression_receipt_unreadable"
+    audits = [row for row in rows if row.get("event") == "river_regression_audit"]
+    if len(audits) != 1 or audits[0].get("status") != "passed":
+        return "river_regression_audit_not_passed"
+    audit = audits[0]
+    if (audit.get("phase") != "post_native_water_settlement"
+            or type(audit.get("settledTicks")) is not int or audit["settledTicks"] < 100
+            or audit.get("seed") != 7756831701670037456
+            or audit.get("scale") != 1 or audit.get("naturalRiverProfile") != 14):
+        return "river_regression_audit_not_post_settlement_fixture"
+    required_chunks = {"-64,60", "-70,72"}
+    covered = audit.get("coveredChunks")
+    if (not required_chunks.issubset(expected) or not isinstance(covered, list)
+            or set(covered) != required_chunks or len(covered) != len(set(covered))):
+        return "river_regression_audit_coverage_missing"
+    bank = audit.get("bank")
+    if (not isinstance(bank, dict) or (bank.get("x"), bank.get("z")) != (-1009, 971)
+            or any(bank.get(key) is not True for key in ("desertBiome", "originalGroundContainsPlanWater",
+                                                          "sandSurface", "noSolidCap", "noFern", "passed"))
+            or any(type(bank.get(key)) is not int for key in ("originalGroundY", "capY", "planWaterY"))
+            or bank.get("sourceBiome") != "terrain-diffusion-mc:ecology/desert"
+            or not isinstance(bank.get("savedBiome"), str)
+            or type(bank.get("desertEcologyId")) is not int or bank["desertEcologyId"] <= 0
+            or type(bank.get("ecologyBiomeId")) is not int
+            or bank.get("ecologyBiomeId") != bank["desertEcologyId"]
+            or bank["capY"] != bank["originalGroundY"] + 1
+            or bank["originalGroundY"] < bank["planWaterY"]):
+        return "river_regression_bank_not_proven"
+    supports = audit.get("bankChannelSupports")
+    if (not isinstance(supports, list) or len(supports) < 2
+            or any(not isinstance(sample, dict) or sample.get("passed") is not True
+                   or sample.get("inChannel") is not True or sample.get("actualMatchesPlan") is not True
+                   or sample.get("solidBed") is not True for sample in supports)):
+        return "river_regression_bank_water_support_missing"
+    bed = audit.get("shallowBed")
+    if (not isinstance(bed, dict) or (bed.get("x"), bed.get("z")) != (-1106, 1156)
+            or any(bed.get(key) is not True for key in ("inChannel", "oneBlockPlanned", "actualMatchesPlan",
+                                                        "solidBed", "passed"))
+            or bed.get("source") is not False or bed.get("terminal") is not False
+            or any(type(bed.get(key)) is not int for key in ("planWaterY", "planBedY", "actualWaterSurfaceY", "actualBedY"))
+            or bed["planWaterY"] - bed["planBedY"] != 1
+            or bed["actualWaterSurfaceY"] != bed["planWaterY"]
+            or bed["actualBedY"] != bed["planBedY"]):
+        return "river_regression_shallow_bed_not_proven"
+    return "success"
+
+
+def lush_cave_ruins_receipt(path: Path) -> str:
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    audits = [row for row in rows if row.get("event") == "lush_cave_ruins_audit"]
+    if len(audits) != 1:
+        return "lush_cave_ruins_receipt_missing"
+    row = audits[0]
+    if (row.get("status") != "passed" or row.get("nativeStart") is not True
+            or row.get("lootTablesLoaded") is not True
+            or row.get("anchorObservedDuringGeneration") is not True
+            or type(row.get("minimumReferenceDistanceBlocks")) is not int
+            or row["minimumReferenceDistanceBlocks"] < 1000
+            or type(row.get("sampledMinimumReferenceDistanceSquared")) is not int
+            or row["sampledMinimumReferenceDistanceSquared"] < 1000 * 1000
+            or row.get("locateMatched") is not True
+            or row.get("structure") != "keeb_struc_lush:keeb_struc_lush"
+            or row.get("biome") != "terralith:cave/underground_jungle"
+            or any(type(row.get(key)) is not int or row[key] <= 0
+                   for key in ("pieces", "fullChunks", "structureBlocks"))):
+        return "lush_cave_ruins_natural_generation_not_proven"
+    return "success"
+
+
+def wetland_compat_receipt(path: Path, *, physical_requested: bool) -> str:
+    """Require explicit runtime levels; registry data alone is never physical proof."""
+    try:
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "wetland_compat_receipt_unreadable"
+    structures = [row for row in rows if row.get("event") == "mod_structure_compatibility_audit"]
+    wetlands = [row for row in rows if row.get("event") == "wetland_biome_audit"]
+    if len(structures) != 1 or len(wetlands) != 1:
+        return "wetland_compat_receipt_missing"
+    structure, wetland = structures[0], wetlands[0]
+    mappings = structure.get("mappings")
+    if (structure.get("status") != "passed" or not isinstance(mappings, list) or len(mappings) != 8
+            or any(row.get("effectivePredicateAdmitsMappedBiome") is not True
+                   or row.get("possibleStructureSetRetained") is not True
+                   or row.get("locatePlacementRetained") is not True for row in mappings)
+            or structure.get("galleon", {}).get("placementClass")
+            != "net.mehvahdjukaar.supplementaries.common.worldgen.RandomSpreadStructurePlacementWithExclusion"
+            or structure.get("galleon", {}).get("plannerSet") != "supplementaries:galleons"
+            or structure.get("galleon", {}).get("plannerRetained") is not True):
+        return "mod_structure_effective_compatibility_not_proven"
+    if wetland.get("status") != "passed":
+        return "wetland_runtime_audit_failed"
+    if physical_requested:
+        physical = structure.get("physicalTargets")
+        if (structure.get("physicalEvidenceLevel") != "full_chunk_start_piece_nbt"
+                or not isinstance(physical, list) or not physical
+                or any(row.get("fullChunk") is not True or row.get("nativeStart") is not True
+                       or not isinstance(row.get("pieces"), int) or row["pieces"] <= 0
+                       or not isinstance(row.get("startNbtHash"), int) for row in physical)
+                or wetland.get("evidenceLevel") not in ("natural_full_chunks", "controlled_showcase_full_chunks")
+                or not isinstance(wetland.get("samples"), list) or not wetland["samples"]):
+            return "wetland_or_structure_physical_evidence_not_proven"
     return "success"
 
 
@@ -311,6 +423,9 @@ def surface_checks(run: Path, args, check_receipt):
             if not javap:
                 raise ValueError("runtime preflight requires --java-home with a JDK containing javap")
             java_home = str(Path(javap).resolve().parent.parent)
+        state["streams_compat_preflight"] = validate_streams_compat(ROOT, run, Path(java_home))
+        if not dry_run:
+            atomic_json(run / "streams-compat-preflight.json", state["streams_compat_preflight"])
         if getattr(args, "aquatic_placement_audit", False):
             state["aquatic_preflight"] = validate_aquatic_fixture(ROOT, run, args.chunks, Path(java_home))
             if not dry_run:
@@ -365,12 +480,24 @@ def surface_checks(run: Path, args, check_receipt):
             status = native_water_settlement_receipt(path, expected=expected)
             if status != "success":
                 return status
+        if getattr(args, "river_regression_audit", False):
+            status = river_regression_receipt(path, expected=expected)
+            if status != "success":
+                return status
         if getattr(args, "river_bed_material_audit", False):
             status = submerged_river_bed_receipt(path, expected=expected)
             if status != "success":
                 return status
         if getattr(args, "vanilla_kelp_audit", False):
             status = vanilla_kelp_receipt(path)
+            if status != "success":
+                return status
+        if getattr(args, "lush_cave_ruins_audit", False):
+            status = lush_cave_ruins_receipt(path)
+            if status != "success":
+                return status
+        if getattr(args, "wetland_compat_audit", False):
+            status = wetland_compat_receipt(path, physical_requested=bool(getattr(args, "wetland_structure_target", [])))
             if status != "success":
                 return status
         if getattr(args, "aquatic_placement_audit", False):
@@ -499,7 +626,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--block-sites", help="world-block X,Z;X,Z; derive chunks or check --chunks coverage")
     parser.add_argument("--expect-river-cache", choices=("fresh", "present"),
                         help="assert fresh routing or an existing graph before launch")
-    parser.add_argument("--preflight-only", action="store_true", help="validate inputs without launching Java")
+    parser.add_argument("--preflight-only", action="store_true", help="validate inputs and static contracts without launching Minecraft")
     parser.add_argument("--surface-audit", action="store_true",
                         help="require complete surface/ecology columns and a natural river export")
     parser.add_argument("--verify-restart", action="store_true",
@@ -531,8 +658,20 @@ def main(argv: list[str] | None = None) -> int:
                         help="require native water settlement for 100 ticks in fixed chunks")
     parser.add_argument("--river-bed-material-audit", action="store_true",
                         help="after --settle-water, reject actual water bottoms on grass blocks")
+    parser.add_argument("--river-regression-audit", action="store_true",
+                        help="post-settlement receipt for the fixed river screenshot regression")
     parser.add_argument("--vanilla-kelp-audit", action="store_true",
                         help="exercise registered vanilla kelp placements at the littoral depth gate")
+    parser.add_argument("--lush-cave-ruins-audit", action="store_true",
+                        help="require naturally located Lush Cave Ruins and physical underground placement")
+    parser.add_argument("--wetland-compat-audit", action="store_true",
+                        help="audit TD wetland samples and world-local mod-structure eligibility")
+    parser.add_argument("--wetland-site", action="append", default=[], metavar="CHUNK_X,CHUNK_Z",
+                        help="bounded FULL chunk sampled by --wetland-compat-audit (repeatable)")
+    parser.add_argument("--wetland-required-label", action="append", default=[], choices=("reed_marsh", "freshwater_swamp", "mangrove_swamp", "riparian_forest"),
+                        help="require this label among the bounded wetland samples (repeatable)")
+    parser.add_argument("--wetland-structure-target", action="append", default=[], metavar="ID@CHUNK_X,CHUNK_Z",
+                        help="bounded native FULL-chunk structure proof for --wetland-compat-audit (repeatable)")
     parser.add_argument("--aquatic-placement-audit", action="store_true",
                         help="require physical seagrass and sea-pickle placement gates")
     parser.add_argument("--greeneries-density-audit", action="store_true",
@@ -558,12 +697,18 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not re.fullmatch(r"\d+\.\d+\.\d+", args.neoforge_version):
             raise ValueError("neoforge-version must be dotted numeric")
+        explicit_chunks = args.chunks
         args.chunks = select_chunks(args.chunks, args.block_sites, args.max_chunks)
         args.surface_audit = args.surface_audit or args.verify_restart
         if args.settle_water and not args.chunks:
             raise ValueError("settle-water requires fixed chunks or block-sites")
         if args.river_bed_material_audit and (not args.settle_water or not args.chunks):
             raise ValueError("river-bed-material-audit requires --settle-water and fixed chunks or block-sites")
+        if args.river_regression_audit:
+            if not args.settle_water or not explicit_chunks or not args.chunks:
+                raise ValueError("river-regression-audit requires --settle-water and explicit fixed chunks")
+            if not {(-64, 60), (-70, 72)}.issubset(set(coordinate_pairs(args.chunks))):
+                raise ValueError("river-regression-audit requires chunks -64,60 and -70,72")
         if args.surface_audit and (not args.chunks or args.topology_audit
                                    or args.terrain_slab_audit or args.short_tunnel_audit):
             raise ValueError("surface/restart audit requires fixed chunks or block-sites without a discovery audit")
@@ -601,6 +746,13 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("short-tunnel-center must be X,Z world-block coordinates")
         if args.short_tunnel_radius is not None and not 96 <= args.short_tunnel_radius <= 2048:
             raise ValueError("short-tunnel-radius must be 96..2048")
+        if (args.wetland_site or args.wetland_structure_target or args.wetland_required_label) and not args.wetland_compat_audit:
+            raise ValueError("wetland sites and structure targets require --wetland-compat-audit")
+        if any(not re.fullmatch(r"-?\d+,-?\d+", site) for site in args.wetland_site):
+            raise ValueError("wetland-site must be CHUNK_X,CHUNK_Z")
+        if any(not re.fullmatch(r"[a-z0-9_.-]+:[a-z0-9_./-]+@-?\d+,-?\d+", target)
+               for target in args.wetland_structure_target):
+            raise ValueError("wetland-structure-target must be ID@CHUNK_X,CHUNK_Z")
         options = [f"-PtdProbe.maxChunks={args.max_chunks}", "-PtdProbe.routeSearchRadius=32",
                    "-PtdProbe.timeoutSeconds=900"]
         if args.center_chunk:
@@ -651,8 +803,20 @@ def main(argv: list[str] | None = None) -> int:
             options.append("-PtdProbe.settleWater=true")
         if args.river_bed_material_audit:
             options.append("-PtdProbe.riverBedMaterialAudit=true")
+        if args.river_regression_audit:
+            options.append("-PtdProbe.riverRegressionAudit=true")
         if args.vanilla_kelp_audit:
             options.append("-PtdProbe.vanillaKelpAudit=true")
+        if args.lush_cave_ruins_audit:
+            options.append("-PtdProbe.lushCaveRuinsAudit=true")
+        if args.wetland_compat_audit:
+            options.append("-PtdProbe.wetlandCompatAudit=true")
+            if args.wetland_site:
+                options.append(f"-PtdProbe.wetlandSites={';'.join(args.wetland_site)}")
+            if args.wetland_required_label:
+                options.append(f"-PtdProbe.wetlandRequiredLabels={','.join(args.wetland_required_label)}")
+            if args.wetland_structure_target:
+                options.append(f"-PtdProbe.wetlandStructureTargets={';'.join(args.wetland_structure_target)}")
         if args.aquatic_placement_audit:
             options.extend(("-PtdProbe.aquaticPlacementFixture=true",
                             "-PtdProbe.aquaticPlacementAudit=true"))
@@ -710,7 +874,8 @@ def main(argv: list[str] | None = None) -> int:
             jobs.append(Job(run, gradle_command(ROOT, ["-I", "tools/streams_probe/probe.init.gradle",
                                                        f"-PtdProbeDir={run}", *run_options], args.daemon,
                                            neoforge_version=args.neoforge_version),
-                            run / "world/td-streams-probe.jsonl", check, prepare))
+                            run / "world/td-streams-probe.jsonl", check, prepare,
+                            diagnostic_inputs=diagnostic_inputs(ROOT)))
         return run_suite(ROOT, "streams-probe", jobs, environment(args.java_home, args.gradle_user_home))
     except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
         parser.error(str(exc))

@@ -160,6 +160,64 @@ class ProbeSuiteTest(unittest.TestCase):
         self.assertFalse(rejected["success"])
         self.assertEqual(rejected["probeStatus"], "production_sources_changed_during_probe")
 
+    def test_diagnostic_input_changed_during_preflight_prevents_child_launch(self) -> None:
+        run = self.make_run("diagnostic-preflight")
+        diagnostic = self.root / "tools/Probe.java"
+        diagnostic.parent.mkdir()
+        diagnostic.write_text("before", encoding="utf-8")
+        job = self.job(run, '{"success":true}')
+        job = Job(job.run, job.command, job.receipt, job.check_receipt,
+                  lambda: diagnostic.write_text("after", encoding="utf-8"), (diagnostic,))
+        with self.assertRaisesRegex(ValueError, "diagnostic inputs changed during preflight"):
+            run_suite(self.root, "structure-density", [job], {})
+        self.assertFalse(job.receipt.exists())
+        self.assertFalse((run / "launcher-output.txt").exists())
+
+    def test_production_source_changed_during_preflight_prevents_child_launch(self) -> None:
+        run = self.make_run("source-preflight")
+        source = self.root / "common/src/main/java/Main.java"
+        source.parent.mkdir(parents=True)
+        source.write_text("before", encoding="utf-8")
+        job = self.job(run, '{"success":true}')
+        job = Job(job.run, job.command, job.receipt, job.check_receipt,
+                  lambda: source.write_text("after", encoding="utf-8"))
+        with self.assertRaisesRegex(ValueError, "production sources changed during preflight"):
+            run_suite(self.root, "structure-density", [job], {})
+        self.assertFalse(job.receipt.exists())
+        self.assertFalse((run / "launcher-output.txt").exists())
+
+    def test_diagnostic_directory_fingerprint_detects_added_and_removed_file(self) -> None:
+        from build_evidence import input_fingerprint
+        diagnostic = self.root / "tools/diagnostic"
+        diagnostic.mkdir(parents=True)
+        existing = diagnostic / "Probe.java"
+        existing.write_text("before", encoding="utf-8")
+        initial = input_fingerprint(self.root, (diagnostic,))
+        added = diagnostic / "NewProbe.java"
+        added.write_text("new", encoding="utf-8")
+        self.assertNotEqual(initial, input_fingerprint(self.root, (diagnostic,)))
+        added.unlink()
+        existing.unlink()
+        self.assertNotEqual(initial, input_fingerprint(self.root, (diagnostic,)))
+
+    def test_diagnostic_input_changed_by_child_invalidates_receipt(self) -> None:
+        run = self.make_run("diagnostic-child")
+        diagnostic = self.root / "tools/Probe.java"
+        diagnostic.parent.mkdir()
+        diagnostic.write_text("before", encoding="utf-8")
+        job = self.job(run, '{"success":true}')
+        script = ("from pathlib import Path; import sys; "
+                  "Path(sys.argv[1]).write_text('{\"success\":true}'); "
+                  "Path(sys.argv[2]).write_text('after')")
+        job = Job(job.run, [sys.executable, "-c", script, str(job.receipt), str(diagnostic)],
+                  job.receipt, density_receipt, None, (diagnostic,))
+        self.assertEqual(run_suite(self.root, "structure-density", [job], {}), 1)
+        rejected = json.loads((run / "validation-evidence.json").read_text())
+        self.assertFalse(rejected["success"])
+        self.assertEqual(rejected["probeStatus"], "diagnostic_inputs_changed_during_probe")
+        self.assertIsInstance(rejected["diagnosticInputsSha256"], str)
+        self.assertEqual(rejected["diagnosticInputs"], ["tools/Probe.java"])
+
     def test_all_preflight_checks_run_under_lock_before_any_child(self) -> None:
         one, two = self.make_run("preflight_one"), self.make_run("preflight_two")
         def fail_preflight():
@@ -219,6 +277,12 @@ class ProbeSuiteTest(unittest.TestCase):
         self.assertEqual(streams_receipt(receipt), "success")
         receipt.write_text('{"event":"complete","status":"success"}\n{broken')
         self.assertTrue(streams_receipt(receipt).startswith("invalid_receipt"))
+
+    def test_archived_model_inputs_marker_refuses_launch_even_when_malformed(self) -> None:
+        run = self.make_run("archived-models")
+        (run / "archived-model-inputs.json").write_text("not json", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "model inputs archived.*archive instructions"):
+            prepared_run(self.root, "structure-density", str(run), "server.properties")
 
     def test_gradle_argument_contract(self) -> None:
         wrapper = self.root / ("gradlew.bat" if sys.platform == "win32" else "gradlew")

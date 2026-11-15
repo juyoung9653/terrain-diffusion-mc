@@ -4,9 +4,10 @@ import argparse
 import os
 import subprocess
 from pathlib import Path
+from audit_2171 import audit_2171
 
 ROOT = Path(__file__).resolve().parents[2]
-OUT = ROOT / "build" / "streams-2171-review" / "network-adapter-test"
+OUT_ROOT = ROOT / "build" / "streams-2171-review"
 
 def need(value: bool, message: str) -> None:
     if not value:
@@ -20,22 +21,30 @@ def main() -> None:
     jar = args.jar.resolve()
     if not jar.is_file():
         raise SystemExit(f"missing JAR: {jar}")
+    receipt = audit_2171(args.java_home, jar)
+    if not receipt["passed"]:
+        raise SystemExit("Streams static audit failed: " + "; ".join(receipt["failures"]))
+    version = receipt["version"]
+    wetness = "LicensedCodeNotForAnalysis_002" if version == "2.17.3" else "SourceGivenToAuthorizedOnly_002"
+    mixin_name = "StreamsNaturalNetwork2173Mixin.java" if version == "2.17.3" else "StreamsNaturalNetwork2171Mixin.java"
+    out = OUT_ROOT / ("network-adapter-test-" + version.replace(".", ""))
     javap = args.java_home / "bin" / "javap.exe"
     result = subprocess.run([str(javap), "-p", "-s", "-classpath", str(jar),
                              "dev.streamsreflowing.core.river.NoDecompilePermissionEver_001"],
-                            cwd=ROOT, text=True, capture_output=True)
-    if result.returncode and "AccessDeniedException:" not in result.stderr:
+                            cwd=ROOT, text=True, capture_output=True,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if result.returncode:
         raise RuntimeError(result.stderr[-2000:])
-    descriptor = ("(Ldev/streamsreflowing/core/plate/PlateKey;Ljava/util/function/Function;"
-                  "Ldev/streamsreflowing/core/plate/PlateLattice;"
+    descriptor = ("(Ldev/streamsreflowing/core/plate/ProprietaryNiceJohn_001;"
                   "Ldev/streamsreflowing/core/terrain/TerrainSampler;"
+                  f"Ldev/streamsreflowing/core/terrain/{wetness};"
                   "Ldev/streamsreflowing/core/config/StreamsConfig;J)"
                   "Ldev/streamsreflowing/core/river/RiverNetwork;")
-    need(descriptor in result.stdout, "2.17.1 graph-builder descriptor changed")
-    mixin = (ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin/StreamsNaturalNetwork2171Mixin.java").read_text(encoding="utf-8")
+    need(descriptor in result.stdout, "live five-argument graph-builder descriptor changed")
+    mixin = (ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/mixin" / mixin_name).read_text(encoding="utf-8")
     adapter = (ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/Streams2171NetworkAdapter.java").read_text(encoding="utf-8")
     need("at = @At(\"RETURN\")" in mixin and "Streams2171NetworkAdapter.refine(domain" in mixin
-         and "ProprietaryNiceJohn_001;" in mixin,
+         and "ProprietaryNiceJohn_001;" in mixin and wetness in mixin,
          "V14 is not attached to completed native graphs")
     for call in ("selectWatersheds", "StreamsNaturalNetwork.refine",
                  "StreamsConfluenceNetwork.refine", "StreamsShallowNetwork.refine"):
@@ -44,7 +53,7 @@ def main() -> None:
     # Compile the new helper with a small world-free adapter fa챌ade, while using
     # the actual Streams records/JAR.  This reaches the helper's real domain
     # constructor and all three native reassembly refiners without NeoForge.
-    source = OUT / "src"; source.mkdir(parents=True, exist_ok=True)
+    source = out / "src"; source.mkdir(parents=True, exist_ok=True)
     stubs = {
         "org/slf4j/Logger.java": "package org.slf4j; public interface Logger { default void info(String s,Object...a){} }",
         "org/slf4j/LoggerFactory.java": "package org.slf4j; public final class LoggerFactory { static final Logger L=new Logger(){}; public static Logger getLogger(String n){return L;} }",
@@ -69,13 +78,15 @@ def main() -> None:
         ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsConfluenceNetwork.java",
         ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/StreamsShallowNetwork.java",
         ROOT / "neoforge/src/main/java/com/github/xandergos/terraindiffusionmc/compat/streams/Streams2171NetworkAdapter.java"]
-    subprocess.run([str(args.java_home / "bin" / "javac.exe"), "--release", "21", "-cp", str(jar), "-d", str(OUT), *map(str, compiled), *map(str, files)], cwd=ROOT, check=True)
-    subprocess.run([str(args.java_home / "bin" / "java.exe"), "-ea", "-cp", os.pathsep.join((str(OUT), str(jar))), "com.github.xandergos.terraindiffusionmc.compat.streams.NetworkAdapterHarness"], cwd=ROOT, check=True)
-    # Reuse the existing actual-JAR reassembly harness: it exercises the retained
-    # six-argument graph boundary, lakes, sinks and null relief on this JAR.
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    subprocess.run([str(args.java_home / "bin" / "javac.exe"), "--release", "21", "-cp", str(jar), "-d", str(out), *map(str, compiled), *map(str, files)], cwd=ROOT, check=True, creationflags=flags)
+    subprocess.run([str(args.java_home / "bin" / "java.exe"), "-ea", "-cp", os.pathsep.join((str(out), str(jar))), "com.github.xandergos.terraindiffusionmc.compat.streams.NetworkAdapterHarness"], cwd=ROOT, check=True, creationflags=flags)
+    # Reuse the actual-JAR reassembly harness for lakes, sinks and null relief;
+    # the checked descriptor above is the live five-argument engine boundary.
     subprocess.run(["python", "-B", "tools/streams_probe/test_2162_network.py",
-                    "--java-home", str(args.java_home), "--jar", str(jar)], cwd=ROOT, check=True)
-    print("test_2171_network: PASS V14 helper refine, inactive pass-through, native reassembly")
+                    "--java-home", str(args.java_home), "--jar", str(jar)], cwd=ROOT, check=True,
+                   creationflags=flags)
+    print("test_%s_network: PASS V14 helper refine, live native builder and reassembly" % version.replace(".", ""))
 
 if __name__ == "__main__":
     main()

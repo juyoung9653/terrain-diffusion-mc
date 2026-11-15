@@ -26,21 +26,27 @@ def main() -> None:
     package = root / "common/src/main/java/com/github/xandergos/terraindiffusionmc/pipeline"
     output = root / "build/macro-context-tests"
     sources = [package / (name + ".java") for name in (
-        "FastNoiseLite", "BiomeClassifier", "TerralithBiomeClassifier", "ShoreContext", "MacroBiomeContext")]
-    sources.append(root / "tools/terrain_sampling/MacroBiomeContextParityTest.java")
+        "FastNoiseLite", "BiomeClassifier", "TerralithBiomeClassifier", "ShoreClassifier", "ShoreContext",
+        "EcologyClassifier", "WetlandEcology", "MacroBiomeContext")]
+    sources.extend((root / "tools/terrain_sampling" / name for name in (
+        "MacroBiomeContextParityTest.java", "WetlandHabitatScaleTest.java")))
     output.mkdir(parents=True, exist_ok=True)
 
     compile_command = [javac, "--release", "21", "-encoding", "UTF-8", "-d", output, *sources]
-    run_command = [java, "-cp", output,
-                   "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextParityTest"]
+    classpath = os.pathsep.join((str(output), str(root / "common/src/main/resources")))
+    run_commands = [[java, "-cp", classpath,
+                     "com.github.xandergos.terraindiffusionmc.pipeline.MacroBiomeContextParityTest"],
+                    [java, "-cp", classpath,
+                     "com.github.xandergos.terraindiffusionmc.pipeline.WetlandHabitatScaleTest"]]
     if args.benchmark:
-        run_command.append("--benchmark")
+        run_commands[0].append("--benchmark")
     receipt = output / "validation.txt"
     with receipt.open("w", encoding="utf-8") as log:
-        for command in (compile_command, run_command):
+        for command in (compile_command, *run_commands):
             log.write("$ " + " ".join(map(str, command)) + "\n")
             completed = subprocess.run(list(map(str, command)), cwd=root, text=True,
-                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             log.write(completed.stdout)
             if completed.returncode:
                 raise SystemExit(completed.returncode)

@@ -7,6 +7,8 @@ public final class EcologyDataCacheTest {
         var expected = first.sample(19, 37);
         int snowBits = Float.floatToRawIntBits(first.snowRetention(19, 37));
         int openWaterBits = Float.floatToRawIntBits(first.openWaterFraction(19, 37));
+        int wetnessBits = Float.floatToRawIntBits(first.sample(19, 37).wetness());
+        int marineBits = Float.floatToRawIntBits(first.sample(19, 37).marineInfluence());
         EcologyDataCache cache = new EcologyDataCache(1);
         first.retainCold(cache);
         check(first.packed() != null, "cold tile retains packed bytes");
@@ -16,6 +18,10 @@ public final class EcologyDataCacheTest {
         check(Float.floatToRawIntBits(first.snowRetention(19, 37)) == snowBits, "cold retention is bit-exact");
         check(Float.floatToRawIntBits(first.openWaterFraction(19, 37)) == openWaterBits,
                 "cold open-water exposure is bit-exact");
+        check(Float.floatToRawIntBits(first.sample(19, 37).wetness()) == wetnessBits,
+                "cold wetness is bit-exact");
+        check(Float.floatToRawIntBits(first.sample(19, 37).marineInfluence()) == marineBits,
+                "cold marine influence is bit-exact");
         third.retainCold(cache);
         check(cache.hotEntries() == 1, "decoded ecology cache stays bounded");
         EcologyData crop = first.crop(9, 13, 17, 21);
@@ -23,6 +29,11 @@ public final class EcologyDataCacheTest {
         check(Float.floatToRawIntBits(crop.openWaterFraction(10, 12))
                         == Float.floatToRawIntBits(first.openWaterFraction(19, 25)),
                 "cold crop exposure parity");
+        check(Float.floatToRawIntBits(crop.sample(10, 12).wetness())
+                        == Float.floatToRawIntBits(first.sample(19, 25).wetness())
+                        && Float.floatToRawIntBits(crop.sample(10, 12).marineInfluence())
+                        == Float.floatToRawIntBits(first.sample(19, 25).marineInfluence()),
+                "cold crop wetland parity");
         cache.clear();
         check(first.sample(19, 37).equals(expected), "external tile remains readable after owner clear");
         EcologyData.Snapshot detached = first.currentSnapshot();
@@ -57,7 +68,7 @@ public final class EcologyDataCacheTest {
 
     private static void benchmarkTile() {
         EcologyData raw = tile(256, 31), cold = tile(256, 31), filler = tile(256, 32);
-        final int rawBytes = 256 * 256 * (2 * Short.BYTES + 6 * Float.BYTES), samples = 100_000;
+        final int rawBytes = 256 * 256 * (2 * Short.BYTES + 8 * Float.BYTES), samples = 100_000;
         long begin = System.nanoTime(); EcologyDataCache cache = new EcologyDataCache(1); cold.retainCold(cache);
         long packNanos = System.nanoTime() - begin; filler.retainCold(cache);
         check(cold.currentSnapshot() == null, "benchmark tile is cold");
@@ -83,7 +94,7 @@ public final class EcologyDataCacheTest {
     private static EcologyData tile(int side, int salt) {
         int n = side * side;
         short[] biome = new short[n], terrain = new short[n];
-        float[] cover = new float[n], temperature = new float[n], moisture = new float[n], slope = new float[n], snow = new float[n], openWater = new float[n];
+        float[] cover = new float[n], temperature = new float[n], moisture = new float[n], slope = new float[n], snow = new float[n], openWater = new float[n], wetness = new float[n], marine = new float[n];
         for (int z = 0; z < side; z++) for (int x = 0; x < side; x++) {
             int i = z * side + x;
             biome[i] = (short) ((x / 8 + z / 8 + salt) % 19); terrain[i] = (short) ((x + z + salt) % 29);
@@ -91,8 +102,10 @@ public final class EcologyDataCacheTest {
             moisture[i] = ((z + salt) % 17) / 16f; slope[i] = (x * 3 + z * 5 + salt) * .001f;
             snow[i] = (x == 19 && z == 37) ? Float.intBitsToFloat(0x7fc01234) : (x + z) * .01f;
             openWater[i] = (x == 19 && z == 37) ? Float.intBitsToFloat(0x3e99999a) : ((x * 7 + z * 3 + salt) & 15) / 15f;
+            wetness[i] = (x == 19 && z == 37) ? Float.intBitsToFloat(0x3f2aaaab) : ((x * 11 + z + salt) & 31) / 31f;
+            marine[i] = (x == 19 && z == 37) ? Float.intBitsToFloat(0x3e4ccccd) : ((x + z * 13 + salt) & 31) / 31f;
         }
-        return new EcologyData(side, side, biome, terrain, cover, temperature, moisture, slope, snow, openWater);
+        return new EcologyData(side, side, biome, terrain, cover, temperature, moisture, slope, snow, openWater, wetness, marine);
     }
 
     private static void check(boolean condition, String message) {

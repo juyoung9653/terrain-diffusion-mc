@@ -292,7 +292,7 @@ previous profile; installing the JAR does not rewrite saved rivers. See the
 [Streams integration setup and validation](tools/streams_probe/README.md).
 The Streams mod is installed separately.
 
-Streams **2.17.1** uses its original engine with TD natural river profile **V14**
+Streams **2.17.1 and 2.17.3** use their original engine with TD natural river profile **V14**
 in fresh TD worlds. TD supplies exact host terrain, binds asynchronous samplers,
 and restores sparse watershed/source selection, connected river hierarchy and
 shallow grades after native routing. The effective watershed is pinned before
@@ -485,7 +485,14 @@ background sampling without crossing world-state barriers, and background work
 retains bounded fairness.
 
 For GPUs with sufficient free VRAM, `inference.offload_models=false` keeps models
-resident and avoids repeated ONNX session creation. The default remains `true` for
+resident during active inference and avoids repeated ONNX session creation. After
+five minutes without GPU inference, both resident sessions and the shared offload
+slot are released (checked once per second). The next inference reloads the needed
+model; cached chunks do not trigger a reload. Resident models reload from disk to
+avoid retaining a second copy of their weights in Java heap. The first generation
+after idle therefore includes session startup latency. Inference and idle cleanup
+share a lock so an in-flight inference cannot be evicted.
+The default remains `true` for
 memory-constrained clients. Measure with the actual shader pack before assuming server
 probe VRAM usage represents client usage.
 
@@ -500,6 +507,45 @@ Terrain Diffusion river planner and carver. It requires Streams river/lake
 generation and world structures disabled. It uses Minecraft water and does not
 port Streams' custom flowing-water system. Its persisted terrain cache belongs
 to the preview world and must accompany any copy of that world.
+
+## Lush Cave Ruins compatibility (1.21.1)
+
+With Lush Cave Ruins installed, TD also admits `keeb_struc_lush:keeb_struc_lush`
+in `terralith:cave/underground_jungle`. This is world-local eligibility: ordinary
+worlds retain the mod's original `minecraft:lush_caves` predicate. The native
+random-spread algorithm, trial-chamber exclusion, projected depth and jigsaw
+layout remain; the surface reservation planner does not reshape this
+underground structure. New generation and `/locate structure` use the same
+placement. Existing chunks are not regenerated.
+
+The exact `keeb_struc_lush:lush_ruins` set now uses at least 63 chunks of
+random-spread separation. For installed 1.3-LTS this changes spacing/separation
+from 14/8 to 69/63, preserving its six-chunk jitter, salt and exclusion zone.
+Adjacent candidate origins are at least `(63 + 1) * 16 = 1,024` horizontal
+blocks apart, meeting the requested 1,000-block minimum between generation
+reference positions. This is not distance between the structures' outer walls.
+The spacing rule applies in all worlds using this mod. Existing saved starts
+keep their old positions, so the guarantee is between starts generated with
+the new placement; it does not cover pairs involving older starts.
+
+The installed 1.3-LTS data also references `minecraft:fallen_tree`, which does
+not exist in 1.21.1 and otherwise prevents registry loading. TD converts only
+that branch of `keeb_struc_lush:column_ruins_feature` to a vanilla debris pile,
+preserving its material palette and selector probability. This decode repair
+applies before world selection, including ordinary worlds; it does not edit
+the installed mod JAR. Other surface-marker variants remain unchanged.
+The two affected LCR loot tables also map unavailable colored bundles to plain
+bundles and resin clumps to clay balls, retaining their weights and counts.
+
+Run the `lush-ruins` and `lush-ruins-data` fast checks, then use the Streams
+suite's `--lush-cave-ruins-audit` with the installed LCR JAR in a fresh fixture.
+The audit requires a native random-spread start, underground-jungle generation
+anchor, physical mud bricks after FULL generation and structure NBT round-trip.
+The pre-spacing 2026-11-14 fixture with LCR 1.3-LTS, Streams 2.17.3, Terralith 2.6.2,
+Lithostitched 1.8.1 and C2ME on NeoForge 21.1.264 passed this combined lifecycle:
+229 native pieces across 88 FULL chunks, 5,106 physical mud bricks, both repaired
+loot tables loaded, and 100 subsequent river-settlement ticks. This fixture is
+not evidence of compatibility with every mod in the player's full instance.
 
 ## Terralith compatibility (1.21.1)
 
@@ -520,9 +566,9 @@ enabled. These generation changes require fresh chunks; use a new same-seed
 world for comparison rather than mixing old and new generation.
 
 New compatibility-preset worlds enable `natural_biomes: true`. Their land uses
-19 ecological biomes controlled by a continuous TD climate field, with a filter
+23 ecological biomes controlled by a continuous TD climate field, with a filter
 radius of 512 model pixels (1024 game blocks at scale two, rounded up to coarse
-cells). All nineteen ecological biomes
+cells). All ecological biomes
 share grass/foliage tints and the ordered ecological vegetation list. Tree density, compatible species
 weights and broad soil patches depend on continuous climate controls, not biome
 labels. Saved biome IDs, F3 biome names, feature ownership and biome locate results
@@ -530,6 +576,78 @@ remain exact. The final TD soil pass feathers surface materials by up to two blo
 across boundaries between natural TD land ecology biomes; it never borrows aquatic,
 cave or non-TD climate, and keeps the target column's elevation and slope. Terrain
 heights and native Streams generation stay in their existing generation paths.
+
+The four appended wetland identities are `reed_marsh`, `freshwater_swamp`,
+`mangrove_swamp`, and `riparian_forest`; the original 19 numeric IDs stay stable.
+Their soil, canopy and plant blends use continuous habitat weights on both sides
+of biome boundaries, with the same grass, foliage and water tints. Immutable
+terrain samples estimate sheltered sea contact and valley-floor convergence;
+cold, arid and steep sites are excluded. This is a drainage-suitability proxy,
+not simulated groundwater, tidal salinity or an exact map of later Streams
+channels. Aquatic decoration additionally checks actual water and support.
+Never query later Streams generation from the initial biome classifier: that
+would make selection depend on generation order or recursively request terrain.
+The wetness and marine fields must survive ecology cache eviction, cropping and
+terrain replay; replay tiles now use format 3 and reject older snapshots.
+Existing chunks retain their saved biomes; inspect fresh chunks for this change.
+
+Valley habitat uses a 16-block-radius mean height field and 16-block slope
+differences inside the existing global terrain halo. Block-scale slopes previously
+fragmented freshwater swamp and riparian labels into isolated quart-sized spots;
+applying the same slope exclusion again in the ecology classifier compounded it.
+Keep the habitat filter separate from terrain, shore and climate samples, and do
+not reapply the local slope to wetness. Physical plant support still uses the
+actual blocks. The chunk profiler's `--wetland-spatial-audit` automatically runs
+`tools/test_macro_context.py` and analyzer checks before launch, then produces
+connected-area, isolation and transition metrics from the actual CSV. Use
+`--wetland-baseline` for input-checked comparisons at inherited sites; manually
+chosen `--wetland-sites` require a matching `--wetland-seed`. See the
+[spatial audit procedure](tools/chunk_profile/README.md#wetland-spatial-audit).
+These grids require quality review and measure local habitat distribution, not
+rendered scenery or global biome frequency.
+
+The `wetland-coherence-fix-20261115` comparison sampled 262,144 points in four
+fixed 1024-square-block windows. In the freshwater window, the largest connected
+swamp grew from 96 to 2,896 block² and riparian forest from 208 to 1,920 block²;
+the 90th-percentile adjacent wetness change fell from 0.497 to 0.126. Mangrove
+component areas stayed unchanged. This is a local habitat comparison: different
+generation order produced small numerical drift (up to one sampled height block),
+so it is not a byte-equivalent terrain or performance comparison. See the
+[comparison](build/chunk-profile/wetland-coherence-fix-20261115/wetland-analysis/before-after.png)
+and [reviewed evidence](build/chunk-profile/wetland-coherence-fix-20261115/reviewed-evidence.json).
+
+The separate `eco_wetland_groundcover` pass follows ordinary groundcover in all
+23 biomes. Greeneries may replace ordinary groundcover without removing the
+continuous wetland pass. It uses survival-checked vanilla sugar cane as reeds and
+lily pads over shallow still water, including retained TD land with a Streams
+river overlay. Mangrove trees require a real shallow water bank. These features
+do not create water. Shore takeover ramps canopy and wetland decoration together;
+surface boundary dithering preserves the target column's wetness and marine fields.
+
+TD-local structure adapters map Hopo lush/dripstone portals, Cataclysm amethyst
+nests, Terralith oak cabins and Better Mineshafts lush/dripstone/mushroom variants
+to the corresponding TD cave palette, and Structory swamp ruins to TD mangroves.
+The adapters cover set retention, placement maps, generation predicates and fast
+locate without mutating global biome tags. Supplementaries 4.1.1 galleons retain
+their native exclusion checks while entering TD's normal reservation planner:
+their audited placement subclass inherits the vanilla candidate grid. Check this
+contract after a Supplementaries update with
+`python tools/structure_placement/test_galleon_placement_audit.py --jar PATH`.
+Use the `instance-compat` fast check and the Streams suite's
+`--wetland-compat-audit` for live registry/planner and bounded full-chunk ecology
+evidence. Explicit `--wetland-structure-target ID@CHUNK_X,CHUNK_Z` additionally
+requires a native start and piece NBT round-trip; eligibility alone is not proof
+that every structure was physically generated.
+
+The fresh `wetland-review-server3` integration run on NeoForge 21.1.264 passed
+with 222 installed server-compatible mod JARs, copied world settings and fresh
+river caches. Its full-pipeline scan found all four new habitats naturally;
+64 columns in four FULL chunks contained 17 mud blocks and 12 tree-log blocks.
+The eight mapped structure predicates/placement maps and galleon reservation plan
+passed. No explicit structure-start targets were requested, and the sampled
+columns contained no water plants: this receipt does not prove every structure
+start, aquatic decoration or client rendering. Client-only exclusions and their
+startup failures remain recorded in the prepared fixture provenance.
 
 Ordinary soil-covered hills retain forest potential: the slope multiplier now
 tapers from rise/run 0.35 to 1.80 (about 19 to 61 degrees), retaining more than
@@ -1119,7 +1237,7 @@ A fresh-world follow-up identified Lush 2.2's `lush:lush_vegetation` as a
 separate direct-write route. Lush treats unknown ecology IDs as boosted
 grass/fern groundcover and does not use `SimpleBlockFeature`, so the ordinary
 Greeneries placement hook cannot govern it. On installations with the audited
-Lush `2.2` and Greeneries, TD restores that feature only in its nineteen natural
+Lush `2.2` and Greeneries, TD restores that feature only in its natural
 ecology biomes through a TD-owned placed-feature holder. The clone retains
 Lush's configured feature and original count-40 placement chain; the distinct
 holder prevents cross-biome feature-order cycles. Each attempted plant then uses
@@ -1904,6 +2022,15 @@ successful input manifest. Preparation hashes files that still exist; it cannot
 restore removed dependencies. An emptied mod directory can copy successfully but
 fail world loading with a missing Terralith biome before the probe starts.
 
+A fixture containing `archived-model-inputs.json` has archived model inputs.
+Suite launchers and fixture preparation refuse it until restoration completes.
+Follow the marker's `restore_command` from the repository root; the restore tool
+copies SHA-256-verified models, refuses changed destination files, and removes
+the marker only after verification. Keep the referenced cleanup plan, restore
+script and `retained-models/` directory together. Worlds, configuration and
+diagnostic receipts remain in the fixture; restored runs may need to regenerate
+ONNX caches, so re-establish the cache policy before timing comparisons.
+
 Prepare a fresh-chunk copy from an existing **workspace diagnostic fixture**:
 
 ```text
@@ -2080,7 +2207,10 @@ in its output JAR. Installation remains a separate explicit step.
 The probe suite now writes `validation-evidence.json` in each fixture automatically.
 It binds a successful process and checked result to the production source contents
 (including uncommitted files), prepared-input manifest hash, launch command and JDK
-path. Production sources or the manifest changing during a run make it fail. This
+path. Production sources are frozen before preflight, and changes before launch
+stop the child. Streams probes also freeze their diagnostic Java, resources,
+init script and Python tools; changed inputs invalidate the result and are
+rechecked at build/install. Production sources or the manifest changing during a run make it fail. This
 is provenance, not a claim that the fixture covers the complete installed modpack.
 
 For an installable build, pass `--validation <fixture>/validation-evidence.json`
@@ -2089,6 +2219,13 @@ Stale source/result evidence stops before Gradle. After a successful build, the
 tool checks again and writes `<mod.jar>.validation.json` beside the JAR, binding
 its exact hash to those results. A build without this option is still available
 for development, but has no validated-install permission.
+
+For Streams 2.17.3 fixtures, the build also requires the settled physical river
+regression receipt and diagnostic-input hashes for the exact prepared Streams
+JAR. The installer compares that coverage with the destination JAR before any
+copy; unknown future Streams versions need an explicit audited policy. See the
+[automatic checks and river fixture](tools/streams_probe/README.md) for the
+required run. This targeted requirement does not select other modpack tests.
 
 Use `tools/memory_probe/disk_libraries.py RECEIPT LIBRARY MOD --install-mods DIR`
 for local disk-library updates. Under the shared lock it checks the validation
@@ -2160,3 +2297,32 @@ python -m unittest tools.structure_placement.test_java_test_support
 python -m unittest tools.structure_placement.test_prepare_fixture
 python tools/structure_placement/run_density_telemetry_tests.py
 ```
+
+### Local C-drive cache cleanup (2026-11-13)
+
+The requested conservative cleanup removed **5,368,308,387 bytes (5.37 GB)** of
+cache files. The measured free-space increase was 5.33 GB; other applications and
+filesystem allocation can affect that value independently of logical file sizes.
+
+| Cache | Removed | Method |
+| --- | ---: | --- |
+| npm download content (`npm-cache/_cacache`) | 4,810,135,870 bytes | npm 11.13.0 `cache clean` with an explicit cache root; `_npx` retained |
+| pip HTTP downloads (`pip/Cache/http-v2`) | 524,996,619 bytes | Removed only HTTP responses; locally built wheels retained |
+| uv unreachable cache objects | 33,175,898 bytes | `uv cache prune --offline --no-python-downloads --no-config`; no forced/full cache removal |
+
+All three operations exited successfully. Before/after inventories verified the
+retained npm `_npx`, pip wheels and Prism download cache; 1,609 tracked file hashes
+matched before this documentation update. No Minecraft/build run was needed.
+Local plans, commands, output and verification are retained under
+`build/cleanup-20261113-c-drive/` (ignored local evidence).
+
+The Recycle Bin was **not emptied**: its 267 metadata entries yielded no proven
+duplicate deletion candidates in the bounded audit. Unique/missing-original data,
+ROM analysis work, WSL disks, Codex history, heap dumps, player saves, Windows
+files and Gradle offline dependencies were retained. PrismLauncher was running,
+so its cache was also retained. npm/pip downloads may need to be fetched again.
+
+For future cleanup, resolve actual user-profile paths explicitly: sandboxed
+AppData can point to a separate cache. Check cache users in the real host process
+list before applying an audited, path-checked cleanup; never stop user programs
+or treat a folder named `tmp` as proof that its contents are disposable.

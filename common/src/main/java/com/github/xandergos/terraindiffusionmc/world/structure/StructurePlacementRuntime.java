@@ -76,9 +76,15 @@ public final class StructurePlacementRuntime {
             StructureSet generatingSet) {
         if (!TerrainDiffusionBiomeSources.isTerrainDiffusion(biomes)) return structure.generate(access,generator,biomes,random,templates,seed,owner,references,height,validBiome);
         var registry = access.registryOrThrow(Registries.STRUCTURE);
+        String id = String.valueOf(registry.getKey(structure));
+        validBiome = LushCaveRuinsCompatibility.validBiomes(biomes, id, validBiome);
+        validBiome = InstanceStructureCompatibility.validBiomes(biomes, id, validBiome);
+        // This underground jigsaw owns its layout, projected depth and trial-chamber exclusion.
+        // The generic planner's bounded surface reservations and retries must not reshape it.
+        if (LushCaveRuinsCompatibility.STRUCTURE_ID.equals(id))
+            return structure.generate(access,generator,biomes,random,templates,seed,owner,references,height,validBiome);
         var config = StructurePlacementConfig.snapshotFor(registry);
         if (!config.enabled()) return structure.generate(access,generator,biomes,random,templates,seed,owner,references,height,validBiome);
-        String id = String.valueOf(registry.getKey(structure));
         if (state == null || generatingSet==null) { diagnostic(id,"missing structure state/set context; rejected"); return StructureStart.INVALID_START; }
         StructureReservations planner;
         synchronized (PLANNERS) { planner = PLANNERS.computeIfAbsent(state,s -> new StructureReservations(s,registry,config)); }
@@ -141,6 +147,8 @@ public final class StructurePlacementRuntime {
             int references, LevelHeightAccessor height, Predicate<Holder<Biome>> validBiome,
             StructurePlacementConfig.Policy policy, boolean preflight, StructureHeightCache sharedHeights) {
         String id=String.valueOf(access.registryOrThrow(Registries.STRUCTURE).getKey(structure));
+        validBiome = LushCaveRuinsCompatibility.validBiomes(biomes, id, validBiome);
+        validBiome = InstanceStructureCompatibility.validBiomes(biomes, id, validBiome);
         int radius=policy.reservationRadiusBlocks();
         var footprintEnvelope=new PlacementGeometry.Rect(owner.getMiddleBlockX()-radius,owner.getMiddleBlockZ()-radius,
                 owner.getMiddleBlockX()+radius,owner.getMiddleBlockZ()+radius);

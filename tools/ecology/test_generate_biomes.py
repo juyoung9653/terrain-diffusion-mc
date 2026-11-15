@@ -16,6 +16,24 @@ class GenerateEcologyBiomeTests(unittest.TestCase):
     def test_steppe_keeps_plain_grass_generation(self):
         self.assertEqual(("plains", "plains", .7), GENERATOR.SPECS["steppe"])
 
+    def test_wetlands_keep_environment_tags_without_inheriting_source_structures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            vanilla = root / "vanilla.jar"
+            self._write_fixture(vanilla)
+            output = root / "out"
+            structure_path = output / "data/minecraft/tags/worldgen/biome/has_structure/swamp_hut.json"
+            structure_path.parent.mkdir(parents=True)
+            structure_path.write_text(json.dumps({"replace": False, "values": [
+                "minecraft:swamp", "terrain-diffusion-mc:ecology/reed_marsh"]}))
+            GENERATOR.generate(vanilla, output)
+            structure = json.loads(structure_path.read_text())
+            self.assertNotIn("terrain-diffusion-mc:ecology/reed_marsh", structure["values"])
+            self.assertNotIn("terrain-diffusion-mc:ecology/freshwater_swamp", structure["values"])
+            environment = json.loads((output / "data/minecraft/tags/worldgen/biome"
+                                      / "is_overworld.json").read_text())
+            self.assertIn("terrain-diffusion-mc:ecology/mangrove_swamp", environment["values"])
+
     def test_native_route_is_conditional_and_preserves_placements_and_flowers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -33,8 +51,10 @@ class GenerateEcologyBiomeTests(unittest.TestCase):
                 self.assertEqual(conditions, data["neoforge:conditions"])
                 self.assertEqual("terrain-diffusion-mc:greeneries_native_vegetation", data["type"])
                 self.assertEqual("terrain-diffusion-mc:ecology/" + name, data["biomes"])
-                self.assertEqual(["terrain-diffusion-mc:greeneries_native/" + path
-                                  for path in ("bamboo_light", "vines", "flowers")], data["features"])
+                expected_native = ([] if name in GENERATOR.WETLAND_BIOMES else
+                                   ["terrain-diffusion-mc:greeneries_native/" + path
+                                    for path in ("bamboo_light", "vines", "flowers")])
+                self.assertEqual(expected_native, data["features"])
             removal = json.loads((modifiers / "remove_climate_groundcover.json").read_text())
             self.assertEqual(conditions, removal["neoforge:conditions"])
             self.assertEqual("neoforge:remove_features", removal["type"])
@@ -91,10 +111,11 @@ class GenerateEcologyBiomeTests(unittest.TestCase):
             ecology = [value for value in tag["values"] if isinstance(value, str) and value.startswith("terrain-diffusion-mc:ecology/")]
             self.assertEqual(len(ecology), len(set(ecology)))
             self.assertEqual(sum(tag in ("forest", "taiga") for _, tag, _ in GENERATOR.SPECS.values()), len(ecology))
-            configured = json.loads((output / "data/terrain-diffusion-mc/worldgen/configured_feature/eco_groundcover.json").read_text())
-            placed = json.loads((output / "data/terrain-diffusion-mc/worldgen/placed_feature/eco_groundcover.json").read_text())
-            self.assertEqual({"type": "terrain-diffusion-mc:eco_groundcover", "config": {}}, configured)
-            self.assertEqual({"feature": "terrain-diffusion-mc:eco_groundcover", "placement": []}, placed)
+            for feature in ("eco_groundcover", "eco_wetland_groundcover"):
+                configured = json.loads((output / f"data/terrain-diffusion-mc/worldgen/configured_feature/{feature}.json").read_text())
+                placed = json.loads((output / f"data/terrain-diffusion-mc/worldgen/placed_feature/{feature}.json").read_text())
+                self.assertEqual({"type": "terrain-diffusion-mc:" + feature, "config": {}}, configured)
+                self.assertEqual({"feature": "terrain-diffusion-mc:" + feature, "placement": []}, placed)
 
     def _write_fixture(self, jar):
         names = {source for source, _, _ in GENERATOR.SPECS.values()}
@@ -116,7 +137,9 @@ class GenerateEcologyBiomeTests(unittest.TestCase):
                                  json.dumps({"feature": "minecraft:" + name,
                                              "placement": [{"type": "minecraft:biome"}]}))
             archive.writestr("data/minecraft/tags/worldgen/biome/is_forest.json", json.dumps({"values": ["minecraft:forest", "minecraft:taiga"]}))
-            archive.writestr("data/minecraft/tags/worldgen/biome/is_overworld.json", json.dumps({"values": ["#minecraft:is_forest", "minecraft:plains"]}))
+            archive.writestr("data/minecraft/tags/worldgen/biome/is_overworld.json", json.dumps({"values": ["#minecraft:is_forest", "minecraft:plains", "minecraft:mangrove_swamp"]}))
+            archive.writestr("data/minecraft/tags/worldgen/biome/has_structure/swamp_hut.json",
+                             json.dumps({"values": ["minecraft:swamp"]}))
 
 
 if __name__ == "__main__":

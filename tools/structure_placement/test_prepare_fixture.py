@@ -129,6 +129,20 @@ class PrepareFixtureTest(unittest.TestCase):
             self.prepare()
         self.assertFalse(self.target.exists())
 
+    def test_archived_model_inputs_refuse_source_and_target_before_copying(self) -> None:
+        marker = self.source / fixture.ARCHIVED_MODEL_INPUTS
+        marker.write_text("not valid json", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "source model inputs archived.*archive instructions"):
+            self.prepare()
+        self.assertFalse(self.target.exists())
+
+        marker.unlink()
+        self.target.mkdir(parents=True)
+        (self.target / fixture.ARCHIVED_MODEL_INPUTS).mkdir()
+        with self.assertRaisesRegex(ValueError, "target model inputs archived.*archive instructions"):
+            self.prepare()
+        self.assertTrue((self.target / fixture.ARCHIVED_MODEL_INPUTS).is_dir())
+
     def test_absent_river_cache_is_recorded_as_fresh(self) -> None:
         (self.source / "world/streamsreflowing/cache.bin").unlink()
         result = self.prepare()

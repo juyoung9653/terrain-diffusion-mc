@@ -20,5 +20,9 @@
   "biome.terrain-diffusion-mc.ecology.snowy_boreal_woodland": "Snowy Boreal Woodland",
   "biome.terrain-diffusion-mc.ecology.snowy_tundra": "Snowy Tundra",
   "biome.terrain-diffusion-mc.ecology.alpine_tundra": "Alpine Tundra",
-  "biome.terrain-diffusion-mc.ecology.glacial_highlands": "Glacial Highlands"
+  "biome.terrain-diffusion-mc.ecology.glacial_highlands": "Glacial Highlands",
+  "biome.terrain-diffusion-mc.ecology.reed_marsh": "Reed Marsh",
+  "biome.terrain-diffusion-mc.ecology.freshwater_swamp": "Freshwater Swamp",
+  "biome.terrain-diffusion-mc.ecology.mangrove_swamp": "Mangrove Swamp",
+  "biome.terrain-diffusion-mc.ecology.riparian_forest": "Riparian Forest"
 }

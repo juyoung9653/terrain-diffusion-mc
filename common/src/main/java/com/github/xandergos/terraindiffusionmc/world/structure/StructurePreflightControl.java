@@ -10,6 +10,9 @@ public final class StructurePreflightControl {
         return type.equals("dev.streamsreflowing.worldgen.StreamsWorldgen$StructurePlatesPending")
                 || type.equals("dev.streamsreflowing.worldgen.StreamsWorldgen$SeeAiNoticeConstant_002")
                 // Audited Streams 2.17.1 plate-readiness signal; never cache it as an absent structure.
-                || type.equals("dev.streamsreflowing.worldgen.StreamsWorldgen$NoDecompilePermissionEver_002");
+                || type.equals("dev.streamsreflowing.worldgen.StreamsWorldgen$NoDecompilePermissionEver_002")
+                // Streams 2.17.3 reuses the prior nested-class name for a worldgen input record.
+                // Its deferred plate signal has this distinct Throwable type.
+                || type.equals("dev.streamsreflowing.worldgen.StreamsWorldgen$SourceGivenToAuthorizedOnly_002");
     }
 }

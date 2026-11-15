@@ -31,6 +31,24 @@ public final class EcotoneContinuityTest {
         labels.add(EcologyClassifier.select(41, -53, 900, .1f, false, 10, 1000, 900).sample().biomeId());
         labels.add(EcologyClassifier.select(41, -53, 2000, 1.1f, false, -5, 500, 2000).sample().biomeId());
         labels.add(EcologyClassifier.select(41, -53, 2000, 1.1f, false, -10, 500, 2000).sample().biomeId());
+        // Moisture alone cannot create the four new wetlands: supply their
+        // valley/coastal habitat and exercise plant rates across those labels too.
+        for (boolean coastal : new boolean[]{false, true}) {
+            float[] previous = null;
+            for (int step = 0; step <= 2000; step++) {
+                float habitat = step / 2000f;
+                var sample = EcologyClassifier.select(41, -53, coastal ? .5f : 120, .01f,
+                        coastal ? 16 + 10 * habitat : 20, 1300, coastal ? .5f : 120,
+                        coastal ? 6 : Float.POSITIVE_INFINITY, coastal ? .25f : 0, .01f,
+                        coastal ? 0 : habitat).sample();
+                if (sample.biomeId() != 0) labels.add(sample.biomeId());
+                float[] current = rates(sample);
+                if (previous != null) for (int k = 0; k < current.length; k++)
+                    require(Math.abs(current[k] - previous[k]) < .005f,
+                            "wetland habitat transition must keep plant rates continuous");
+                previous = current;
+            }
+        }
         require(labels.size() == EcologyClassifier.BIOMES.size() && !labels.contains(0), "exercise every ecological biome");
         require(crossings >= 10 && maximumJump < .005f, "moisture label transitions must not switch plant populations");
         for (float moisture : new float[]{.2f, .55f, .8f, 1.5f}) {

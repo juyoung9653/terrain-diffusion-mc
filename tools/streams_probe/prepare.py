@@ -64,7 +64,7 @@ def main() -> None:
     parser.add_argument("--scale", type=int, choices=SCALE_RANGE, default=2,
                         help="Explicit TD world scale for this fresh fixture (default: 2)")
     parser.add_argument("--streams-version", default="2.13.1",
-                        choices=["2.13.1", "2.13.5", "2.13.8", "2.15.2", "2.16.2", "2.17.1"])
+                        choices=["2.13.1", "2.13.5", "2.13.8", "2.15.2", "2.16.2", "2.17.1", "2.17.3"])
     parser.add_argument("--neoforge-version", default="21.1.249",
                         help="NeoForge major.minor.patch version recorded in the fixture")
     parser.add_argument("--dry-floor", type=float)
@@ -126,7 +126,7 @@ def main() -> None:
         manifest["modelAssets"][name] = {"bytes": target.stat().st_size, "sha256": digest(target)}
     streams_config = "streamsreflowing-common.toml"
     properties = source / "config/streamsreflowing.properties"
-    if args.streams_version in {"2.16.2", "2.17.1"}:
+    if args.streams_version in {"2.16.2", "2.17.1", "2.17.3"}:
         # Streams 2.16+ no longer consumes the legacy common TOML.  Do not make a
         # fixture which appears configured while the mod silently uses defaults.
         if not properties.is_file():

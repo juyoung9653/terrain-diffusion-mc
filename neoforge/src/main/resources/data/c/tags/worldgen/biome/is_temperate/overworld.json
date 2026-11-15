@@ -5,6 +5,9 @@
     "terrain-diffusion-mc:ecology/temperate_woodland",
     "terrain-diffusion-mc:ecology/temperate_grassland",
     "terrain-diffusion-mc:ecology/temperate_rainforest",
-    "terrain-diffusion-mc:ecology/steppe"
+    "terrain-diffusion-mc:ecology/steppe",
+    "terrain-diffusion-mc:ecology/reed_marsh",
+    "terrain-diffusion-mc:ecology/freshwater_swamp",
+    "terrain-diffusion-mc:ecology/riparian_forest"
   ]
 }

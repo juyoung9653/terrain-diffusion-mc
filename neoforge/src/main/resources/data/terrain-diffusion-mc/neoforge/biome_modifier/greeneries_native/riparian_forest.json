@@ -1,0 +1,13 @@
+{
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "greeneries"
+    }
+  ],
+  "type": "terrain-diffusion-mc:greeneries_native_vegetation",
+  "biomes": "terrain-diffusion-mc:ecology/riparian_forest",
+  "features": [
+    "terrain-diffusion-mc:greeneries_native/patch_grass_forest"
+  ]
+}

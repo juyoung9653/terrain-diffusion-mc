@@ -8,6 +8,7 @@ public final class FeatureEcologyMathTest {
         checkCoordinateChance(seed);
         checkLandscape();
         checkConnectedSoils();
+        checkWetlandContinuity();
         for (int x = -192; x <= 192; x++) {
             float value = FeatureEcologyMath.broadPatch(seed, x, x * 3, 48);
             require(value >= 0.0F && value <= 1.0F, "noise must remain normalized");
@@ -289,6 +290,25 @@ public final class FeatureEcologyMathTest {
             require(weights.jungle() > 0.0F && weights.acacia() == 0.0F && weights.spruce() == 0.0F && weights.pine() == 0.0F,
                     label + " must select only compatible warm wet trees");
         }
+    }
+
+    private static void checkWetlandContinuity() {
+        float dry = FeatureEcologyMath.wetlandMudChance(0, 0, 0, 0, 18, .08f);
+        float riparian = FeatureEcologyMath.wetlandMudChance(0, 0, 0, 1, 18, .08f);
+        float swamp = FeatureEcologyMath.wetlandMudChance(0, 1, 0, 0, 18, .08f);
+        float mangrove = FeatureEcologyMath.wetlandMudChance(0, 0, 1, 0, 18, .08f);
+        require(dry == 0, "dry habitat must not create mud");
+        require(riparian > dry && swamp > riparian && mangrove > swamp,
+                "wetland soil influence must follow habitat strength");
+        float a = FeatureEcologyMath.wetlandMudChance(0, .500f, 0, .25f, 18, .08f);
+        float b = FeatureEcologyMath.wetlandMudChance(0, .501f, 0, .25f, 18, .08f);
+        require(Math.abs(a - b) < .002f, "wetland soil transitions must be continuous");
+        require(FeatureEcologyMath.wetlandMudChance(0, 1, 1, 1, -8, .08f) == 0,
+                "cold ground must retain existing non-wetland surface policy");
+        require(FeatureEcologyMath.wetlandMudChance(0, 1, 1, 1, 18, .8f) == 0,
+                "steep ground must not receive wetland mud");
+        float bank = FeatureEcologyMath.wetlandBankPlantChance(1, 0, 0, 0, 18, .08f);
+        require(bank > 0 && bank <= 1, "wet-bank plant chance must remain bounded");
     }
 
     private static void require(boolean condition, String message) {

@@ -33,7 +33,7 @@ stub = OUT / "LocalTerrainProvider.java"
 stub.write_text("package com.github.xandergos.terraindiffusionmc.pipeline;\npublic final class LocalTerrainProvider {\n"
                 + dto + '\npublic static boolean legacySampling() { return Boolean.parseBoolean(System.getProperty("td.inference.legacySampling", "true")); }\n}', encoding="utf-8")
 classifier = (PIPELINE / "EcologyClassifier.java").read_text(encoding="utf-8")
-sample = re.search(r"public record Sample\([^}]+\}", classifier).group(0)
+sample = re.search(r"public record Sample\([^)]+\)", classifier).group(0) + " {}"
 classifier_stub = OUT / "EcologyClassifier.java"
 classifier_stub.write_text("package com.github.xandergos.terraindiffusionmc.pipeline;\npublic final class EcologyClassifier {\n" + sample + "\n}", encoding="utf-8")
 assert re.search(r"private\s+(?:volatile\s+)?long seed", provider), "Mixin requires an instance seed"

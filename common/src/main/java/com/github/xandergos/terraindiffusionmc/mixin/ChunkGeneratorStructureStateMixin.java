@@ -19,7 +19,13 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import net.minecraft.world.level.levelgen.structure.StructureSet;
 import com.github.xandergos.terraindiffusionmc.world.structure.UnifiedVillageSets;
+import com.github.xandergos.terraindiffusionmc.world.structure.LushCaveRuinsCompatibility;
+import com.github.xandergos.terraindiffusionmc.world.structure.InstanceStructureCompatibility;
+import net.minecraft.world.level.levelgen.structure.Structure;
+import net.minecraft.world.level.levelgen.structure.placement.StructurePlacement;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import java.util.List;
+import java.util.Map;
 
 import java.util.function.Predicate;
 
@@ -27,6 +33,21 @@ import java.util.function.Predicate;
 public class ChunkGeneratorStructureStateMixin {
     @Shadow @Final private BiomeSource biomeSource;
     @Shadow @Final @Mutable private List<Holder<StructureSet>> possibleStructureSets;
+    @Shadow @Final private Map<Structure, List<StructurePlacement>> placementsForStructure;
+
+    @Inject(method="hasBiomesForStructureSet", at=@At("RETURN"), cancellable=true, require=1)
+    private static void terrainDiffusion$lushRuinsSet(StructureSet set, BiomeSource source,
+                                                      CallbackInfoReturnable<Boolean> cir) {
+        if (!cir.getReturnValue() && (LushCaveRuinsCompatibility.retainsSet(set, source)
+                || InstanceStructureCompatibility.retainsSet(set, source)))
+            cir.setReturnValue(true);
+    }
+
+    @Inject(method="generatePositions", at=@At("TAIL"), require=1)
+    private void terrainDiffusion$lushRuinsPlacements(CallbackInfo ci) {
+        LushCaveRuinsCompatibility.addPlacements(biomeSource, possibleStructureSets, placementsForStructure);
+        InstanceStructureCompatibility.addPlacements(biomeSource, possibleStructureSets, placementsForStructure);
+    }
 
     @Inject(method="<init>",at=@At("RETURN"))
     private void terrainDiffusion$unifiedVillages(CallbackInfo ci) {
