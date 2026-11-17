@@ -19,7 +19,9 @@ SPEC.loader.exec_module(fixture)
 
 class PrepareFixtureTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.temporary = tempfile.TemporaryDirectory()
+        scratch = Path(__file__).resolve().parents[2] / "build"
+        scratch.mkdir(exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.source = self.root / "build" / "dedicated-source"

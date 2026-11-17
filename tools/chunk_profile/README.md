@@ -162,6 +162,15 @@ and boundary weight changes. Missing/invalid measurements fail the run;
 `qualityAcceptance: review_required` means distribution and visual quality still
 need review. There is no universal biome-area pass threshold.
 
+The same flag also records `wetlandPhysicalAudit` for each requested FULL chunk
+before releasing its ticket: saved biome columns, surface-connected water and
+depth, mud beds, lily pads, sugar cane, and logs at all heights. Interior water
+neighbors are local geometry, not proof of pool containment or which feature
+created the water; log counts can include structures. These block observations
+are separate from the terrain-field CSV and from rendered scenery acceptance.
+`wetlandPhysicalAuditSeconds` reports scan overhead within the phase's elapsed
+time; this remains a correctness run, not an isolated performance benchmark.
+
 ```powershell
 python -B tools/chunk_profile/run.py run wetland-spatial-20261115 `
   --wetland-spatial-audit --regions=372,-7 --side 1 --chunk-x 372 --chunk-z -7 `
@@ -462,3 +471,9 @@ records the removal and content-addressed TD/Streams/probe JAR archives under
 Prepare a new fixture for another run; a cleaned historical fixture is evidence,
 not a reusable launch directory. Keep only the current experiment's runtime
 copies and archive its results before pruning them.
+
+TD JAR archives follow the repository's
+[JAR backup retention policy](../../README.md#jar-backup-retention). Older TD
+archives may be removed by an explicit cleanup; archive paths in historical
+receipts then describe the original archival event, not current availability.
+Keep cleanup receipts, other mod archives and shared model restoration objects.

@@ -34,6 +34,11 @@ public final class EcologyShowcaseProfileTest {
         EcologyClassifier.Sample steepForest = EcologyShowcaseProfile.sample("temperate_forest", 0, 0, .5F);
         require(steepForest.treeCover() < flatForest.treeCover(), "slope must reduce tree cover");
         expectInvalid("not_an_ecology");
+        for (String wetland : new String[]{"reed_marsh", "freshwater_swamp", "mangrove_swamp", "riparian_forest"}) {
+            var habitat = EcologyShowcaseProfile.sample(wetland, 0, 0, 0);
+            require(WetlandEcology.biomeId(1, habitat) == habitat.biomeId(),
+                    wetland + " showcase vegetation must match the named habitat");
+        }
     }
 
     private static void expectInvalid(String name) {

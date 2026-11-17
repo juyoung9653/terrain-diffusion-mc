@@ -7,6 +7,7 @@ public final class WetlandEcologyTest {
         checkAdmissions();
         checkEcologicalExclusions();
         checkCoastalCanopyTransition();
+        checkWoodedBasinCore();
         System.out.println("WetlandEcologyTest: PASS");
     }
 
@@ -34,18 +35,54 @@ public final class WetlandEcologyTest {
         }
         float dryCover = WetlandEcology.treeCover(.56f, WetlandEcology.weights(sample(0, 0)));
         float wetCover = WetlandEcology.treeCover(.56f, WetlandEcology.weights(sample(.92f, 0)));
-        require(wetCover < dryCover, "deep inland flooding must visibly open the canopy");
+        require(wetCover < dryCover, "seasonal marsh must visibly open the canopy");
     }
 
     private static void checkAdmissions() {
-        require(id(20, 1300, .90f, Float.POSITIVE_INFINITY, 0, .04f, 120) == 20,
-                "deep warm inland basin reaches reed marsh");
+        require(id(20, 1000, .95f, Float.POSITIVE_INFINITY, 0, .04f, 120) == 20,
+                "seasonal warm inland basin retains reed marsh");
         require(id(20, 1300, .55f, Float.POSITIVE_INFINITY, 0, .04f, 120) == 21,
                 "seasonally flooded warm basin reaches freshwater swamp");
         require(id(20, 1300, .35f, Float.POSITIVE_INFINITY, 0, .04f, 120) == 23,
                 "shallow convergent drainage reaches riparian forest");
         require(id(26, 1300, 0, 6, .25f, .01f, .5f) == 22,
                 "warm protected sea-connected lowland reaches mangrove swamp");
+    }
+
+    private static void checkWoodedBasinCore() {
+        // A humid basin must stay wooded from its shoulder through its wettest
+        // core, rather than leaving swamp on one thin wetness contour.
+        for (int step = 550; step <= 1000; step++) {
+            float wet = step / 1000f;
+            var humid = new EcologyClassifier.Sample(1, .9f, 20, 1.6f, .04f, wet, 0);
+            var weights = WetlandEcology.weights(humid);
+            require(WetlandEcology.biomeId(1, humid) == 21,
+                    "humid basin lost swamp at wetness=" + wet);
+            float cover = WetlandEcology.treeCover(humid.treeCover(), weights);
+            require(cover >= .64f, "humid saturated core lost its wooded canopy");
+            var featureSample = new EcologyClassifier.Sample(21, cover, 20, 1.6f, .04f, wet, 0);
+            require(weights.equals(WetlandEcology.weights(featureSample)),
+                    "classifier and decoration must use identical habitat weights");
+        }
+        var previous = WetlandEcology.weights(new EcologyClassifier.Sample(1, .7f, 20, .8f, .04f, 1, 0));
+        for (int step = 801; step <= 1700; step++) {
+            var current = WetlandEcology.weights(new EcologyClassifier.Sample(1, .7f, 20,
+                    step / 1000f, .04f, 1, 0));
+            require(distance(previous, current) < .01f, "marsh/swamp climate blend made a seam");
+            require(Math.abs(current.reedMarsh() + current.freshwaterSwamp() - 1) < .00001f,
+                    "saturated inland habitat weights must partition the basin");
+            previous = current;
+        }
+        require(id(20, 1500, 1, Float.POSITIVE_INFINITY, 0, .04f, 120) == 21,
+                "saturated humid basin reaches freshwater swamp, not reed-only core");
+        for (int wetStep = 750; wetStep <= 1000; wetStep += 5)
+            for (int moistureStep = 950; moistureStep <= 1500; moistureStep++) {
+                var transition = new EcologyClassifier.Sample(1, .7f, 20, moistureStep / 1000f,
+                        .04f, wetStep / 1000f, 0);
+                int selected = WetlandEcology.biomeId(1, transition);
+                require(selected == 20 || selected == 21,
+                        "mixing two saturated wetland habitats must not create a dry biome gap");
+            }
     }
 
     private static void checkEcologicalExclusions() {

@@ -28,7 +28,7 @@ import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConf
 import java.util.HashMap;
 import java.util.Map;
 
-/** Applies coherent climate-driven soil changes without changing terrain height or waterways. */
+/** Applies climate-driven soils and contained shallow wetland pools before vegetation. */
 public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
     private static final short GRAVEL_BEACH = (short) (com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier
             .biomeNames().indexOf("terralith:gravel_beach") + 1);
@@ -51,7 +51,7 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         int startX = context.origin().getX();
         int startZ = context.origin().getZ();
         BoundedSurfaceSampler boundarySamples = new BoundedSurfaceSampler();
-        boolean changed = false;
+        boolean changed = WetlandPools.place(level, generator, context.origin());
         for (int localZ = 0; localZ < 16; localZ++) {
             for (int localX = 0; localX < 16; localX++) {
                 int x = startX + localX;

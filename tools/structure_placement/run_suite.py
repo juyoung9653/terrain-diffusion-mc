@@ -63,6 +63,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--neoforge-version", default="21.1.249",
                         help="numeric NeoForge version supplied to the prepared server run")
     parser.add_argument("--daemon", action="store_true", help="opt in to Gradle daemon")
+    parser.add_argument("--keep-inputs", action="store_true",
+                        help="pin these runs so automatic model retention never archives them")
     parser.add_argument("--prefetch", type=int, help="density probe batch size (1-32)")
     parser.add_argument("--shore-audit", action="store_true", help="enable shore diagnostic mixin")
     parser.add_argument("--verify-support", action="store_true", help="require physical foundation checks in this server run")
@@ -113,10 +115,9 @@ def main(argv: list[str] | None = None) -> int:
                             partial(requested_receipt, support=support, well=well, shore=args.shore_audit,
                                     underground=args.underground_audit,
                                     terrain_mode=terrain_mode, snapshot_id=snapshot_id)))
-        code = run_suite(ROOT, "structure-density", jobs, env)
-        if code == 0 and args.record_terrain:
-            seal_snapshot(args.record_terrain, jobs[0].receipt)
-        return code
+        finalize = partial(seal_snapshot, args.record_terrain, jobs[0].receipt) if args.record_terrain else None
+        return run_suite(ROOT, "structure-density", jobs, env,
+                         keep_inputs=args.keep_inputs, on_success=finalize)
     except (OSError, ValueError, RuntimeError) as exc:
         parser.error(str(exc))
 

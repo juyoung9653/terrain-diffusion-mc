@@ -616,6 +616,36 @@ so it is not a byte-equivalent terrain or performance comparison. See the
 [comparison](build/chunk-profile/wetland-coherence-fix-20261115/wetland-analysis/before-after.png)
 and [reviewed evidence](build/chunk-profile/wetland-coherence-fix-20261115/reviewed-evidence.json).
 
+Inland wetness is drainage suitability, not measured flood depth. Do not use it
+alone to turn every saturated basin into reed marsh: that confines freshwater
+swamp to a thin transition contour. The continuous moisture field now blends
+open marsh with wooded swamp, keeping humid basin cores wooded. Inland biome
+admission considers their combined weight so the blend cannot open dry gaps.
+Feature weights use cached moisture rather than already-blended tree cover or
+discrete biome labels. The reed showcase uses a seasonal climate to retain its
+open canopy.
+
+Before vegetation, `eco_surface` attempts small, one-block-deep inland pools on
+natural soil. It validates the entire footprint, bed and enclosing bank before
+writing, permits at most one block of surface relief, stays inside its chunk,
+and skips structure-referenced chunks and existing water. This adds shallow water
+without changing diffusion heights or querying later Streams generation.
+`WetlandPoolPlannerTest` (included in `tools/test_terralith.py`) covers containment
+and rejected substrate/clearance cases. Existing chunks keep their saved blocks
+and biomes; validate changes in fresh fixtures.
+
+The `wetland-breadth-20261117-verified` full-pipeline run passed at scale one
+with 289 installed mods. In the inherited freshwater window, swamp covered
+35.13% of land and its largest connected component reached 220,592 block².
+Reclassifying the historical inputs alone produced the same largest area versus
+2,896 block² previously. This is connected valley habitat, not a filled rectangle:
+the map-clipped component's approximate interior width is 25 blocks median and
+88 maximum. Eight requested FULL chunks also contained 99 shallow mud-bed water
+columns, 11 lily pads and four sugar-cane blocks. These are sampled distribution
+and physical-block checks, not rendered scenery acceptance or global frequency.
+See the [reviewed evidence](build/chunk-profile/wetland-breadth-20261117-verified/reviewed-evidence.json)
+and [habitat map](build/chunk-profile/wetland-breadth-20261117-verified/wetland-analysis/freshwater.png).
+
 The separate `eco_wetland_groundcover` pass follows ordinary groundcover in all
 23 biomes. Greeneries may replace ordinary groundcover without removing the
 continuous wetland pass. It uses survival-checked vanilla sugar cane as reeds and
@@ -2096,6 +2126,45 @@ not establish a saved-world change. Other changed or missing fields fail. This
 check covers sampled surface columns, not every block in the world. Malformed
 receipt checks become failed suite results rather than leaving an active status.
 
+### Probe input storage
+
+Successful density and Streams suites automatically manage their model inputs.
+After every job and its final checks succeed (including restart comparisons and
+terrain snapshot sealing), the runner applies retention under the same exclusive
+lock. It keeps the latest two eligible successful runs in each family and all
+pinned runs. Older managed runs share SHA-256-addressed, independently copied
+model objects under `build/probe-inputs/models/`; their duplicate model files and
+matching regenerable ONNX caches are removed. Caches explicitly listed in the
+input manifest remain for exact reproduction. Worlds, mods, configuration, logs,
+screenshots and diagnostic receipts stay in their original locations.
+
+Only runs completed through the updated suite runners enter this policy; old
+unmanaged fixtures are not swept. Failed suites do not trigger retention. Changed
+inputs or evidence, explicit pins and protection lists in earlier cleanup plans
+prevent archival. A storage or finalization error fails the suite and appears in
+`suite-status.json`; a successful diagnostic alone does not mean retention passed.
+This bounds successful model copies, not the total size of retained worlds, mods,
+failed runs or deliberately pinned environments.
+
+Pass `--keep-inputs` to a suite to pin its inputs, or manage a pin separately:
+
+```text
+python -B tools/probe_storage.py inventory
+python -B tools/probe_storage.py pin build/structure-density/baseline
+python -B tools/probe_storage.py unpin build/structure-density/baseline
+python -B tools/probe_storage.py restore build/structure-density/trial
+```
+
+Inventory is read-only: inspect the largest consumers and distinguish original
+inputs, regenerable caches and diagnostic evidence before choosing cleanup
+targets. Logical file totals and unique hardlinked-file totals are not allocated
+disk space. Restore copies verified model objects without hardlinks, refuses
+conflicting destinations and removes `archived-model-inputs.json` only after all
+models match. Launching or copying an archived fixture is blocked until then.
+Older manual archives keep their own marker's restoration command. Keep the
+shared model store and per-run storage metadata; do not remove archive markers
+manually. Rebuild caches with the required policy before comparing timings.
+
 ### Probe execution and evidence
 
 ```text
@@ -2237,6 +2306,33 @@ separate initial memory-package migration are outside this update guard. Which
 tests are required, runtime/modpack coverage, measurement semantics and visual
 acceptance still require review; one successful probe does not prove all of them.
 
+#### JAR backup retention
+
+Keep exactly one rollback version per installed Terrain Diffusion instance: the
+distinct JAR that was installed immediately before the current JAR. Identify
+versions by SHA-256 and verified installation history, not the filename, semantic
+version or file modification time. Reinstalling identical bytes must not replace
+the previous-version backup. A first installation has no previous version.
+
+The disk-library installer maintains this backup under the instance's
+`.terrain-diffusion-backups/td-jar/previous/`. Preserve the matching ONNX receipt
+and any companion library needed to restore that version. Stage and verify the
+outgoing version before installation; rotate the previous backup only after all
+installed artifacts verify successfully. Failed installations must preserve
+recovery inputs. Keep installation and cleanup receipts as evidence.
+An interrupted update may leave `.staging-*` or `.retired-*` recovery directories;
+the next update refuses to proceed until those inputs are reviewed and recovery
+is completed. Do not delete them as routine old-version backups.
+
+This is also the default policy for manual updates: do not accumulate additional
+dated JAR backups in the workspace, instance or copied test templates. The
+installer rotates only its own managed backup; legacy backup locations require
+an explicit, reviewed inventory before cleanup. Current installed JARs in other
+instances, active fixture inputs, unrelated mods/configuration, player worlds and
+shared model restoration objects are outside JAR backup cleanup. Historical
+archived TD JARs count as backups; pruning them can make exact historical reruns
+unavailable, so record the removed paths and preserve the diagnostic receipts.
+
 ### Terrain replay
 
 For repeated **structure-only** iterations, record the terrain inputs once and
@@ -2293,6 +2389,7 @@ The runner contracts and telemetry can be checked without starting Minecraft:
 
 ```text
 python -m unittest tools.test_probe_suite tools.structure_placement.test_run_fast_tests
+python -B -m unittest tools.test_probe_storage tools.test_probe_storage_integration tools.test_probe_storage_safety
 python -m unittest tools.structure_placement.test_java_test_support
 python -m unittest tools.structure_placement.test_prepare_fixture
 python tools/structure_placement/run_density_telemetry_tests.py

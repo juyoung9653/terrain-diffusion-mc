@@ -108,6 +108,19 @@ def atomic_copy(source: Path, target: Path) -> None:
         temporary_path.unlink(missing_ok=True)
 
 
+def _reject_ambiguous_terrain_mods(mods_dir: Path, selected: Path) -> None:
+    """Do not overwrite one active TD mod while another active TD mod is present."""
+    if "terrain-diffusion-mc" not in selected.name.lower() or not mods_dir.exists():
+        return
+    candidates = [path for path in mods_dir.iterdir()
+                  if path.is_file() and not path.is_symlink() and path.suffix.lower() == ".jar"
+                  and "terrain-diffusion-mc" in path.name.lower()]
+    unexpected = [path for path in candidates if path.name != selected.name]
+    if unexpected:
+        raise ValueError("ambiguous active Terrain Diffusion JARs: " +
+                         ", ".join(sorted(path.name for path in unexpected)))
+
+
 def install(receipt_path: Path, library: Path, mod: Path, mods_dir: Path) -> None:
     from probe_suite import exclusive_lock
     with exclusive_lock(ROOT):
@@ -115,12 +128,32 @@ def install(receipt_path: Path, library: Path, mod: Path, mods_dir: Path) -> Non
         release = verify_release(mod)
         from streams_probe.release_checks import require_streams_coverage
         require_streams_coverage(release["validations"], root=ROOT, installed_mods=mods_dir)
-        verify(receipt_path, library, mod)
-        # The library goes first: an interrupted install cannot leave a freshly
-        # copied slim mod without its required runtime jar.
-        atomic_copy(library, mods_dir / library.name)
-        atomic_copy(mod, mods_dir / mod.name)
-        atomic_copy(receipt_path, mods_dir / (mod.name + ".onnx-receipt.properties"))
+        receipt = verify(receipt_path, library, mod)
+        receipt_hash = sha256(receipt_path)
+        _reject_ambiguous_terrain_mods(mods_dir, mod)
+        from memory_probe.jar_backups import commit_previous, stage_previous, validate_retention_state
+        validate_retention_state(mods_dir)
+        staged = stage_previous(mods_dir, mod.name, mod, library)
+        try:
+            # The library goes first: an interrupted install cannot leave a freshly
+            # copied slim mod without its required runtime jar.
+            atomic_copy(library, mods_dir / library.name)
+            atomic_copy(mod, mods_dir / mod.name)
+            atomic_copy(receipt_path, mods_dir / (mod.name + ".onnx-receipt.properties"))
+            if sha256(mods_dir / library.name) != receipt["librarySha256"]:
+                raise ValueError("installed disk ONNX library hash does not match receipt")
+            if sha256(mods_dir / mod.name) != receipt["modSha256"]:
+                raise ValueError("installed NeoForge mod hash does not match receipt")
+            if sha256(mods_dir / (mod.name + ".onnx-receipt.properties")) != receipt_hash:
+                raise ValueError("installed ONNX receipt hash does not match source")
+            if staged is not None:
+                commit_previous(staged, mods_dir / mod.name, mods_dir / library.name)
+        except Exception as failure:
+            if staged is not None:
+                raise RuntimeError("installation incomplete; recovery backup retained under " +
+                                   str(staged.root) +
+                                   "; inspect previous, .staging-* and .retired-* before retrying") from failure
+            raise
 
 
 def main() -> None:

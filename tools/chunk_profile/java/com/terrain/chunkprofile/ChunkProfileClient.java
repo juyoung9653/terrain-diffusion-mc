@@ -212,6 +212,10 @@ public final class ChunkProfileClient {
                 root.put("saveFlushed", true);
             }
             if (wetlandSpatialAudit && !verifyRestart && "success".equals(root.get("status"))) {
+                Map<String,Object> physical = WetlandSpatialAudit.summarizePhysicalEvidence(phases);
+                root.put("wetlandPhysicalAudit", physical);
+                if (!"passed".equals(physical.get("status")))
+                    throw new IllegalStateException("Wetland physical audit did not measure every requested FULL chunk");
                 atomic(progress, Map.of("status", "wetland_spatial_sampling"));
                 root.put("wetlandSpatialAudit", WetlandSpatialAudit.run(server.overworld(),
                         output.resolveSibling("wetland-spatial.csv")));
@@ -292,6 +296,7 @@ public final class ChunkProfileClient {
         Map<String,Object> report = new LinkedHashMap<>();
         long started = -1L;
         long processBefore = -1L;
+        long physicalAuditNanos = 0L;
         CpuSampler sampler = new CpuSampler();
         List<Map<String,Object>> batches = new ArrayList<>();
         List<Map<String,Object>> rows = new ArrayList<>();
@@ -332,6 +337,7 @@ public final class ChunkProfileClient {
                 if ((System.nanoTime()-started) / 1_000_000_000L > timeoutSeconds) throw new IllegalStateException("global timeout");
                 List<ChunkPos> batch = chunks.subList(offset, Math.min(chunks.size(), offset + prefetch));
                 long batchStart = System.nanoTime(), ticketsStart = System.nanoTime();
+                long batchPhysicalAuditNanos = 0L;
                 long ticketsDone = ticketsStart, submitted = ticketsStart;
                 try {
                     server.submit(() -> batch.forEach(p -> level.getChunkSource().addRegionTicket(TICKET,p,distance,p))).get(180, TimeUnit.SECONDS);
@@ -353,6 +359,15 @@ public final class ChunkProfileClient {
                             }
                             return row;
                         }).get(30, TimeUnit.SECONDS);
+                        if (wetlandSpatialAudit) {
+                            long physicalStarted = System.nanoTime();
+                            Map<String,Object> physical = server.submit(() ->
+                                    WetlandSpatialAudit.scanFullChunk(level, p, result)).get(30, TimeUnit.SECONDS);
+                            long physicalElapsed = System.nanoTime() - physicalStarted;
+                            physicalAuditNanos += physicalElapsed;
+                            batchPhysicalAuditNanos += physicalElapsed;
+                            sample.put("wetlandPhysicalAudit", physical);
+                        }
                         sample.put("waitSeconds",seconds(done-waitStart));
                         sample.put("sinceStartSeconds",seconds(done-started));
                         sample.put("status","full");
@@ -362,7 +377,7 @@ public final class ChunkProfileClient {
                     long cleanupStart=System.nanoTime();
                     server.submit(() -> batch.forEach(p -> level.getChunkSource().removeRegionTicket(TICKET,p,distance,p))).get(180, TimeUnit.SECONDS);
                     long cleanupDone=System.nanoTime();
-                    batches.add(Map.of("first",List.of(batch.getFirst().x,batch.getFirst().z),"count",batch.size(),"ticketSeconds",seconds(ticketsDone-ticketsStart),"submissionSeconds",seconds(submitted-ticketsDone),"waitAndCleanupSeconds",seconds(cleanupDone-submitted),"totalSeconds",seconds(cleanupDone-batchStart)));
+                    batches.add(Map.of("first",List.of(batch.getFirst().x,batch.getFirst().z),"count",batch.size(),"ticketSeconds",seconds(ticketsDone-ticketsStart),"submissionSeconds",seconds(submitted-ticketsDone),"physicalAuditSeconds",seconds(batchPhysicalAuditNanos),"waitAndCleanupSeconds",seconds(cleanupDone-submitted),"totalSeconds",seconds(cleanupDone-batchStart)));
                 }
                 atomic(progress, Map.of("status","running","phaseIndex",phaseIndex,"phaseCount",phaseCount,"completed",rows.size(),"total",chunks.size(),"lastBatch",batches.getLast()));
             }
@@ -375,6 +390,7 @@ public final class ChunkProfileClient {
             long processAfter = processCpuNanos();
             sampler.stop();
             report.put("elapsedSeconds",started < 0 ? null : seconds(ended-started));
+            if (wetlandSpatialAudit) report.put("wetlandPhysicalAuditSeconds", seconds(physicalAuditNanos));
             report.put("processCpuSeconds", processBefore < 0 || processAfter < 0 ? null : seconds(Math.max(0,processAfter-processBefore)));
             report.put("tdAfter",tdMetrics()); report.put("onnxAfter",onnxMetrics());
             if (streamsGroundMarineAudit) report.put("streamsGroundMarineAuditAfter", streamsGroundMarineAudit());

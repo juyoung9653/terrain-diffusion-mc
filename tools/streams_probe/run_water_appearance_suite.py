@@ -80,6 +80,7 @@ def main() -> int:
     parser.add_argument("names", nargs="+")
     parser.add_argument("--gradle-user-home", required=True)
     parser.add_argument("--java-home", default=default_java_home())
+    parser.add_argument("--keep-inputs", action="store_true", help="pin these runs against automatic model archival")
     parser.add_argument("--baseline", action="store_true", help="record the original river pockets")
     parser.add_argument("--skip-kelp", action="store_true")
     parser.add_argument("--generate-ocean", action="store_true")
@@ -121,7 +122,7 @@ def main() -> int:
                 job.prepare()
         print("Appearance preflight passed; Gradle/Minecraft not started.")
         return 0
-    return run_suite(ROOT, "streams-probe", jobs, env)
+    return run_suite(ROOT, "streams-probe", jobs, env, keep_inputs=args.keep_inputs)
 
 
 if __name__ == "__main__":

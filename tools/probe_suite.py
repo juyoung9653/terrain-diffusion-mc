@@ -204,7 +204,8 @@ class Job:
     diagnostic_inputs: tuple[Path, ...] = ()
 
 
-def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], heartbeat_seconds: int = 30) -> int:
+def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], heartbeat_seconds: int = 30,
+              *, keep_inputs: bool = False, on_success: Callable[[], None] | None = None) -> int:
     """Run in order, retaining failure evidence and publishing one atomic status."""
     if not jobs:
         raise ValueError("suite needs at least one run")
@@ -219,6 +220,8 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
         diagnostic_before = [input_fingerprint(root, job.diagnostic_inputs) for job in jobs]
         # Validate every job before launching any child, while fixture state is locked.
         for job in jobs:
+            if os.path.lexists(job.run / ARCHIVED_MODEL_INPUTS):
+                raise ValueError("model inputs archived; restore using the marker's archive instructions before launching")
             if job.prepare is not None:
                 job.prepare()
         for index, job in enumerate(jobs):
@@ -312,8 +315,32 @@ def run_suite(root: Path, family: str, jobs: list[Job], env: dict[str, str], hea
             atomic_json(status, {"started": suite_started, "active": None,
                                  "completed": completed,
                                  "elapsedSeconds": round(time.monotonic() - suite_begun, 1)})
-        atomic_json(status, {"started": suite_started, "finished": utc_now(), "active": None,
-                             "completed": completed,
-                             "success": all(row["success"] for row in completed),
-                             "elapsedSeconds": round(time.monotonic() - suite_begun, 1)})
-    return 0 if all(row["success"] for row in completed) else 1
+        success = all(row["success"] for row in completed)
+        storage: dict[str, object] = {"status": "skipped", "reason": "suite_failed"}
+        finalization_error = None
+        if success:
+            # Restart checks have already completed in receipt callbacks. Terrain
+            # recordings must also be sealed before any historical inputs retire.
+            try:
+                if on_success is not None:
+                    on_success()
+            except (OSError, ValueError, RuntimeError) as exc:
+                success = False
+                finalization_error = f"{type(exc).__name__}: {exc}"
+                storage = {"status": "skipped", "reason": "finalization_failed"}
+            if success:
+                try:
+                    from probe_storage import maintain
+                    storage = maintain(root, family, [job.run for job in jobs], keep_inputs=keep_inputs)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    success = False
+                    storage = {"status": "failed", "error": f"{type(exc).__name__}: {exc}"}
+        final = {"started": suite_started, "finished": utc_now(), "active": None,
+                 "completed": completed, "success": success, "storage": storage,
+                 "elapsedSeconds": round(time.monotonic() - suite_begun, 1)}
+        if finalization_error is not None:
+            final["finalizationError"] = finalization_error
+        atomic_json(status, final)
+        print(json.dumps({"suite": family, "success": success, "storage": storage,
+                          **({"finalizationError": finalization_error} if finalization_error else {})}), flush=True)
+    return 0 if success else 1

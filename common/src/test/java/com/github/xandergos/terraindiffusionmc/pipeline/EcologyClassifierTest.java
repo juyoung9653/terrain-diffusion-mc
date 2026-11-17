@@ -28,8 +28,8 @@ public final class EcologyClassifierTest {
         reached.add(EcologyClassifier.select(0, 0, 2000, 1.1f, false, -10, 250, 2000).sample().biomeId());
         // These are habitat samples rather than arbitrary label fixtures: each exercises the
         // public selection path with the physical prerequisite of its wetland type.
-        reached.add(EcologyClassifier.select(0, 0, 120, .04f, 20, 1300, 120,
-                Float.POSITIVE_INFINITY, 0, .04f, .90f).sample().biomeId());
+        reached.add(EcologyClassifier.select(0, 0, 120, .04f, 20, 1000, 120,
+                Float.POSITIVE_INFINITY, 0, .04f, .95f).sample().biomeId());
         reached.add(EcologyClassifier.select(0, 0, 120, .04f, 20, 1300, 120,
                 Float.POSITIVE_INFINITY, 0, .04f, .55f).sample().biomeId());
         reached.add(EcologyClassifier.select(0, 0, 120, .04f, 20, 1300, 120,

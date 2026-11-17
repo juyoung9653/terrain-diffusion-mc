@@ -29,6 +29,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("name")
     parser.add_argument("--kelp", action="store_true")
+    parser.add_argument("--keep-inputs", action="store_true", help="pin this run against automatic model archival")
     args = parser.parse_args()
     run = prepared_run(ROOT, "streams-probe", f"build/streams-probe/{args.name}", "input-manifest.json")
     command = gradle_command(ROOT, ["-I", "tools/streams_probe/probe.init.gradle",
@@ -36,7 +37,7 @@ def main():
         "-PtdProbe.hybridAquaticAudit=true", "-PtdProbe.hybridMarineAudit=true",
         "-PtdProbe.lushDensityAudit=true", *( ["-PtdProbe.hybridAquaticKelpAudit=true"] if args.kelp else [])], False)
     return run_suite(ROOT, "streams-probe", [Job(run, command, run / "world/td-streams-probe.jsonl", lambda path: receipt(path, args.kelp))],
-                     environment("C:/Program Files/Java/jdk-21", str(ROOT / ".gradle")))
+                     environment("C:/Program Files/Java/jdk-21", str(ROOT / ".gradle")), keep_inputs=args.keep_inputs)
 
 
 if __name__ == "__main__":

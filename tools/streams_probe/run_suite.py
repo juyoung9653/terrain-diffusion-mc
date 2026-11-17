@@ -617,6 +617,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gradle-user-home", required=True)
     parser.add_argument("--java-home", default=default_java_home())
     parser.add_argument("--daemon", action="store_true", help="opt in to Gradle daemon")
+    parser.add_argument("--keep-inputs", action="store_true",
+                        help="pin these runs so automatic model retention never archives them")
     parser.add_argument("--neoforge-version", default="21.1.249",
                         help="exact dotted NeoForge version recorded by the fixture")
     parser.add_argument("--max-chunks", type=int, choices=range(1, 17), default=4)
@@ -876,7 +878,8 @@ def main(argv: list[str] | None = None) -> int:
                                            neoforge_version=args.neoforge_version),
                             run / "world/td-streams-probe.jsonl", check, prepare,
                             diagnostic_inputs=diagnostic_inputs(ROOT)))
-        return run_suite(ROOT, "streams-probe", jobs, environment(args.java_home, args.gradle_user_home))
+        return run_suite(ROOT, "streams-probe", jobs, environment(args.java_home, args.gradle_user_home),
+                         keep_inputs=args.keep_inputs)
     except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
         parser.error(str(exc))
 

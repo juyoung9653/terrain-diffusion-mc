@@ -11,13 +11,149 @@ import java.util.List;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.TreeMap;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.core.BlockPos;
+import net.minecraft.tags.BlockTags;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 
-/** Full terrain-pipeline ecology census; no replay and no generated-block claims. */
+/** Full terrain-pipeline ecology census plus a bounded saved-block observation; no replay or attribution claims. */
 public final class WetlandSpatialAudit {
     private static final String[] NAMES = {"reed", "mangrove", "freshwater", "riparian"};
     private WetlandSpatialAudit() { }
+
+    /**
+     * Called on the server thread while the profiler still holds the FULL ticket.
+     * This observes saved blocks only; it never claims that a particular feature
+     * created a pond or plant.
+     */
+    public static Map<String,Object> scanFullChunk(ServerLevel level, ChunkPos pos, ChunkAccess chunk) {
+        Map<String,Integer> biomes = new TreeMap<>();
+        int waterColumns = 0, sourceWaterColumns = 0, mudBedColumns = 0;
+        int shallowMudBedColumns = 0, interiorShallowMudBedWaterColumns = 0;
+        int logBlocks = 0, oakLogBlocks = 0, mangroveLogBlocks = 0;
+        int lilyPads = 0, reeds = 0;
+        List<Map<String,Object>> waterSamples = new ArrayList<>();
+        int minY = level.getMinBuildHeight();
+        for (int localX=0; localX<16; localX++) for (int localZ=0; localZ<16; localZ++) {
+            int x = pos.getMinBlockX()+localX, z = pos.getMinBlockZ()+localZ;
+            int scanTop = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, localX, localZ);
+            int topWater = minY - 1;
+            BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
+            // Find only water reached from the surface. This excludes aquifers
+            // under soil, while allowing lily pads and other replaceable cover.
+            for (int y=scanTop; y>=minY; y--) {
+                cursor.set(x, y, z);
+                BlockState state = chunk.getBlockState(cursor);
+                if (state.getFluidState().is(net.minecraft.tags.FluidTags.WATER)) {
+                    topWater = y;
+                    break;
+                }
+                if (!state.getFluidState().isEmpty() || (!state.canBeReplaced()
+                        && !surfaceCover(state) && !state.is(BlockTags.LEAVES) && !state.is(BlockTags.LOGS))) break;
+            }
+            if (topWater >= minY) {
+                waterColumns++;
+                BlockState topState = chunk.getBlockState(new BlockPos(x, topWater, z));
+                if (topState.getFluidState().isSource()) sourceWaterColumns++;
+                int depth = 0;
+                while (topWater-depth >= minY && chunk.getBlockState(new BlockPos(x, topWater-depth, z))
+                        .getFluidState().is(net.minecraft.tags.FluidTags.WATER)) depth++;
+                BlockState bed = topWater-depth < minY ? Blocks.AIR.defaultBlockState()
+                        : chunk.getBlockState(new BlockPos(x, topWater-depth, z));
+                boolean mudBed = bed.is(Blocks.MUD);
+                boolean shallow = depth <= 4;
+                boolean interiorCardinalWater = localX > 0 && localX < 15 && localZ > 0 && localZ < 15
+                        && cardinalWater(level, x, topWater, z);
+                if (mudBed) mudBedColumns++;
+                if (mudBed && shallow) shallowMudBedColumns++;
+                if (mudBed && shallow && interiorCardinalWater) {
+                    interiorShallowMudBedWaterColumns++;
+                    if (waterSamples.size() < 16) waterSamples.add(Map.of(
+                            "position", List.of(x, topWater, z), "depthBlocks", depth,
+                            "sourceWater", topState.getFluidState().isSource(),
+                            "interiorCardinalWaterNeighbors", true));
+                }
+            }
+            for (int y=minY; y<=Math.min(level.getMaxBuildHeight()-1, scanTop+1); y++) {
+                BlockState state = chunk.getBlockState(new BlockPos(x, y, z));
+                if (state.is(BlockTags.LOGS)) {
+                    logBlocks++;
+                    if (state.is(Blocks.OAK_LOG)) oakLogBlocks++;
+                    if (state.is(Blocks.MANGROVE_LOG)) mangroveLogBlocks++;
+                }
+                if (state.is(Blocks.LILY_PAD)) lilyPads++;
+                if (state.is(Blocks.SUGAR_CANE)) reeds++;
+            }
+            int biomeY = Math.max(minY, scanTop);
+            String biome = level.getBiome(new BlockPos(x, biomeY, z)).unwrapKey()
+                    .map(key -> key.location().toString()).orElse("unkeyed");
+            biomes.merge(biome, 1, Integer::sum);
+        }
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("phase", "post_full_chunk_generation_before_ticket_release");
+        result.put("chunk", List.of(pos.x, pos.z));
+        result.put("savedBiomeColumnCounts", biomes);
+        result.put("waterColumns", waterColumns);
+        result.put("sourceWaterColumns", sourceWaterColumns);
+        result.put("mudBedWaterColumns", mudBedColumns);
+        result.put("shallowMudBedWaterColumns", shallowMudBedColumns);
+        result.put("interiorShallowMudBedWaterColumns", interiorShallowMudBedWaterColumns);
+        result.put("waterSamples", waterSamples);
+        result.put("logBlocksAllHeights", logBlocks);
+        result.put("oakLogBlocksAllHeights", oakLogBlocks);
+        result.put("mangroveLogBlocksAllHeights", mangroveLogBlocks);
+        result.put("lilyPads", lilyPads);
+        result.put("reeds", reeds);
+        result.put("featureGenerationProven", false);
+        result.put("scope", "Observed saved FULL-chunk blocks. Interior cardinal water neighbors describe local geometry only, not pool containment. A mud-bed water candidate may be a natural pool, river, or another mod's feature; this audit does not attribute ownership.");
+        return result;
+    }
+
+    private static boolean surfaceCover(BlockState state) {
+        return state.is(Blocks.LILY_PAD) || state.is(Blocks.SUGAR_CANE)
+                || state.is(Blocks.SEAGRASS) || state.is(Blocks.TALL_SEAGRASS)
+                || state.is(Blocks.KELP) || state.is(Blocks.KELP_PLANT);
+    }
+
+    private static boolean cardinalWater(ServerLevel level, int x, int y, int z) {
+        return waterAt(level, x-1, y, z) && waterAt(level, x+1, y, z)
+                && waterAt(level, x, y, z-1) && waterAt(level, x, y, z+1);
+    }
+
+    private static boolean waterAt(ServerLevel level, int x, int y, int z) {
+        return level.getFluidState(new BlockPos(x, y, z)).is(net.minecraft.tags.FluidTags.WATER);
+    }
+
+    /** Aggregate measurements that were captured before each requested FULL ticket was released. */
+    @SuppressWarnings("unchecked")
+    public static Map<String,Object> summarizePhysicalEvidence(List<Map<String,Object>> phases) {
+        List<Map<String,Object>> chunks = new ArrayList<>();
+        int requested = 0;
+        for (Map<String,Object> phase : phases) {
+            Object rows = phase.get("chunks");
+            if (!(rows instanceof List<?> list)) continue;
+            requested += list.size();
+            for (Object row : list) if (row instanceof Map<?,?> raw) {
+                Object physical = raw.get("wetlandPhysicalAudit");
+                if (physical instanceof Map<?,?> measurement) chunks.add((Map<String,Object>) measurement);
+            }
+        }
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("status", requested == 0 ? "not_measured"
+                : chunks.size() == requested ? "passed" : "incomplete");
+        result.put("requestedFullChunkCount", requested);
+        result.put("measuredFullChunkCount", chunks.size());
+        result.put("chunks", chunks);
+        result.put("phase", "per-chunk post-FULL generation before ticket release");
+        result.put("featureGenerationProven", false);
+        return result;
+    }
 
     // Called on the diagnostic worker. NaturalEcology uses the thread-safe terrain
     // provider, just like concurrent worldgen; do not block server ticks on inference.

@@ -34,9 +34,16 @@ public final class WetlandEcology {
         // the same takeover interval as the classifier's ecological canopy.
         float marine = rawMarine * smooth(.15f, .45f, rawMarine);
         float fresh = wet * (1 - marine);
-        float flooded = smooth(.55f, .90f, wet);
-        float reed = fresh * flooded;
-        float swamp = fresh * (1 - flooded) * smooth(.30f, .65f, wet);
+        // Wetness is drainage suitability, not measured flood depth. Turning
+        // every saturated basin into reeds left swamp as a narrow contour band.
+        // Humid climates can sustain wooded swamp throughout the basin; more
+        // seasonal climates retain open marsh. Keep some reeds in wooded cores.
+        // Use cached climate, not treeCover (which already includes this blend
+        // when features call us) or the discrete biome identity.
+        float wooded = .85f * smooth(.95f, 1.45f, sample.moisture());
+        float openMarsh = smooth(.55f, .90f, wet) * (1 - wooded);
+        float reed = fresh * openMarsh;
+        float swamp = fresh * (1 - openMarsh) * smooth(.30f, .65f, wet);
         float riparian = fresh * (1 - smooth(.35f, .70f, wet));
         return new Weights(reed, swamp, marine, riparian);
     }
@@ -51,7 +58,10 @@ public final class WetlandEcology {
     public static int biomeId(int original, EcologyClassifier.Sample sample) {
         Weights w = weights(sample);
         if (w.mangrove() >= .45f) return 22;
-        if (w.reedMarsh() >= .45f) return 20;
+        // A climate blend must not open a dry gap when neither of the two
+        // partitioned weights alone reaches its former admission threshold.
+        if (w.reedMarsh() + w.freshwaterSwamp() >= .45f)
+            return w.reedMarsh() > w.freshwaterSwamp() ? 20 : 21;
         if (w.freshwaterSwamp() >= .32f) return 21;
         if (w.riparian() >= .18f) return 23;
         return original;

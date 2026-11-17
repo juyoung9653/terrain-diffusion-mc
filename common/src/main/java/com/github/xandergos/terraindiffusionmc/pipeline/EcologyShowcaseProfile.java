@@ -27,7 +27,7 @@ public final class EcologyShowcaseProfile {
             Map.entry("snowy_tundra", new Climate(-5.0F, .40F)),
             Map.entry("alpine_tundra", new Climate(-6.0F, .50F)),
             Map.entry("glacial_highlands", new Climate(-12.0F, .35F)),
-            Map.entry("reed_marsh", new Climate(16.0F, 1.35F)),
+            Map.entry("reed_marsh", new Climate(16.0F, 1.05F)),
             Map.entry("freshwater_swamp", new Climate(20.0F, 1.35F)),
             Map.entry("mangrove_swamp", new Climate(28.0F, 1.35F)),
             Map.entry("riparian_forest", new Climate(16.0F, 1.20F)));

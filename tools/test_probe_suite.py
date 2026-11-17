@@ -315,7 +315,8 @@ class ProbeSuiteTest(unittest.TestCase):
         with mock.patch.object(module, "run_suite", return_value=0) as launch:
             self.assertEqual(module.main(["--java-home", str(self.root), "--gradle-user-home",
                                           str(self.root), "--prefetch", "32", "--shore-audit",
-                                          "--verify-well-support", str(run)]), 0)
+                                          "--verify-well-support", "--keep-inputs", str(run)]), 0)
+        self.assertTrue(launch.call_args.kwargs["keep_inputs"])
         jobs = launch.call_args.args[2]
         self.assertEqual(len(jobs), 1)
         self.assertIn("-PtdDensityPrefetch=32", jobs[0].command)
@@ -458,7 +459,11 @@ class ProbeSuiteTest(unittest.TestCase):
              mock.patch.object(module, "run_suite", return_value=1) as launch:
             self.assertEqual(module.main(args + ["--record-terrain", str(snapshot), str(run)]), 1)
             seal.assert_not_called()
-            launch.return_value = 0
+            def successful_suite(*unused_args, **kwargs):
+                if kwargs.get("on_success"):
+                    kwargs["on_success"]()
+                return 0
+            launch.side_effect = successful_suite
             self.assertEqual(module.main(args + ["--record-terrain", str(snapshot), str(run)]), 0)
             seal.assert_called_once_with(snapshot, run / "world/density-audit.json")
             self.assertIn("-PtdTerrainMode=record", launch.call_args.args[2][0].command)

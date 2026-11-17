@@ -121,11 +121,15 @@ class ReleaseChecksTest(unittest.TestCase):
         destination = self.root / "instance/mods"
         destination.mkdir(parents=True)
         (destination / "renamed-again.jar").write_bytes(self.jar.read_bytes())
+        (self.root / "library.jar").write_bytes(b"library")
+        (self.root / "onnx.properties").write_bytes(b"receipt")
         with patch.object(disk_libraries, "ROOT", self.root), \
                 patch.object(disk_libraries, "verify_release",
                              side_effect=lambda mod: evidence.verify_release(mod, self.root)), \
-                patch.object(disk_libraries, "atomic_copy") as copy, \
+                patch.object(disk_libraries, "atomic_copy", wraps=disk_libraries.atomic_copy) as copy, \
                 patch.object(disk_libraries, "verify") as pairing:
+            pairing.return_value = {"librarySha256": disk_libraries.sha256(self.root / "library.jar"),
+                                    "modSha256": disk_libraries.sha256(self.mod)}
             disk_libraries.install(self.root / "onnx.properties", self.root / "library.jar",
                                    self.mod, destination)
             pairing.assert_called_once()

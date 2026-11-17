@@ -40,11 +40,18 @@ of duplicating them here.
   leave children running: inspect task-specific processes before retrying and
   never stop unrelated Java/game processes. The fast-test lock covers only its
   launcher, not direct scripts. See [probe execution](README.md#probe-execution-and-evidence).
+- Successful suites manage duplicate model inputs automatically; pin baselines
+  with `--keep-inputs`. Before manual cleanup, inspect the size-ranked inventory
+  and preserve restoration objects. See [probe storage](README.md#probe-input-storage).
 - Reuse the populated Gradle user home (locally `.gradle`); avoid routine `clean`.
   Use `python -B tools/build_neoforge.py` for the local CUDA disk-library build.
   Installation requires reviewed `--validation` evidence and the matching JAR
   sidecar; do not bypass the installer or fabricate earlier receipts.
   See [build and install checks](README.md#builds-and-installation).
+- Keep only the immediately previous distinct installed TD JAR as the default
+  rollback backup, with its matching receipt/required companion. Rotate only after
+  verified installation; identical reinstalls preserve the prior backup. Apply
+  this to manual updates too; see [JAR backup retention](README.md#jar-backup-retention).
 
 ## Review evidence and avoid repeated work
 

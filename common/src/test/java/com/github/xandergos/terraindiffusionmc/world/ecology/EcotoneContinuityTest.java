@@ -33,12 +33,12 @@ public final class EcotoneContinuityTest {
         labels.add(EcologyClassifier.select(41, -53, 2000, 1.1f, false, -10, 500, 2000).sample().biomeId());
         // Moisture alone cannot create the four new wetlands: supply their
         // valley/coastal habitat and exercise plant rates across those labels too.
-        for (boolean coastal : new boolean[]{false, true}) {
+        for (float rainfall : new float[]{1000, 1300}) for (boolean coastal : new boolean[]{false, true}) {
             float[] previous = null;
             for (int step = 0; step <= 2000; step++) {
                 float habitat = step / 2000f;
                 var sample = EcologyClassifier.select(41, -53, coastal ? .5f : 120, .01f,
-                        coastal ? 16 + 10 * habitat : 20, 1300, coastal ? .5f : 120,
+                        coastal ? 16 + 10 * habitat : 20, rainfall, coastal ? .5f : 120,
                         coastal ? 6 : Float.POSITIVE_INFINITY, coastal ? .25f : 0, .01f,
                         coastal ? 0 : habitat).sample();
                 if (sample.biomeId() != 0) labels.add(sample.biomeId());

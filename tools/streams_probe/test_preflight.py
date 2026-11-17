@@ -35,6 +35,21 @@ class PreflightTest(unittest.TestCase):
         guard = mock.patch.object(cli, "validate_tree_ground_runtime", return_value={"calls": 1})
         self.runtime_guard = guard.start()
         self.addCleanup(guard.stop)
+        # These fixtures exercise suite controls, not JAR inspection. The actual
+        # compatibility guard has its own exact-fixture tests.
+        compatibility = mock.patch.object(cli, "validate_streams_compat", return_value={"status": "passed"})
+        self.compatibility_guard = compatibility.start()
+        self.addCleanup(compatibility.stop)
+
+    def test_compatibility_failure_stops_suite_before_child_launch(self):
+        self.compatibility_guard.side_effect = ValueError("incompatible fixture runtime")
+        with (mock.patch.object(cli, "ROOT", self.root),
+              mock.patch.object(cli, "gradle_command", return_value=["unused-gradle"]),
+              mock.patch("probe_suite.subprocess.Popen") as child):
+            with self.assertRaises(SystemExit):
+                cli.main(["test", "--gradle-user-home", str(self.root), "--chunks=0,0"])
+        child.assert_not_called()
+        self.runtime_guard.assert_not_called()
 
     def write_manifest(self):
         (self.run / "input-manifest.json").write_text(json.dumps(self.manifest))
@@ -277,13 +292,14 @@ class PreflightTest(unittest.TestCase):
 
     def test_network_audit_keeps_fixed_chunk_generation_and_natural_property(self):
         base = ["test", "--gradle-user-home", str(self.root), "--network-audit",
-                "--natural-rivers=true", "--chunks=0,0", "--plan-audit", "--settle-water"]
+                "--natural-rivers=true", "--chunks=0,0", "--plan-audit", "--settle-water", "--keep-inputs"]
         with (mock.patch.object(cli, "ROOT", self.root),
               mock.patch.object(cli, "run_suite", return_value=0) as launch,
               mock.patch.object(cli, "gradle_command",
                                 side_effect=lambda root, command, daemon, **kwargs: command)):
             self.assertEqual(cli.main(base), 0)
         command = launch.call_args.args[2][0].command
+        self.assertTrue(launch.call_args.kwargs["keep_inputs"])
         self.assertIn("-PtdRiver.natural=true", command)
         self.assertIn("-PtdProbe.naturalRiverAudit=true", command)
         self.assertIn("-PtdProbe.chunks=0,0", command)
