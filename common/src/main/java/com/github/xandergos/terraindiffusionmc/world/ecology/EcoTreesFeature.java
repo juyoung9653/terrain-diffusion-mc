@@ -53,18 +53,48 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
 
         WorldGenLevel level = context.level();
         Registry<ConfiguredFeature<?, ?>> registry = level.registryAccess().registryOrThrow(Registries.CONFIGURED_FEATURE);
-        TreeChoice choice = choose(sample, context.random());
-        if (choice.mangrove() && !mangroveSite(level, origin)) {
-            // A predicted wet habitat without a real, shallow water edge remains ordinary woodland.
-            choice = new TreeChoice(chooseDry(sample, context.random()), false);
+        WetlandEcology.Weights habitat = WetlandEcology.weights(sample);
+        boolean saturatedWetland = FeatureEcologyMath.wetlandSedimentCore(
+                habitat.freshwaterSwamp(), habitat.mangrove(),
+                sample.wetness(), sample.slope());
+        TreeChoice choice = choose(sample, context.random(), saturatedWetland);
+        if (choice == null) return false;
+        BlockPos wetlandRoot = choice.wetland() ? shallowWetlandRoot(level, origin) : null;
+        if (choice.mangrove() && wetlandRoot == null && !mangroveSite(level, origin, sample)) {
+            // A saturated mangrove site without real mud/water support is not a
+            // dry woodland site.  Leave it empty rather than planting a normal
+            // tree in the wet core.
+            if (saturatedWetland) return false;
+            choice = new TreeChoice(chooseDry(sample, context.random()), false, false);
         }
-        FluidState fluid = level.getFluidState(origin);
+        // Every dry route, including a rejected mangrove, keeps the configured
+        // feature's original air placement. Only a verified shallow basin moves
+        // the root down into its lowest water cell.
+        BlockPos treeOrigin = choice.wetland() && wetlandRoot != null ? wetlandRoot : origin;
+        // Check after every fallback has resolved: a rejected mangrove is now
+        // a dry choice too. Actual mud overrides a differing climate sample.
+        if (!choice.wetland() && !FeatureEcologyMath.allowsDryTree(saturatedWetland,
+                level.getBlockState(treeOrigin.below()).is(Blocks.MUD))) return false;
+        if (!choice.wetland() && habitat.freshwaterSwamp() + habitat.mangrove() + habitat.riparian() > .1f
+                && !hasDryBankFootprint(level, treeOrigin.below())) return false;
+        // A swamp oak can use wet mud, but it must still have a bank under its
+        // root footprint.  Do not grow it from a one-column corner between
+        // deeper water cells; mangrove arches deliberately keep their own
+        // water-rooting behaviour.
+        if (choice.wetland() && !choice.mangrove()
+                && !hasGroundedSwampOakFootprint(level, treeOrigin)) return false;
+        FluidState fluid = level.getFluidState(treeOrigin);
         BlockState support = choice.mangrove()
                 ? Blocks.MANGROVE_PROPAGULE.defaultBlockState()
                 : Blocks.OAK_SAPLING.defaultBlockState();
-        if (!fluid.isEmpty() || !support.canSurvive(level, origin)) return false;
+        // A vanilla tree feature performs its own clearance checks. Its wet root
+        // placement is allowed only on a one/two-block source-water bed we have
+        // already checked for natural wetland soil; dry trees retain sapling
+        // survival exactly as before.
+        if (choice.wetland() && !fluid.is(Fluids.WATER) && !support.canSurvive(level, treeOrigin)) return false;
+        if (!choice.wetland() && (!fluid.isEmpty() || !support.canSurvive(level, treeOrigin))) return false;
         ConfiguredFeature<?, ?> tree = directTree(registry, choice.key(), terralithVariant(choice.key()));
-        return tree != null && tree.place(level, generator, context.random(), origin);
+        return tree != null && tree.place(level, generator, context.random(), treeOrigin);
     }
 
     private static ConfiguredFeature<?, ?> directTree(Registry<ConfiguredFeature<?, ?>> registry,
@@ -82,18 +112,20 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
                 .orElse(null);
     }
 
-    private record TreeChoice(ResourceKey<ConfiguredFeature<?, ?>> key, boolean mangrove) { }
+    private record TreeChoice(ResourceKey<ConfiguredFeature<?, ?>> key, boolean mangrove, boolean wetland) { }
 
-    private static TreeChoice choose(EcologyClassifier.Sample sample, RandomSource random) {
+    private static TreeChoice choose(EcologyClassifier.Sample sample, RandomSource random,
+                                     boolean saturatedWetland) {
         WetlandEcology.Weights wetland = WetlandEcology.weights(sample);
         float mangrove = FeatureEcologyMath.clamp01(.88F * wetland.mangrove());
         float swampOak = FeatureEcologyMath.clamp01(.68F * wetland.freshwaterSwamp()
                 + .28F * wetland.riparian());
         float roll = random.nextFloat();
-        if (roll < mangrove) return new TreeChoice(MANGROVE, true);
+        if (roll < mangrove) return new TreeChoice(MANGROVE, true, true);
         if (roll < Math.min(1.0F, mangrove + (1.0F - mangrove) * swampOak))
-            return new TreeChoice(SWAMP_OAK, false);
-        return new TreeChoice(chooseDry(sample, random), false);
+            return new TreeChoice(SWAMP_OAK, false, true);
+        if (saturatedWetland) return null;
+        return new TreeChoice(chooseDry(sample, random), false, false);
     }
 
     private static ResourceKey<ConfiguredFeature<?, ?>> chooseDry(EcologyClassifier.Sample sample, RandomSource random) {
@@ -114,16 +146,86 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
         return vanilla;
     }
 
-    /** Mangroves need an air planting cell, valid propagule support, and a nearby shallow still-water edge. */
-    private static boolean mangroveSite(WorldGenLevel level, BlockPos origin) {
+    /** Lowland mangrove interiors can root in exposed wet mud between inundations.
+     * Retain native propagule support, air clearance and the water-edge route for other soils.
+     */
+    private static boolean mangroveSite(WorldGenLevel level, BlockPos origin, EcologyClassifier.Sample sample) {
         if (!level.getBlockState(origin).isAir() || !level.getFluidState(origin).isEmpty()
                 || !Blocks.MANGROVE_PROPAGULE.defaultBlockState().canSurvive(level, origin))
             return false;
         BlockPos bank = origin.below();
+        if (sample.marineInfluence() >= .45f && level.getBlockState(bank).is(Blocks.MUD)) return true;
         for (Direction direction : Direction.Plane.HORIZONTAL) {
             if (shallowStillWater(level, bank.relative(direction))) return true;
         }
         return false;
+    }
+
+    /** Returns the lowest source-water cell in a shallow natural wetland column.
+     * Tree features receive the same root position vanilla uses for water-grown
+     * trees, rather than an air position above the water surface.
+     */
+    private static BlockPos shallowWetlandRoot(WorldGenLevel level, BlockPos origin) {
+        BlockPos water = level.getFluidState(origin).is(Fluids.WATER) ? origin : origin.below();
+        if (!level.getFluidState(water).is(Fluids.WATER) || !level.getFluidState(water).isSource()) return null;
+        int depth = 0;
+        BlockPos cursor = water;
+        while (level.getFluidState(cursor).is(Fluids.WATER) && level.getFluidState(cursor).isSource()) {
+            if (++depth > 2) return null;
+            cursor = cursor.below();
+        }
+        BlockState bed = level.getBlockState(cursor);
+        return isWetlandSoil(bed) ? water.below(depth - 1) : null;
+    }
+
+    private static boolean isWetlandSoil(BlockState state) {
+        return state.is(Blocks.MUD) || state.is(Blocks.DIRT) || state.is(Blocks.GRASS_BLOCK)
+                || state.is(Blocks.COARSE_DIRT) || state.is(Blocks.PODZOL);
+    }
+
+    // Land on two adjoining sides connects the trunk to a bank. A single
+    // narrow spit, isolated cap, or water-covered soil beneath a clear surface
+    // is not a dry-tree site. Mangrove root arches use their own placement.
+    private static boolean hasDryBankFootprint(WorldGenLevel level, BlockPos base) {
+        boolean eastWest = false, northSouth = false;
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+            BlockPos inner = dryGroundNear(level, base.relative(dir));
+            if (inner == null || dryGroundNear(level, inner.relative(dir)) == null) continue;
+            if (dir.getAxis() == Direction.Axis.X) eastWest = true;
+            else northSouth = true;
+            if (eastWest && northSouth) return true;
+        }
+        return false;
+    }
+
+    private static BlockPos dryGroundNear(WorldGenLevel level, BlockPos column) {
+        for (int dy = 1; dy >= -1; dy--) {
+            BlockPos ground = column.offset(0, dy, 0);
+            BlockState soil = level.getBlockState(ground);
+            if (!soil.is(Blocks.MUD) && isWetlandSoil(soil)
+                    && level.getFluidState(ground.above()).isEmpty()
+                    && !level.getBlockState(ground.above()).blocksMotion()) return ground;
+        }
+        return null;
+    }
+
+    /**
+     * Every cardinal cell must retain natural ground at the intended tree base
+     * or one step below it.  This admits a gentle bank while rejecting a root
+     * perched above a two-block water drop.  The check is only for swamp-oak
+     * wetland placement, not mangrove root arches or ordinary forest trees.
+     */
+    private static boolean hasGroundedSwampOakFootprint(WorldGenLevel level, BlockPos treeOrigin) {
+        BlockPos base = treeOrigin.below();
+        return naturalGroundAtOrOneBelow(level, base.relative(Direction.NORTH))
+                && naturalGroundAtOrOneBelow(level, base.relative(Direction.SOUTH))
+                && naturalGroundAtOrOneBelow(level, base.relative(Direction.EAST))
+                && naturalGroundAtOrOneBelow(level, base.relative(Direction.WEST));
+    }
+
+    private static boolean naturalGroundAtOrOneBelow(WorldGenLevel level, BlockPos pos) {
+        return isWetlandSoil(level.getBlockState(pos))
+                || isWetlandSoil(level.getBlockState(pos.below()));
     }
 
     private static boolean shallowStillWater(WorldGenLevel level, BlockPos water) {

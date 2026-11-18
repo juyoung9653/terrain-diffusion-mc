@@ -41,9 +41,40 @@ public final class GreeneriesPlacementGuard {
         if (!GreeneriesSoilPolicy.nativeWorldgenPolicyEnabled() || !isGrassOrFern(plant)
                 || !isEcologyBiome(level, pos)) return true;
         float chance = GreeneriesSoilPolicy.acceptance(level.getBlockState(pos.below()));
-        var climate = NaturalEcology.cachedSurfaceSample(level.getLevel().getChunkSource().getGenerator(), pos.getX(), pos.getZ());
+        var generator = level.getLevel().getChunkSource().getGenerator();
+        var climate = NaturalEcology.cachedSurfaceSample(generator, pos.getX(), pos.getZ());
         if (climate != null) chance *= FeatureEcologyMath.coldGroundcoverAcceptance(climate.climate().temperature());
+        // This lookup is canonical rather than cache-only: native placement may
+        // run after the surface feature and must not change with feature order.
+        int waterLevel = NaturalEcology.nearestPlannedWetlandWaterLevel(generator, pos.getX(), pos.getZ(), 8);
+        chance *= FeatureEcologyMath.plannedWetlandGroundcoverFactor(pos.getY() - 1, waterLevel);
+        if (isAffectedWetlandOrRiparianBiome(level, pos)) {
+            chance *= FeatureEcologyMath.nativeWetlandGroundcoverFactor(isFern(plant),
+                    hasOverheadCanopy(level, pos), level.getSeed(), pos.getX(), pos.getZ());
+        }
         return GreeneriesSoilPolicy.acceptsColumn(level.getSeed(), pos.getX(), pos.getZ(), chance);
+    }
+
+    /** The only three ecology biomes to which the native Grass patch modifier is restored. */
+    private static boolean isAffectedWetlandOrRiparianBiome(WorldGenLevel level, BlockPos pos) {
+        return level.getBiome(pos).unwrapKey().map(key -> key.location()).map(location ->
+                location.equals(id(TerrainDiffusionLifecycle.MOD_ID, "ecology/freshwater_swamp"))
+                        || location.equals(id(TerrainDiffusionLifecycle.MOD_ID, "ecology/mangrove_swamp"))
+                        || location.equals(id(TerrainDiffusionLifecycle.MOD_ID, "ecology/riparian_forest")))
+                .orElse(false);
+    }
+
+    /**
+     * The patch feature runs after this biome's EcoTrees feature.  A single
+     * vertical probe detects real overhead foliage without heightmap ambiguity
+     * or terrain-provider work; it reads at most seven blocks per admitted try.
+     */
+    private static boolean hasOverheadCanopy(WorldGenLevel level, BlockPos pos) {
+        for (int dy = 2; dy <= 8; dy++) {
+            BlockState state = level.getBlockState(pos.above(dy));
+            if (state.is(BlockTags.LEAVES) || state.is(BlockTags.LOGS)) return true;
+        }
+        return false;
     }
 
     private static boolean isEcologyBiome(WorldGenLevel level, BlockPos pos) {
@@ -64,6 +95,10 @@ public final class GreeneriesPlacementGuard {
         return plant.is(Blocks.SHORT_GRASS) || plant.is(Blocks.TALL_GRASS)
                 || plant.is(Blocks.FERN) || plant.is(Blocks.LARGE_FERN)
                 || plant.is(GREENERIES_GRASS) || plant.is(GREENERIES_FERN);
+    }
+
+    private static boolean isFern(BlockState plant) {
+        return plant.is(Blocks.FERN) || plant.is(Blocks.LARGE_FERN) || plant.is(GREENERIES_FERN);
     }
 
     private static TagKey<Block> optionalBlockTag(String namespace, String path) {

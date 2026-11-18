@@ -1,0 +1,6 @@
+{
+  "type": "neoforge:add_features",
+  "biomes": "#minecraft:is_overworld",
+  "features": "terrain-diffusion-mc:eco_coastal_sediment",
+  "step": "top_layer_modification"
+}

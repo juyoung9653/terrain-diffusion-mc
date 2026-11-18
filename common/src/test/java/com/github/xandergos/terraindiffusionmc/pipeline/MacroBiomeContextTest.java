@@ -65,7 +65,10 @@ public final class MacroBiomeContextTest {
     }
 
     private static void checkFragmentReduction() {
-        int h = 128, w = 128; Field noisy = field(-256, -256, 700, 700, false);
+        int h = 128, w = 128;
+        // Supply the full coastal-path halo as the production provider does.
+        int pad = MacroBiomeContext.CONTEXT_PAD + 2;
+        Field noisy = field(-pad, -pad, h + 2 * pad, w + 2 * pad, false);
         for (int r = 0; r < noisy.h; r++) for (int c = 0; c < noisy.w; c++) {
             int n = r * noisy.w + c; boolean hot = ((r ^ c) & 1) == 0;
             noisy.elevation[n] = hot ? 80 : 650;

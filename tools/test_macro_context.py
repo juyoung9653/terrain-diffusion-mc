@@ -27,7 +27,7 @@ def main() -> None:
     output = root / "build/macro-context-tests"
     sources = [package / (name + ".java") for name in (
         "FastNoiseLite", "BiomeClassifier", "TerralithBiomeClassifier", "ShoreClassifier", "ShoreContext",
-        "EcologyClassifier", "WetlandEcology", "MacroBiomeContext")]
+        "EcologyClassifier", "WetlandEcology", "WetlandTerrain", "ElevationDetail", "MacroBiomeContext")]
     sources.extend((root / "tools/terrain_sampling" / name for name in (
         "MacroBiomeContextParityTest.java", "WetlandHabitatScaleTest.java")))
     output.mkdir(parents=True, exist_ok=True)

@@ -8,7 +8,7 @@ import java.util.HexFormat;
 
 /** Versioned, bounded binary format; no Minecraft dependencies. Floats retain raw bits. */
 public final class TerrainReplayCodec {
-    private static final int MAGIC = 0x54445452, VERSION = 3;
+    private static final int MAGIC = 0x54445452, VERSION = 4;
     public static final int MAX_BYTES = 128 * 1024 * 1024;
     public record Key(String snapshotId, long seed, int scale, int i1, int j1, int i2, int j2) {
         public Key {
@@ -25,7 +25,14 @@ public final class TerrainReplayCodec {
         }
     }
     public record Tile(short[][] heightmap, short[][] biomeIds, short[][] terralithBiomeIds,
-                       short[][] ecologyIds, float[][] ecologyValues) { }
+                       short[][] wetlandWaterLevels, short[][] ecologyIds,
+                       float[][] ecologyValues) {
+        /** Compatibility constructor for callers that have no wetland terrain plane. */
+        public Tile(short[][] heightmap, short[][] biomeIds, short[][] terralithBiomeIds,
+                    short[][] ecologyIds, float[][] ecologyValues) {
+            this(heightmap, biomeIds, terralithBiomeIds, null, ecologyIds, ecologyValues);
+        }
+    }
 
     public static byte[] encode(Key key, Tile tile) throws IOException {
         var bytes = new ByteArrayOutputStream();
@@ -38,6 +45,7 @@ public final class TerrainReplayCodec {
             writeShorts(out, tile.heightmap(), key.height(), key.width());
             writeShorts(out, tile.biomeIds(), key.height(), key.width());
             writeShorts(out, tile.terralithBiomeIds(), key.height(), key.width());
+            writeShorts(out, tile.wetlandWaterLevels(), key.height(), key.width());
             boolean ecology = tile.ecologyIds() != null;
             if (ecology != (tile.ecologyValues() != null)) throw new IOException("Incomplete ecology");
             out.writeBoolean(ecology);
@@ -74,6 +82,7 @@ public final class TerrainReplayCodec {
             short[][] heights = readShorts(in, expected.height(), expected.width());
             short[][] biomes = readShorts(in, expected.height(), expected.width());
             short[][] terralith = readShorts(in, expected.height(), expected.width());
+            short[][] wetlandWater = readShorts(in, expected.height(), expected.width());
             short[][] ids = null; float[][] values = null;
             if (flag(in)) {
                 int cells = expected.width() * expected.height();
@@ -83,7 +92,7 @@ public final class TerrainReplayCodec {
                 for (float[] plane : values) for (int i = 0; i < cells; i++) plane[i] = Float.intBitsToFloat(in.readInt());
             }
             if (in.available() != 0) throw new IOException("Trailing terrain snapshot payload");
-            return new Tile(heights, biomes, terralith, ids, values);
+            return new Tile(heights, biomes, terralith, wetlandWater, ids, values);
         }
     }
 

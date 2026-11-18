@@ -7,6 +7,7 @@ public final class WetlandEcologyTest {
         checkAdmissions();
         checkEcologicalExclusions();
         checkCoastalCanopyTransition();
+        checkMarinePotentialCompatibility();
         checkWoodedBasinCore();
         System.out.println("WetlandEcologyTest: PASS");
     }
@@ -47,6 +48,21 @@ public final class WetlandEcologyTest {
                 "shallow convergent drainage reaches riparian forest");
         require(id(26, 1300, 0, 6, .25f, .01f, .5f) == 22,
                 "warm protected sea-connected lowland reaches mangrove swamp");
+    }
+
+    private static void checkMarinePotentialCompatibility() {
+        // Supplying no new terrain potential preserves the inland classifications
+        // used by existing reed and freshwater habitat callers.
+        require(id(20, 1000, .95f, Float.POSITIVE_INFINITY, 0, .04f, 120)
+                        == idWithMarinePotential(20, 1000, .95f, Float.POSITIVE_INFINITY, 0, .04f, 120, 0),
+                "zero marine potential changed reed marsh admission");
+        require(id(20, 1300, .55f, Float.POSITIVE_INFINITY, 0, .04f, 120)
+                        == idWithMarinePotential(20, 1300, .55f, Float.POSITIVE_INFINITY, 0, .04f, 120, 0),
+                "zero marine potential changed freshwater swamp admission");
+        require(idWithMarinePotential(26, 1300, 0, Float.POSITIVE_INFINITY, 0, .01f, 1, 1) == 22,
+                "connected marine terrain potential must admit mangrove beyond the beach radius");
+        require(idWithMarinePotential(26, 1300, 0, Float.POSITIVE_INFINITY, 0, .01f, 1, 0) != 22,
+                "mangrove cannot be admitted without marine terrain connectivity");
     }
 
     private static void checkWoodedBasinCore() {
@@ -101,25 +117,19 @@ public final class WetlandEcologyTest {
                 "a low elevation alone cannot create a swamp");
     }
 
-    /** A shore keeps its terrain ID below the marine takeover threshold, without a canopy cliff. */
+    /** Marine habitat crosses into mangrove without a canopy or decoration cliff. */
     private static void checkCoastalCanopyTransition() {
         EcologyClassifier.Selection prior = null;
         boolean crossed = false;
         for (int step = 0; step <= 900; step++) {
-            float temperature = 16 + step / 100f;
+            float temperature = 14 + step / 100f;
             EcologyClassifier.Selection current = EcologyClassifier.select(0, 0, .5f, .01f,
                     temperature, 1_000, .5f, 1, .25f, .01f, .90f);
-            if (prior != null && prior.terrainBiomeId() != 0 && current.terrainBiomeId() == 0
-                    && prior.sample().marineInfluence() < .15f
-                    && current.sample().marineInfluence() >= .15f) {
-                float priorEffectiveCover = prior.terrainBiomeId() == 0 ? prior.sample().treeCover() : 0;
-                float currentEffectiveCover = current.terrainBiomeId() == 0 ? current.sample().treeCover() : 0;
-                require(Math.abs(currentEffectiveCover - priorEffectiveCover) < .03f,
+            if (prior != null && prior.sample().biomeId() != 22 && current.sample().biomeId() == 22) {
+                require(Math.abs(current.sample().treeCover() - prior.sample().treeCover()) < .03f,
                         "marine takeover cannot create a beach-to-forest canopy cliff");
-                var priorWeights = prior.terrainBiomeId() == 0 ? WetlandEcology.weights(prior.sample())
-                        : new WetlandEcology.Weights(0, 0, 0, 0);
-                var currentWeights = current.terrainBiomeId() == 0 ? WetlandEcology.weights(current.sample())
-                        : new WetlandEcology.Weights(0, 0, 0, 0);
+                var priorWeights = WetlandEcology.weights(prior.sample());
+                var currentWeights = WetlandEcology.weights(current.sample());
                 require(distance(priorWeights, currentWeights) < .03f,
                         "marine takeover cannot create a wetland-decoration seam");
                 crossed = true;
@@ -127,13 +137,20 @@ public final class WetlandEcologyTest {
             }
             prior = current;
         }
-        require(crossed, "real coastal sample crosses marine takeover while the shore classifier remains active");
+        require(crossed, "real coastal sample crosses into mangrove habitat");
     }
 
     private static int id(float temperature, float rainfall, float valley, float waterDistance,
                           float openWater, float slope, float elevation) {
         return EcologyClassifier.select(0, 0, elevation, slope, temperature, rainfall, elevation,
                 waterDistance, openWater, slope, valley).sample().biomeId();
+    }
+
+    private static int idWithMarinePotential(float temperature, float rainfall, float valley,
+                                             float waterDistance, float openWater, float slope,
+                                             float elevation, float marinePotential) {
+        return EcologyClassifier.select(0, 0, elevation, slope, temperature, rainfall, elevation,
+                waterDistance, openWater, slope, valley, marinePotential).sample().biomeId();
     }
 
     private static EcologyClassifier.Sample sample(float wetness, float marine) {

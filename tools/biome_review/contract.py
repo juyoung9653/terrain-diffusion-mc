@@ -1,0 +1,424 @@
+"""Fail-closed provenance and coverage checks for independent biome review.
+
+This is a local workflow guard, not protection against a writer deliberately
+changing the guard or forging all its records. Development builds remain usable
+to produce the world that must be reviewed before release.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+from build_evidence import source_fingerprint, input_fingerprint
+
+VIEWS = {"aerial", "side", "detail"}
+REASONS = {"interior", "boundary", "random"}
+INSPECTION_KINDS = {"root", "bank", "underwater", "boundary"}
+REVIEW_INPUTS = (
+    Path("tools/biome_review"), Path("tools/chunk_profile/java"),
+    Path("tools/chunk_profile/run.py"), Path("tools/build_evidence.py"),
+    Path("tools/build_neoforge.py"),
+)
+
+
+def digest(path: Path | str) -> str:
+    with Path(path).open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def review_tool_fingerprint(root: Path = ROOT) -> str:
+    return input_fingerprint(root, REVIEW_INPUTS)
+
+
+def required(root: Path) -> bool:
+    # Conservative: production changes outside a short allowlist can also change
+    # terrain. All releases of this ecology-enabled project require an exact
+    # reviewed artifact; additions of new biome files cannot bypass a path diff.
+    return (root / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/ecology").is_dir()
+
+
+def _biome_resource_id(relative: str) -> str | None:
+    """Return the registered ID for a tracked worldgen biome resource path."""
+    parts = Path(relative.replace("\\", "/")).parts
+    # Generated resources can be under either common or neoforge and under the
+    # normal main or generated source set.  Deliberately do not guess Java
+    # registration names: this guard only closes the JSON-resource omission.
+    source_root = parts[1:5]
+    if (len(parts) < 9 or parts[0] not in {"common", "neoforge"}
+            or source_root not in {("src", "main", "resources", "data"),
+                                   ("src", "generated", "resources", "data")}
+            or parts[6:8] != ("worldgen", "biome")
+            or Path(parts[-1]).suffix != ".json"):
+        return None
+    path = "/".join(parts[8:])
+    if not path or path == ".json":
+        return None
+    return f"{parts[5]}:{path[:-5]}"
+
+
+def changed_biome_resource_ids(root: Path = ROOT) -> set[str]:
+    """Find added/edited biome JSON IDs that must be present in a review plan.
+
+    Synthetic unit-test roots are allowed to have no Git metadata.  A real
+    checkout must provide a usable Git view; otherwise release validation fails
+    rather than silently reviewing an older biome list.
+    """
+    root = root.resolve()
+    if not (root / ".git").exists():
+        return set()
+
+    def git(*arguments: str) -> str:
+        try:
+            result = subprocess.run(["git", "-C", str(root), *arguments],
+                                    capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace",
+                                    check=False,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except OSError as error:
+            raise ValueError(f"Cannot inspect changed biome resources with Git: {error}") from error
+        if result.returncode != 0:
+            detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+            raise ValueError(f"Cannot inspect changed biome resources with Git: {detail}")
+        return result.stdout
+
+    if git("rev-parse", "--is-inside-work-tree").strip() != "true":
+        raise ValueError("Cannot inspect changed biome resources with Git: not a work tree")
+    # `diff HEAD` includes both staged and unstaged edits.  Its filter omits
+    # deleted resources, which have no possible current-world coverage target.
+    paths = set(git("diff", "--name-only", "--diff-filter=ACMR", "HEAD").splitlines())
+    paths.update(git("ls-files", "--others", "--exclude-standard").splitlines())
+    return {biome for raw in paths if (biome := _biome_resource_id(raw)) is not None}
+
+
+def load(path: Path | str) -> dict:
+    value = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    if not isinstance(value, dict):
+        raise ValueError(f"Expected JSON object: {path}")
+    return value
+
+
+def checked_file(item: dict, root: Path) -> Path:
+    if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+        raise ValueError("Missing review evidence file")
+    path = (root / item["path"]).resolve()
+    if not path.is_relative_to(root.resolve()) or not path.is_file():
+        raise ValueError(f"Review evidence must be a workspace file: {path}")
+    if digest(path) != item.get("sha256"):
+        raise ValueError(f"Review evidence changed: {path}")
+    return path
+
+
+def file_ref(path: Path | str) -> dict:
+    path = Path(path).resolve()
+    return {"path": str(path), "sha256": digest(path)}
+
+
+def semantic_evidence_identity(bundle: dict) -> str:
+    """Identity for the observed world, independent of bundle output paths.
+
+    A new bundle directory may copy the same screenshots and receipts.  Its
+    filename must not make a failed independent review eligible for a reroll.
+    """
+    def ref(name: str) -> str:
+        value = bundle.get(name, {})
+        return value.get("sha256", "") if isinstance(value, dict) else ""
+    images = [{key: image.get(key) for key in ("id", "sha256", "siteId", "biome", "view", "x", "z")}
+              for image in bundle.get("images", [])]
+    overview = [{key: image.get(key) for key in ("id", "sha256")}
+                for image in bundle.get("overviewImages", [])]
+    evidence = sorted(item.get("sha256", "") for item in bundle.get("evidence", [])
+                      if isinstance(item, dict))
+    value = {"schema": 1, "artifactSha256": bundle.get("artifactSha256"),
+             "sourceFingerprint": bundle.get("sourceFingerprint"),
+             "toolFingerprint": bundle.get("toolFingerprint"),
+             "fixture": ref("fixture"), "launch": ref("launch"), "capture": ref("capture"),
+             "plan": ref("plan"), "candidateBuild": ref("candidateBuild"),
+             "images": sorted(images, key=lambda row: json.dumps(row, sort_keys=True)),
+             "overviewImages": sorted(overview, key=lambda row: json.dumps(row, sort_keys=True)),
+             "evidence": evidence}
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _coordinate(value: object, label: str) -> tuple[int, int]:
+    if (not isinstance(value, dict) or set(value) != {"x", "z"}
+            or any(not isinstance(value[key], int) or isinstance(value[key], bool) for key in ("x", "z"))):
+        raise ValueError(f"Inspection request {label} must be an exact integer x/z coordinate")
+    return value["x"], value["z"]
+
+
+def _inspection_windows(plan: dict) -> list[dict]:
+    windows = plan.get("windows")
+    if not isinstance(windows, list) or not windows:
+        raise ValueError("Inspection requests require nonempty plan windows")
+    required = {"minX", "maxX", "minZ", "maxZ"}
+    if any(not isinstance(window, dict) or not required.issubset(window)
+           or any(not isinstance(window[key], int) or isinstance(window[key], bool) for key in required)
+           or window["minX"] > window["maxX"] or window["minZ"] > window["maxZ"]
+           for window in windows):
+        raise ValueError("Inspection request plan window is invalid")
+    return windows
+
+
+def _within_windows(point: tuple[int, int], windows: list[dict]) -> bool:
+    x, z = point
+    return any(window["minX"] <= x <= window["maxX"] and window["minZ"] <= z <= window["maxZ"]
+               for window in windows)
+
+
+def validate_inspection_requests(plan: dict, capture: dict, native_sites: dict[str, dict]) -> None:
+    """Bind optional capture requests to exact, bounded, rendered native sites."""
+    requested = plan.get("inspectionRequests", [])
+    if requested is None:
+        requested = []
+    if not isinstance(requested, list):
+        raise ValueError("Inspection requests must be a list")
+    resolved = capture.get("inspectionRequests")
+    if not requested:
+        if resolved not in (None, []):
+            raise ValueError("Native capture added unexpected inspection requests")
+        return
+    windows = _inspection_windows(plan)
+    plan_by_id: dict[str, dict] = {}
+    for row in requested:
+        if (not isinstance(row, dict) or set(row) != {"id", "x", "z", "kind"}
+                or not isinstance(row.get("id"), str) or not row["id"]
+                or row.get("kind") not in INSPECTION_KINDS
+                or any(not isinstance(row[key], int) or isinstance(row[key], bool) for key in ("x", "z"))):
+            raise ValueError("Inspection request plan entry is invalid")
+        if row["id"] in plan_by_id:
+            raise ValueError("Duplicate inspection request ID")
+        point = row["x"], row["z"]
+        if not _within_windows(point, windows):
+            raise ValueError("Inspection request lies outside plan windows")
+        plan_by_id[row["id"]] = row
+    if not isinstance(resolved, list):
+        raise ValueError("Native capture omitted inspection requests")
+    resolved_by_id: dict[str, dict] = {}
+    expected_keys = {"id", "kind", "requested", "resolved", "candidateCount", "reason", "endpoints"}
+    for row in resolved:
+        if (not isinstance(row, dict) or not expected_keys.issubset(row)
+                or not isinstance(row.get("id"), str) or row["id"] in resolved_by_id
+                or row.get("kind") not in INSPECTION_KINDS):
+            raise ValueError("Native inspection request record is invalid")
+        if (not isinstance(row.get("candidateCount"), int) or isinstance(row["candidateCount"], bool)
+                or row["candidateCount"] < 0 or not isinstance(row.get("reason"), str) or not row["reason"].strip()
+                or not isinstance(row.get("endpoints"), list)):
+            raise ValueError("Native inspection request count or reason is invalid")
+        resolved_by_id[row["id"]] = row
+    if set(resolved_by_id) != set(plan_by_id):
+        raise ValueError("Native capture omitted or added inspection requests")
+    for request_id, planned in plan_by_id.items():
+        row = resolved_by_id[request_id]
+        requested_point = _coordinate(row["requested"], "requested")
+        resolved_point = _coordinate(row["resolved"], "resolved")
+        planned_point = planned["x"], planned["z"]
+        if row["kind"] != planned["kind"] or requested_point != planned_point:
+            raise ValueError("Native inspection request differs from the plan")
+        if (not _within_windows(resolved_point, windows)
+                or max(abs(resolved_point[0] - planned_point[0]), abs(resolved_point[1] - planned_point[1])) > 12):
+            raise ValueError("Inspection request resolution is outside bounded radius/window")
+        endpoints = [_coordinate(point, "endpoint") for point in row["endpoints"]]
+        if any(not _within_windows(point, windows)
+               or max(abs(point[0] - planned_point[0]), abs(point[1] - planned_point[1])) > 12
+               for point in endpoints):
+            raise ValueError("Inspection request endpoint is outside bounded radius/window")
+        if row["candidateCount"] == 0:
+            if resolved_point != planned_point or endpoints or "no-target" not in row["reason"].lower():
+                raise ValueError("No-target inspection request must use requested-point fallback")
+        else:
+            minimum = 2 if planned["kind"] in {"bank", "boundary"} else 1
+            if len(endpoints) < minimum:
+                raise ValueError("Inspection request lacks required resolved endpoints")
+        site = native_sites.get(request_id)
+        if (not isinstance(site, dict) or (site.get("x"), site.get("z")) != resolved_point
+                or {image.get("view") for image in site.get("images", []) if isinstance(image, dict)} != VIEWS):
+            raise ValueError("Inspection request lacks a resolved three-view native site")
+
+
+def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
+    root = root.resolve()
+    bundle = load(bundle_path)
+    if bundle.get("schema") != 1 or bundle.get("kind") != "biome-review-bundle":
+        raise ValueError("Unsupported biome review bundle")
+    if bundle.get("sourceFingerprint") != source_fingerprint(root):
+        raise ValueError("Biome review sources changed")
+    if bundle.get("toolFingerprint") != review_tool_fingerprint(root):
+        raise ValueError("Biome review tools changed")
+    manifest = load(checked_file(bundle.get("fixture"), root))
+    launch = load(checked_file(bundle.get("launch"), root))
+    receipt = load(checked_file(bundle.get("capture"), root))
+    plan = load(checked_file(bundle.get("plan"), root))
+    capture = receipt.get("biomeVisualReview", {})
+    if not launch.get("passed") or launch.get("exit_code") != 0 or receipt.get("status") != "success":
+        raise ValueError("Biome review requires a successful native process and capture receipt")
+    if launch.get("source_world_metadata_unchanged") is not True:
+        raise ValueError("Source world preservation was not verified")
+    if (capture.get("status") != "captured" or capture.get("coverageGaps")
+            or capture.get("sourceFingerprint") != bundle["sourceFingerprint"]
+            or capture.get("reviewToolFingerprint") != bundle["toolFingerprint"]):
+        raise ValueError("Incomplete or stale native biome capture")
+    artifact = bundle.get("artifactSha256")
+    candidate = load(checked_file(bundle.get("candidateBuild"), root))
+    if (candidate.get("kind") != "validated-neoforge-build"
+            or candidate.get("modSha256") != artifact
+            or candidate.get("sourceFingerprint") != bundle["sourceFingerprint"]):
+        raise ValueError("Captured candidate lacks matching source/build provenance")
+    if (not artifact or manifest.get("terrain_diffusion_artifact", {}).get("sha256") != artifact
+            or capture.get("artifactSha256") != artifact or plan.get("artifactSha256") != artifact
+            or plan.get("sourceFingerprint") != bundle["sourceFingerprint"]):
+        raise ValueError("Review artifact differs from captured world")
+    required_biomes = bundle.get("requiredBiomes")
+    if (not isinstance(required_biomes, list) or not required_biomes
+            or set(required_biomes) != set(plan.get("requiredBiomes", []))
+            or set(required_biomes) != set(capture.get("requiredBiomes", []))):
+        raise ValueError("Missing required biome coverage")
+    changed_biomes = changed_biome_resource_ids(root)
+    omitted_changed_biomes = changed_biomes - set(required_biomes)
+    if omitted_changed_biomes:
+        raise ValueError("Required biome coverage omits changed biome resources: "
+                         + ", ".join(sorted(omitted_changed_biomes)))
+    if capture.get("seed") != manifest.get("seed") or capture.get("scale") != manifest.get("scale"):
+        raise ValueError("Capture world identity differs")
+    images = bundle.get("images")
+    if not isinstance(images, list) or not images:
+        raise ValueError("Review requires rendered images")
+    native_sites = {site["id"]: site for site in capture.get("sites", [])}
+    native_images = {
+        (site["id"], image["view"]): str(Path(image["path"]).resolve())
+        for site in native_sites.values() for image in site.get("images", [])
+    }
+    validate_inspection_requests(plan, capture, native_sites)
+    seen = set()
+    seen_native_pairs = set()
+    for image in images:
+        if not image.get("id") or image["id"] in seen:
+            raise ValueError("Duplicate or absent review image ID")
+        seen.add(image["id"])
+        path = checked_file(image, root)
+        if path.stat().st_size < 1024 or image.get("view") not in VIEWS:
+            raise ValueError("Missing usable rendered view")
+        native_pair = (image.get("siteId"), image["view"])
+        if native_images.get(native_pair) != str(path):
+            raise ValueError("Review image is not from the native capture")
+        if native_pair in seen_native_pairs:
+            raise ValueError("Review duplicated a native captured image view")
+        seen_native_pairs.add(native_pair)
+        site = native_sites[image["siteId"]]
+        if image.get("biome") != site.get("biome"):
+            raise ValueError("Image biome differs from measured site")
+        image["path"] = str(path)
+    if seen_native_pairs != set(native_images):
+        raise ValueError("Review omitted native captured images")
+    for site in native_sites.values():
+        if site.get("reachedServerTicks", 0) < 100 or site.get("tickEligible") is not True:
+            raise ValueError("Review site did not settle under ticking tickets")
+        if {i["view"] for i in site.get("images", [])} != VIEWS:
+            raise ValueError("Review site lacks required viewpoints")
+    for biome in required_biomes:
+        reasons = {reason for site in native_sites.values() if site.get("biome") == biome
+                   for reason in site.get("reasons", [])}
+        if not REASONS.issubset(reasons):
+            raise ValueError(f"Biome lacks interior/boundary/random coverage: {biome}")
+    # Every reported regression position must survive selection, not just a
+    # favourable replacement bearing the same label.
+    coordinates = {(s.get("x"), s.get("z")) for s in native_sites.values()}
+    if any((s["x"], s["z"]) not in coordinates for s in plan.get("regressionSites", [])):
+        raise ValueError("A required regression site was omitted")
+    if not bundle.get("evidence"):
+        raise ValueError("Review lacks physical census evidence")
+    for item in bundle["evidence"]:
+        item["path"] = str(checked_file(item, root))
+    for overview in bundle.get("overviewImages", []):
+        if not overview.get("id") or overview["id"] in seen:
+            raise ValueError("Duplicate overview image ID")
+        seen.add(overview["id"])
+        overview["path"] = str(checked_file(overview, root))
+    bundle["semanticEvidenceIdentity"] = semantic_evidence_identity(bundle)
+    return bundle
+
+
+def validate_review(path: Path | str, root: Path = ROOT, artifact: str | None = None) -> dict:
+    path = Path(path).resolve()
+    row = load(path)
+    if (row.get("schema") != 1 or row.get("kind") != "independent-biome-review"
+            or row.get("verdict") != "pass" or row.get("processExit") != 0):
+        raise ValueError("A passing independent biome review is required")
+    if row.get("toolFingerprint") != review_tool_fingerprint(root):
+        raise ValueError("Independent review tools changed")
+    bundle_path = checked_file({"path": row.get("bundlePath"), "sha256": row.get("bundleSha256")}, root)
+    bundle = validate_bundle(bundle_path, root)
+    if (row.get("sourceFingerprint") != bundle["sourceFingerprint"]
+            or row.get("artifactSha256") != bundle["artifactSha256"]
+            or artifact is not None and artifact != row["artifactSha256"]):
+        raise ValueError("Independent review does not match the release artifact")
+    if row.get("coverageGaps") or row.get("additionalCaptures"):
+        raise ValueError("Independent review has unresolved evidence gaps")
+    if any(f.get("severity") in ("blocker", "major") for f in row.get("findings", [])):
+        raise ValueError("Independent review has unresolved realism defects")
+    expected = {i["id"] for i in bundle["images"] + bundle.get("overviewImages", [])}
+    if set(row.get("inspectedImageIds", [])) != expected:
+        raise ValueError("Independent reviewer did not inspect all captured images")
+    if not row.get("evidence"):
+        raise ValueError("Independent reviewer process evidence is absent")
+    for item in row["evidence"]:
+        checked_file(item, root)
+    history_path = checked_file({"path": row.get("historyPath"), "sha256": row.get("historySha256")}, root)
+    history = load(history_path)
+    if (history.get("kind") != "independent-biome-review-history"
+            or history.get("bundleSha256") != row["bundleSha256"]
+            or history.get("semanticEvidenceIdentity") != bundle["semanticEvidenceIdentity"]
+            or history.get("sourceFingerprint") != row["sourceFingerprint"]
+            or history.get("artifactSha256") != row["artifactSha256"]
+            or history.get("toolFingerprint") != row["toolFingerprint"]
+            or Path(history.get("outputPath", "")).resolve() != path.parent):
+        raise ValueError("Independent reviewer attempt history differs")
+    # Re-read actual individual model responses; an aggregate label alone is
+    # not approval. A missing/failed batch can never disappear in summarization.
+    from biome_review.runner import read_report
+    batches = row.get("batches", [])
+    if not batches:
+        raise ValueError("Independent reviewer batch results absent")
+    inspected = set()
+    evidence_paths = {str(checked_file(item, root)) for item in row["evidence"]}
+    for batch in batches:
+        target = path.parent / f"batch-{batch['index']:02d}"
+        report_path = target / "response.json"
+        command_path, started_path = target / "command.json", target / "started.json"
+        raw_paths = (report_path, command_path, started_path, target / "stdout.txt", target / "stderr.txt", target / "result.json")
+        if (any(str(raw.resolve()) not in evidence_paths for raw in raw_paths)
+                or batch.get("processExit") != 0):
+            raise ValueError("Independent reviewer raw response is missing or failed")
+        ids = set(batch.get("imageIds", [])) | set(batch.get("overviewImageIds", []))
+        command, started, result = load(command_path), load(started_path), load(target / "result.json")
+        if (started.get("kind") != "independent-biome-review-attempt"
+                or started.get("index") != batch.get("index")
+                or started.get("bundleSha256") != row["bundleSha256"]
+                or started.get("semanticEvidenceIdentity") != bundle["semanticEvidenceIdentity"]
+                or started.get("toolFingerprint") != row["toolFingerprint"]
+                or set(started.get("imageIds", [])) != set(batch.get("imageIds", []))
+                or set(started.get("overviewImageIds", [])) != set(batch.get("overviewImageIds", []))):
+            raise ValueError("Independent reviewer start record differs")
+        args = command.get("command") if isinstance(command, dict) else None
+        required_args = {"exec", "--ephemeral", "--sandbox", "read-only", "--output-schema", "--output-last-message"}
+        image_paths = [str(i["path"]) for i in bundle["images"] + bundle.get("overviewImages", [])
+                       if i["id"] in ids]
+        if (not isinstance(args, list) or not required_args.issubset(set(args))
+                or args.count("--image") != len(image_paths)
+                or any(path_value not in args for path_value in image_paths)
+                or command.get("imageIds") != batch.get("imageIds", [])
+                or command.get("overviewImageIds", []) != batch.get("overviewImageIds", [])
+                or result.get("index") != batch.get("index") or result.get("processExit") != 0):
+            raise ValueError("Independent reviewer command/result record differs")
+        report, error = read_report(report_path, ids)
+        if error or report["verdict"] != "pass":
+            raise ValueError("Independent reviewer raw response did not pass")
+        inspected.update(ids)
+    if inspected != expected:
+        raise ValueError("Independent reviewer batch coverage differs")
+    return {"path": str(path), "sha256": digest(path), "artifactSha256": row["artifactSha256"],
+            "sourceFingerprint": row["sourceFingerprint"], "verdict": "pass"}

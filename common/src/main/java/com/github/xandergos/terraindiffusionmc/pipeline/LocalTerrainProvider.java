@@ -31,25 +31,13 @@ public final class LocalTerrainProvider {
 
     private static final float NATIVE_RESOLUTION = WorldPipelineModelConfig.nativeResolution();
 
-    private static final FastNoiseLite ELEV_NOISE_COARSE = makeFnl(99999, 1f/24f, 3, 2f, 0.5f);
-    private static final FastNoiseLite ELEV_NOISE_FINE   = makeFnl(88888, 1f/6f,  2, 2f, 0.6f);
-
-    private static FastNoiseLite makeFnl(int seed, float freq, int oct, float lac, float gain) {
-        FastNoiseLite fnl = new FastNoiseLite(seed);
-        fnl.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-        fnl.SetFrequency(freq);
-        fnl.SetFractalType(FastNoiseLite.FractalType.FBm);
-        fnl.SetFractalOctaves(oct);
-        fnl.SetFractalLacunarity(lac);
-        fnl.SetFractalGain(gain);
-        return fnl;
-    }
-
     public static final class HeightmapData {
         public final short[][] heightmap;
         public final short[][] biomeIds;
         public final short[][] terralithBiomeIds;
         public final EcologyData ecology;
+        /** Exclusive fluid surface Y for a shaped wetland column; zero means no local water. */
+        public final short[][] wetlandWaterLevels;
         public final int width;
         public final int height;
 
@@ -63,10 +51,16 @@ public final class LocalTerrainProvider {
 
         public HeightmapData(short[][] heightmap, short[][] biomeIds, short[][] terralithBiomeIds,
                              EcologyData ecology, int width, int height) {
+            this(heightmap, biomeIds, terralithBiomeIds, ecology, null, width, height);
+        }
+
+        public HeightmapData(short[][] heightmap, short[][] biomeIds, short[][] terralithBiomeIds,
+                             EcologyData ecology, short[][] wetlandWaterLevels, int width, int height) {
             this.heightmap = heightmap;
             this.biomeIds  = biomeIds;
             this.terralithBiomeIds = terralithBiomeIds;
             this.ecology = ecology;
+            this.wetlandWaterLevels = wetlandWaterLevels;
             this.width     = width;
             this.height    = height;
         }
@@ -375,6 +369,7 @@ public final class LocalTerrainProvider {
     private volatile long seed;
     private final WorldPipeline pipeline;
     private volatile boolean fastGroundSampling;
+    private volatile boolean naturalTerrain;
     private PreviewSession previewOwner;
     private static final ThreadLocal<PreviewSession> PREVIEW = new ThreadLocal<>();
     private static final ThreadLocal<LocalTerrainProvider> BOUND_PROVIDER = new ThreadLocal<>();
@@ -385,6 +380,7 @@ public final class LocalTerrainProvider {
         this.scope = scope;
         this.pipeline = new WorldPipeline(seed, models);
         this.fastGroundSampling = WorldScaleManager.isFastGroundSampling();
+        this.naturalTerrain = WorldScaleManager.isNaturalTerrain();
     }
 
     /** Every real server receives an isolated provider/cache lifetime, including same-seed reopen. */
@@ -433,6 +429,7 @@ public final class LocalTerrainProvider {
                 provider.pipeline.setSeed(seed);
                 provider.seed = seed;
                 provider.fastGroundSampling = WorldScaleManager.isFastGroundSampling();
+                provider.naturalTerrain = WorldScaleManager.isNaturalTerrain();
                 provider.clearLocalCache();
                 return null;
             }).get();
@@ -452,6 +449,12 @@ public final class LocalTerrainProvider {
 
     public boolean isFastGroundSampling() {
         return fastGroundSampling;
+    }
+
+    /** Monotonic identity of the currently valid terrain-cache contents. */
+    public long terrainGeneration() {
+        scope.requireOpen();
+        return cacheGeneration;
     }
 
     public static LocalTerrainProvider getInstance() {
@@ -922,7 +925,7 @@ public final class LocalTerrainProvider {
     /** Exact ground only; partial entries never masquerade as complete biome/ecology tiles. */
     public HeightmapData fetchGroundHeightmap(int i1, int j1, int i2, int j2) {
         if (!fastGroundSampling)
-            return legacySampling() ? fetchCompleteRegion(i1, j1, i2, j2) : fetchPartial(i1, j1, i2, j2, false);
+            return legacySampling() ? fetchCompleteRegion(i1, j1, i2, j2) : fetchPartial(i1, j1, i2, j2, true);
         return fetchFastGround(i1, j1, i2, j2);
     }
 
@@ -1038,23 +1041,31 @@ public final class LocalTerrainProvider {
 
     private HeightmapData handleGround(int i1, int j1, int i2, int j2, int scale) {
         int h = i2 - i1, w = j2 - j1;
-        if (scale == 1) {
-            int halo = MacroBiomeContext.REGION_BLOCKS + 64 + MacroBiomeContext.COAST_BLOCKS + 2;
-            float[] elevation = pipeline.getElevationCrop(i1-halo, j1-halo, i2+halo, j2+halo, i1, j1, i2, j2);
-            return new HeightmapData(toHeights(elevation, h, w), null, w, h);
-        }
         int i1n = Math.floorDiv(i1, scale), j1n = Math.floorDiv(j1, scale);
         int i2n = -Math.floorDiv(-i2, scale), j2n = -Math.floorDiv(-j2, scale);
-        int i1p = i1n - 2, j1p = j1n - 2, i2p = i2n + 2, j2p = j2n + 2;
-        int nH = i2p - i1p, nW = j2p - j1p;
-        int halo = (int) Math.ceil(194f / scale) + 2;
-        float[] nativeElevation = pipeline.getElevationCrop(i1n-halo, j1n-halo, i2n+halo, j2n+halo, i1p, j1p, i2p, j2p);
-        int cropI = 2 * scale + (i1 - i1n * scale), cropJ = 2 * scale + (j1 - j1n * scale);
-        float[] padded = ExactTerrainSampling.resizeCrop(nativeElevation, 0, 0, nH, nW, 0, 0, nH, nW,
-                scale, cropI - 1, cropJ - 1, h + 2, w + 2);
+        int halo = scale == 1 ? MacroBiomeContext.CONTEXT_PAD + 2
+                : (int) Math.ceil((MacroBiomeContext.CONTEXT_PAD + 2f) / scale) + 2;
+        int ni = i1n - halo, nj = j1n - halo, nh = i2n - i1n + 2 * halo, nw = j2n - j1n + 2 * halo;
+        // Habitat geometry is required for exact terrain, but the fast path still avoids
+        // full native climate inference and never recursively waits on a classified tile.
+        float[] nativeElevation = pipeline.getElevationCrop(ni, nj, ni + nh, nj + nw,
+                ni, nj, ni + nh, nj + nw);
+        float[] padded;
+        if (scale == 1) {
+            padded = cropFlat(nativeElevation, i1 - ni - 1, j1 - nj - 1, h + 2, w + 2, nh, nw);
+        } else {
+            int pi = i1n - 2, pj = j1n - 2, ph = i2n - i1n + 4, pw = j2n - j1n + 4;
+            padded = ExactTerrainSampling.resizeCrop(nativeElevation, ni, nj, nh, nw, pi, pj, ph, pw,
+                    scale, i1 - 1, j1 - 1, h + 2, w + 2);
+        }
         float[] smooth = cropFlat(padded, 1, 1, h, w, h + 2, w + 2);
-        float[] ground = addElevationNoise(smooth, padded, i1, j1, h, w, NATIVE_RESOLUTION / scale);
-        return new HeightmapData(toHeights(ground, h, w), null, w, h);
+        float meters = NATIVE_RESOLUTION / scale;
+        float[] ground = scale == 1 ? smooth : addElevationNoise(smooth, padded, i1, j1, h, w, meters);
+        ShoreContext shore = MacroBiomeContext.terrain(nativeElevation, ni, nj, nh, nw,
+                scale, meters, i1, j1, h, w, seed);
+        HeightmapData shaped = withEcology(new HeightmapData(toHeights(ground, h, w), null, w, h),
+                smooth, padded, shore, i1, j1, scale, meters);
+        return new HeightmapData(shaped.heightmap, null, null, null, shaped.wetlandWaterLevels, w, h);
     }
 
     /** Original classifiers, including caves' ground and natural ecology, over a small region. */
@@ -1187,8 +1198,8 @@ public final class LocalTerrainProvider {
         int ni = Math.floorDiv(referenceI, scale), nj = Math.floorDiv(referenceJ, scale);
         int neI = -Math.floorDiv(-(referenceI + key.referenceTileSize), scale);
         int neJ = -Math.floorDiv(-(referenceJ + key.referenceTileSize), scale);
-        int halo = scale == 1 ? MacroBiomeContext.REGION_BLOCKS + 64 + MacroBiomeContext.COAST_BLOCKS + 2
-                : (int) Math.ceil(194f / scale) + 2;
+        int halo = scale == 1 ? MacroBiomeContext.CONTEXT_PAD + 2
+                : (int) Math.ceil((MacroBiomeContext.CONTEXT_PAD + 2f) / scale) + 2;
         int si = ni - halo, sj = nj - halo, sh = neI - ni + 2 * halo, sw = neJ - nj + 2 * halo;
         float[][] nativeData = referenceData(new CacheKey(si, sj, si + sh, sj + sw, scale), key.biomes, generation);
         float[] elevation, padded, climate = null;
@@ -1217,7 +1228,7 @@ public final class LocalTerrainProvider {
         float[] ground = scale == 1 ? elevation : addElevationNoise(elevation, padded, b.i1, b.j1, h, w, meters);
         if (!key.biomes) return new HeightmapData(toHeights(ground, h, w), null, w, h);
         BiomeClassifier.TerralithContext context = MacroBiomeContext.build(nativeData[0], nativeData[1], si, sj, sh, sw,
-                scale, meters, b.i1, b.j1, h, w);
+                scale, meters, b.i1, b.j1, h, w, seed);
         short[] terralith = new short[h * w];
         short[] biomes = BiomeClassifier.classify(elevation, climate, b.i1, b.j1, padded, h, w, meters, terralith, context);
         return withEcology(buildHeightmapData(ground, biomes, terralith, h, w), elevation, padded, context.shore(),
@@ -1235,7 +1246,8 @@ public final class LocalTerrainProvider {
         short[][] ground = cropShort(source.heightmap, r, c, h, w), biomes = cropShort(source.biomeIds, r, c, h, w);
         short[][] terralith = cropShort(source.terralithBiomeIds, r, c, h, w);
         EcologyData ecology = source.ecology == null ? null : source.ecology.crop(c, r, w, h);
-        return new HeightmapData(ground, biomes, terralith, ecology, w, h);
+        return new HeightmapData(ground, biomes, terralith, ecology,
+                cropShort(source.wetlandWaterLevels, r, c, h, w), w, h);
     }
 
     private static short[][] cropShort(short[][] source, int r, int c, int h, int w) {
@@ -1251,7 +1263,7 @@ public final class LocalTerrainProvider {
 
     private HeightmapData handle1x(int i1, int j1, int i2, int j2) {
         int H = i2 - i1, W = j2 - j1;
-        int halo = MacroBiomeContext.REGION_BLOCKS + 2 * 32 + MacroBiomeContext.COAST_BLOCKS + 2;
+        int halo = MacroBiomeContext.CONTEXT_PAD + 2;
         int hi0 = i1 - halo, hj0 = j1 - halo, hi2 = i2 + halo, hj2 = j2 + halo;
         float[][] macro = pipeline.get(hi0, hj0, hi2, hj2, true);
         int macroH = hi2 - hi0, macroW = hj2 - hj0;
@@ -1259,7 +1271,7 @@ public final class LocalTerrainProvider {
         float[] elevPadded = cropFlat(macro[0], i1 - hi0 - 1, j1 - hj0 - 1, H + 2, W + 2, macroH, macroW);
         float[] climate = cropClimate(macro[1], macroH, macroW, i1 - hi0, j1 - hj0, H, W);
         BiomeClassifier.TerralithContext terralithContext = MacroBiomeContext.build(macro[0], macro[1],
-                hi0, hj0, macroH, macroW, 1, NATIVE_RESOLUTION, i1, j1, H, W);
+                hi0, hj0, macroH, macroW, 1, NATIVE_RESOLUTION, i1, j1, H, W, seed);
 
         short[] terralithFlat = new short[H * W];
         short[] biomeFlat = BiomeClassifier.classify(elevFlat, climate, i1, j1, elevPadded, H, W, NATIVE_RESOLUTION, terralithFlat, terralithContext);
@@ -1286,7 +1298,7 @@ public final class LocalTerrainProvider {
         int i1p = i1n - 2, j1p = j1n - 2;
         int i2p = i2n + 2, j2p = j2n + 2;
         int nH = i2p - i1p, nW = j2p - j1p;
-        int haloNative = (int) Math.ceil((192f + 2f) / scale) + 2;
+        int haloNative = (int) Math.ceil((MacroBiomeContext.CONTEXT_PAD + 2f) / scale) + 2;
         int macroI0 = i1n - haloNative, macroJ0 = j1n - haloNative;
         int macroI2 = i2n + haloNative, macroJ2 = j2n + haloNative;
         int macroH = macroI2 - macroI0, macroW = macroJ2 - macroJ0;
@@ -1313,7 +1325,7 @@ public final class LocalTerrainProvider {
 
         short[] terralithFlat = new short[H * W];
         BiomeClassifier.TerralithContext terralithContext = MacroBiomeContext.build(macro[0], macro[1],
-                macroI0, macroJ0, macroH, macroW, scale, pixelSizeM, i1, j1, H, W);
+                macroI0, macroJ0, macroH, macroW, scale, pixelSizeM, i1, j1, H, W, seed);
         short[] biomeFlat = BiomeClassifier.classify(elevSmooth, climate, i1, j1, elevPadded, H, W, pixelSizeM, terralithFlat, terralithContext);
         return withEcology(buildHeightmapData(elevOut, biomeFlat, terralithFlat, H, W),
                 elevSmooth, elevPadded, terralithContext.shore(), i1, j1, scale, pixelSizeM);
@@ -1332,50 +1344,41 @@ public final class LocalTerrainProvider {
         short[] biomes = new short[n], terrain = new short[n];
         float[] cover = new float[n], temperature = new float[n], moisture = new float[n], slopes = new float[n];
         float[] openWater = new float[n], wetness = new float[n], marine = new float[n];
+        short[][] wetlandWater = null;
         for (int r = 0; r < h; r++) for (int c = 0; c < w; c++) {
             int index = r * w + c, x = j0 + c, z = i0 + r;
             var broad = climate.sample(x, z);
             var selection = EcologyClassifier.select(x, z, elevation[index], gradients[index] / metersPerBlock,
                     broad.temperature(), broad.precipitation(), broad.elevation(),
                     shore.waterDistanceBlocks(index), shore.openWaterFraction(index), shore.reliefSlope(index),
-                    shore.valleyPotential(index));
+                    shore.valleyPotential(index), shore.marinePotential(index));
             var sample = selection.sample();
             biomes[index] = (short) sample.biomeId(); terrain[index] = selection.terrainBiomeId();
             cover[index] = sample.treeCover(); temperature[index] = sample.temperature();
             moisture[index] = sample.moisture(); slopes[index] = sample.slope();
             openWater[index] = shore.openWaterFraction(index);
             wetness[index] = sample.wetness(); marine[index] = sample.marineInfluence();
+            if (!naturalTerrain) continue;
+            short original = data.heightmap[r][c];
+            // Existing ocean profiles are untouched: the wetland policy admits only land.
+            int boundary = original >= 0 ? 63 + (int) (original / metersPerBlock) : 62;
+            var shaped = WetlandTerrain.shape(original, boundary, sample, selection.terrainBiomeId(),
+                    x, z, seed, metersPerBlock, shore.wetlandTerrain(), c, r);
+            data.heightmap[r][c] = (short) shaped.terrainMeters();
+            if (shaped.waterLevel() != 0) {
+                if (wetlandWater == null) wetlandWater = new short[h][w];
+                wetlandWater[r][c] = (short) shaped.waterLevel();
+            }
         }
         return new HeightmapData(data.heightmap, data.biomeIds, data.terralithBiomeIds,
                 new EcologyData(w, h, biomes, terrain, cover, temperature, moisture, slopes,
-                        snowRetention, openWater, wetness, marine), w, h);
+                        snowRetention, openWater, wetness, marine), wetlandWater, w, h);
     }
 
     private float[] addElevationNoise(float[] elevSmooth, float[] elevPadded,
                                        int i1, int j1, int H, int W, float pixelSizeM) {
-        float[] slopeGradient = sobelGradient(elevPadded, H + 2, W + 2, H, W);
-        float[] elevOut = elevSmooth.clone();
-        float normFactor = 40f * pixelSizeM / NATIVE_RESOLUTION;
-        float ampC = 100f * pixelSizeM / NATIVE_RESOLUTION;
-        float ampF = 70f  * pixelSizeM / NATIVE_RESOLUTION;
-
-        for (int r = 0; r < H; r++) {
-            for (int c = 0; c < W; c++) {
-                int idx = r * W + c;
-                float e = elevSmooth[idx];
-                if (e < 0f) continue;
-
-                float grad = slopeGradient[idx];
-                float sf = Math.min(1f, grad / normFactor);
-                sf = sf * sf * (float) Math.sqrt(sf);
-
-                float nx = j1 + c, ny = i1 + r;
-                elevOut[idx] = e
-                        + ELEV_NOISE_COARSE.GetNoise(nx, ny) * ampC * sf
-                        + ELEV_NOISE_FINE.GetNoise(nx, ny)   * ampF * sf;
-            }
-        }
-        return elevOut;
+        return ElevationDetail.apply(elevSmooth, elevPadded, i1, j1, H, W,
+                pixelSizeM, NATIVE_RESOLUTION);
     }
 
     private static float[] sobelGradient(float[] padded, int pH, int pW, int H, int W) {

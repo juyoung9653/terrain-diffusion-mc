@@ -9,6 +9,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.WetlandEcology;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
@@ -20,15 +21,22 @@ import net.minecraft.world.level.block.DoublePlantBlock;
 import net.minecraft.world.level.block.state.properties.DoubleBlockHalf;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkGenerator;
+import net.minecraft.world.level.chunk.ChunkAccess;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.feature.Feature;
 import net.minecraft.world.level.levelgen.feature.FeaturePlaceContext;
 import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConfiguration;
+import net.minecraft.world.level.levelgen.structure.BoundingBox;
+import net.minecraft.world.level.levelgen.structure.StructurePiece;
+import net.minecraft.world.level.levelgen.structure.StructureStart;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
-/** Applies climate-driven soils and contained shallow wetland pools before vegetation. */
+/** Applies climate-driven soils before vegetation, including naturally flooded wetland beds. */
 public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
     private static final short GRAVEL_BEACH = (short) (com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeClassifier
             .biomeNames().indexOf("terralith:gravel_beach") + 1);
@@ -51,7 +59,19 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         int startX = context.origin().getX();
         int startZ = context.origin().getZ();
         BoundedSurfaceSampler boundarySamples = new BoundedSurfaceSampler();
-        boolean changed = WetlandPools.place(level, generator, context.origin());
+        NaturalEcology.PlannedWaterLevels plannedWater = NaturalEcology.plannedWaterLevels(generator);
+        // Wetland water is now shaped with the terrain density before carvers and
+        // surface generation. Do not add post-surface single-chunk pools here:
+        // they cannot cross a chunk edge and make a biome-sized water table look
+        // like repeated decoration.
+        boolean changed = false;
+        int chunkX = Math.floorDiv(startX, 16);
+        int chunkZ = Math.floorDiv(startZ, 16);
+        ChunkAccess owner = level.getChunk(chunkX, chunkZ);
+        // A structure reference covers the whole chunk in its bookkeeping, but
+        // its pieces do not.  Protect only actual template cells: an underground
+        // reference must not leave a 16-by-16 natural wetland bed unpainted.
+        List<BoundingBox> protectedStructurePieces = structurePieces(level, owner, chunkX, chunkZ);
         for (int localZ = 0; localZ < 16; localZ++) {
             for (int localX = 0; localX < 16; localX++) {
                 int x = startX + localX;
@@ -59,8 +79,9 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 int topY = level.getHeight(Heightmap.Types.OCEAN_FLOOR_WG, x, z) - 1;
                 int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE_WG, x, z) - 1;
                 BlockPos top = new BlockPos(x, topY, z);
-                if (surfaceY > topY
-                        || !level.getFluidState(top).isEmpty() || !level.getFluidState(top.above()).isEmpty()) continue;
+                boolean waterCover = surfaceWaterCover(level, top, surfaceY);
+                if (intersectsStructure(protectedStructurePieces, top)
+                        || !level.getFluidState(top).isEmpty()) continue;
                 NaturalEcology.SurfaceSample surfaceSample = NaturalEcology.surfaceSample(generator, x, z);
                 if (surfaceSample == null) continue;
                 EcologyClassifier.Sample sample = surfaceSample.climate();
@@ -70,6 +91,10 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         && surfaceSample.terrainBiomeId() == GRAVEL_BEACH
                         && FeatureEcologyMath.dryMineralShore(sample.temperature(), sample.moisture());
                 ResourceLocation currentBiome = biomeId(level, top);
+                boolean wetlandBiome = isWetlandBiomeId(currentBiome);
+                int localWaterLevel = plannedWater == null ? 0 : plannedWater.levelAt(x, z);
+                boolean modeledWetlandWater = localWaterLevel > 0
+                        && modeledWetlandWater(level, top, localWaterLevel);
                 // Quart biome assignment and boundary dithering can select a beach
                 // over a column whose original climate is arid land. Keep this
                 // exact beach mineral without reclassifying inland ecotones.
@@ -83,10 +108,20 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 boolean riverOverlay = com.github.xandergos.terraindiffusionmc.world.river.WorldNaturalRiverState.version(level.getLevel()) >= 10
                         && surfaceSample.terrainBiomeId() == 0 && sample.biomeId() != 0
                         && level.getBiome(top).is(net.minecraft.tags.BiomeTags.IS_RIVER);
+                if (surfaceY > topY && !wetlandBiome && !modeledWetlandWater) continue;
+                if (surfaceY > topY && !waterCover) continue;
                 if (!dryShore && !dryGravelShore && !dryOriginalLandBeach && !riverOverlay
                         && (currentBiome == null || !isEcologyBiomeId(currentBiome))) continue;
                 BlockState surface = level.getBlockState(top);
                 if (!isExposedSoil(surface, true)) continue;
+                // Water in a labelled wetland is part of its shaped habitat.
+                // Repaint every natural submerged bed, including a three-block
+                // coastal or river-connected column; the old one/two-block gate
+                // left ordinary grass and dirt visibly underwater.
+                if ((wetlandBiome && waterCover) || modeledWetlandWater) {
+                    changed |= placeWetlandSediment(level, top, protectedStructurePieces);
+                    continue;
+                }
                 if (!dryShore && !dryOriginalLandBeach && !riverOverlay && surfaceSample.terrainBiomeId() == 0) {
                     sample = boundaryClimate(level, top, currentBiome, surfaceSample,
                             boundarySamples, level.getSeed());
@@ -101,22 +136,27 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 // itself selects the mineral sandy surface.
                 boolean allowImmersiveWeatheringSandySoil = material == FeatureEcologyMath.SurfaceMaterial.SAND;
                 if (!isExposedSoil(surface, allowImmersiveWeatheringSandySoil)) continue;
-                if (material == FeatureEcologyMath.SurfaceMaterial.SAND) {
+                WetlandEcology.Weights wetland = WetlandEcology.weights(sample);
+                int nearbyWaterLevel = localWaterLevel;
+                if (nearbyWaterLevel <= 0 && plannedWater != null
+                        && (wetlandBiome || FeatureEcologyMath.wetlandSedimentCore(
+                        wetland.freshwaterSwamp(), wetland.mangrove(), sample.wetness(), sample.slope())))
+                    nearbyWaterLevel = plannedWater.nearestLevel(x, z, 8);
+                FeatureEcologyMath.PlannedWetlandMargin wetlandMargin =
+                        FeatureEcologyMath.plannedWetlandMargin(topY, nearbyWaterLevel);
+                boolean preserveMineralShore = surface.is(Blocks.SAND)
+                        || material == FeatureEcologyMath.SurfaceMaterial.SAND
+                        || dryShore || dryGravelShore;
+                if (wetlandMargin == FeatureEcologyMath.PlannedWetlandMargin.MUD && !preserveMineralShore) {
+                    // Dry wetland cores remain mud.  This happens before the
+                    // climate palette so coastal mud reaches mineral sand without
+                    // an artificial grass ribbon.
+                    changed |= placeWetlandSediment(level, top, protectedStructurePieces);
+                } else if (material == FeatureEcologyMath.SurfaceMaterial.SAND) {
                     changed |= placeSupportedSand(level, top, allowImmersiveWeatheringSandySoil);
                 } else if (dryGravelShore) {
                     changed |= placeSupportedMineral(level, top, Blocks.GRAVEL.defaultBlockState(), Blocks.STONE.defaultBlockState());
                 } else {
-                    WetlandEcology.Weights wetland = WetlandEcology.weights(sample);
-                    boolean mud = !dryShore && !dryGravelShore && !dryOriginalLandBeach
-                            && (surface.is(Blocks.GRASS_BLOCK) || surface.is(Blocks.DIRT)
-                            || surface.is(Blocks.COARSE_DIRT) || surface.is(Blocks.PODZOL))
-                            && (material == FeatureEcologyMath.SurfaceMaterial.GRASS
-                            || material == FeatureEcologyMath.SurfaceMaterial.COARSE_DIRT)
-                            && FeatureEcologyMath.coordinateChance(level.getSeed(), x, z,
-                            0x4D55445F5745544CL, FeatureEcologyMath.wetlandMudChance(
-                                    wetland.reedMarsh(), wetland.freshwaterSwamp(),
-                                    wetland.mangrove(), wetland.riparian(),
-                                    sample.temperature(), sample.slope()));
                     BlockState target = switch (material) {
                         case COARSE_DIRT -> Blocks.COARSE_DIRT.defaultBlockState();
                         case PODZOL -> Blocks.PODZOL.defaultBlockState();
@@ -124,16 +164,18 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         case STONE -> Blocks.STONE.defaultBlockState();
                         default -> Blocks.GRASS_BLOCK.defaultBlockState();
                     };
-                    if (mud) target = Blocks.MUD.defaultBlockState();
                     changed |= replace(level, top, target);
-                    // A neighbouring patch can arrive before this chunk paints its soil.
-                    // Apply the same column decision used for a plant arriving afterwards.
-                    if (GreeneriesSoilPolicy.nativeWorldgenPolicyEnabled()) {
-                        float chance = GreeneriesSoilPolicy.acceptance(level.getBlockState(top))
-                                * FeatureEcologyMath.coldGroundcoverAcceptance(surfaceSample.climate().temperature());
-                        if (!GreeneriesSoilPolicy.acceptsColumn(level.getSeed(), x, z, chance))
-                            changed |= removeUnsupportedGrass(level, top.above());
-                    }
+                }
+                // A neighbouring patch can arrive before this chunk paints its soil.
+                // Use the same shaped-water factor as the later native Greeneries writer.
+                if (GreeneriesSoilPolicy.nativeWorldgenPolicyEnabled()) {
+                    int coverWaterLevel = nearbyWaterLevel > 0 || plannedWater == null
+                            ? nearbyWaterLevel : plannedWater.nearestLevel(x, z, 8);
+                    float chance = GreeneriesSoilPolicy.acceptance(level.getBlockState(top))
+                            * FeatureEcologyMath.coldGroundcoverAcceptance(surfaceSample.climate().temperature())
+                            * FeatureEcologyMath.plannedWetlandGroundcoverFactor(topY, coverWaterLevel);
+                    if (!GreeneriesSoilPolicy.acceptsColumn(level.getSeed(), x, z, chance))
+                        changed |= removeUnsupportedGrass(level, top.above());
                 }
             }
         }
@@ -146,8 +188,66 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 .orElse(null);
     }
 
+    static List<BoundingBox> structurePieces(WorldGenLevel level, ChunkAccess owner,
+                                                      int chunkX, int chunkZ) {
+        List<BoundingBox> boxes = new ArrayList<>();
+        addStructurePieces(boxes, owner.getAllStarts().values());
+        for (var entry : owner.getAllReferences().entrySet()) {
+            for (long packedReference : entry.getValue()) {
+                int referenceX = ChunkPos.getX(packedReference);
+                int referenceZ = ChunkPos.getZ(packedReference);
+                ChunkAccess source = referenceX == chunkX && referenceZ == chunkZ
+                        ? owner : level.getChunk(referenceX, referenceZ, ChunkStatus.STRUCTURE_STARTS, false);
+                if (source == null) continue;
+                StructureStart start = source.getStartForStructure(entry.getKey());
+                if (start != null) addStructurePieces(boxes, List.of(start));
+            }
+        }
+        return boxes;
+    }
+
+    private static void addStructurePieces(List<BoundingBox> boxes, Iterable<StructureStart> starts) {
+        for (StructureStart start : starts) {
+            if (start == null || !start.isValid()) continue;
+            for (StructurePiece piece : start.getPieces()) boxes.add(piece.getBoundingBox());
+        }
+    }
+
+    static boolean intersectsStructure(List<BoundingBox> boxes, BlockPos pos) {
+        for (BoundingBox box : boxes) if (box.isInside(pos)) return true;
+        return false;
+    }
+
     private static boolean isEcologyBiomeId(ResourceLocation id) {
         return id.getNamespace().equals(TerrainDiffusionLifecycle.MOD_ID) && id.getPath().startsWith("ecology/");
+    }
+
+    private static boolean isWetlandBiomeId(ResourceLocation id) {
+        return id != null && id.getNamespace().equals(TerrainDiffusionLifecycle.MOD_ID)
+                && (id.getPath().equals("ecology/freshwater_swamp")
+                || id.getPath().equals("ecology/mangrove_swamp"));
+    }
+
+    /** True for a continuous surface-connected water column over the target bed.
+     * The caller still confines its use to an actual TD wetland biome, so this
+     * never claims an ordinary river, aquifer, or ocean bed.
+     */
+    private static boolean surfaceWaterCover(WorldGenLevel level, BlockPos bed, int surfaceY) {
+        int depth = surfaceY - bed.getY();
+        if (depth < 1) return false;
+        for (int y = bed.getY() + 1; y <= surfaceY; y++) {
+            var fluid = level.getFluidState(new BlockPos(bed.getX(), y, bed.getZ()));
+            if (!fluid.is(net.minecraft.world.level.material.Fluids.WATER)) return false;
+        }
+        return true;
+    }
+
+    /** Confirms that a modeled wetland table is still an exposed actual water column. */
+    private static boolean modeledWetlandWater(WorldGenLevel level, BlockPos bed, int exclusiveWaterLevel) {
+        for (int y = bed.getY() + 1; y < exclusiveWaterLevel; y++) {
+            if (!level.getBlockState(new BlockPos(bed.getX(), y, bed.getZ())).is(Blocks.WATER)) return false;
+        }
+        return !level.getBlockState(new BlockPos(bed.getX(), exclusiveWaterLevel, bed.getZ())).is(Blocks.WATER);
     }
 
     private static EcologyClassifier.Sample boundaryClimate(WorldGenLevel level, BlockPos target,
@@ -240,6 +340,26 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         return changed;
     }
 
+    /**
+     * Saturated wetland sediment has a shallow profile rather than a one-block
+     * cosmetic cap.  This stays deliberately narrower than mineral surface
+     * painting: it only follows already selected mud columns and only replaces
+     * contiguous natural soft soil beneath their surface.
+     */
+    private static boolean placeWetlandSediment(WorldGenLevel level, BlockPos top,
+                                                List<BoundingBox> protectedStructurePieces) {
+        boolean changed = false;
+        BlockPos cursor = top;
+        for (int layer = 0; layer < 3; layer++) {
+            if (intersectsStructure(protectedStructurePieces, cursor)
+                    || !isNaturalWetlandSedimentSoil(level.getBlockState(cursor))
+                    || !level.getFluidState(cursor).isEmpty()) break;
+            changed |= replace(level, cursor, Blocks.MUD.defaultBlockState());
+            cursor = cursor.below();
+        }
+        return changed;
+    }
+
     private static boolean removeUnsupportedGrass(WorldGenLevel level, BlockPos pos) {
         BlockState plant = level.getBlockState(pos);
         if (!(plant.is(Blocks.SHORT_GRASS) || plant.is(Blocks.TALL_GRASS)
@@ -263,6 +383,11 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         return state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT) || state.is(Blocks.COARSE_DIRT)
                 || state.is(Blocks.PODZOL) || state.is(Blocks.SAND)
                 || allowImmersiveWeatheringSandySoil && isImmersiveWeatheringSandySoil(state);
+    }
+
+    private static boolean isNaturalWetlandSedimentSoil(BlockState state) {
+        return state.is(Blocks.MUD) || state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT)
+                || state.is(Blocks.COARSE_DIRT) || state.is(Blocks.PODZOL);
     }
 
     private static boolean isImmersiveWeatheringSandySoil(BlockState state) {

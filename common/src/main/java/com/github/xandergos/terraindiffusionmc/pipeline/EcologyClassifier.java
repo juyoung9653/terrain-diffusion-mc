@@ -159,6 +159,14 @@ public final class EcologyClassifier {
     public static Selection select(int x, int z, float elevation, float slope,
                                    float regionalTemperature, float regionalRainfall, float regionalElevation,
                                    float waterDistance, float openWater, float relief, float valleyPotential) {
+        return select(x, z, elevation, slope, regionalTemperature, regionalRainfall, regionalElevation,
+                waterDistance, openWater, relief, valleyPotential, Float.NaN);
+    }
+
+    public static Selection select(int x, int z, float elevation, float slope,
+                                   float regionalTemperature, float regionalRainfall, float regionalElevation,
+                                   float waterDistance, float openWater, float relief, float valleyPotential,
+                                   float marineTerrainPotential) {
         // The model temperature already reflects its coarse altitude. Correct only the local difference.
         float temperature = localTemperature(elevation, regionalTemperature, regionalElevation);
         float regionalMoisture = clamp(regionalRainfall / (500f + 20f * Math.max(0, regionalTemperature)), 0, 2);
@@ -177,8 +185,10 @@ public final class EcologyClassifier {
         // Reapplying the block-scale slope here fragments its transition into speckles.
         float wetness = WetlandEcology.wetness(temperature, moisture, valleyPotential);
         if (openWater > 0 && Float.isFinite(waterDistance)) wetness *= smooth(0, 24, waterDistance);
-        float marine = WetlandEcology.marineInfluence(elevation, slope, temperature, moisture,
-                waterDistance, openWater, relief);
+        float marine = Float.isNaN(marineTerrainPotential)
+                ? WetlandEcology.marineInfluence(elevation, slope, temperature, moisture,
+                        waterDistance, openWater, relief)
+                : WetlandEcology.marineClimate(temperature, moisture) * marineTerrainPotential;
         short shore = ShoreClassifier.select(x, z, elevation, slope, temperature, moisture,
                 waterDistance, openWater, relief);
         if (shore != 0 && marine < .15f) return terrain(shore, temperature, moisture, slope);

@@ -10,6 +10,7 @@ import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionDensityFunction;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoSurfaceFeature;
+import com.github.xandergos.terraindiffusionmc.world.ecology.EcoCoastalSedimentFeature;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoTreesFeature;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoGroundcoverFeature;
 import com.github.xandergos.terraindiffusionmc.world.ecology.EcoWetlandGroundcoverFeature;
@@ -41,6 +42,8 @@ public final class TerrainDiffusionLifecycle {
     public static final ResourceLocation TERRAIN_DIFFUSION_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "terrain_diffusion");
     public static final ResourceLocation ECO_TREES_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_trees");
     public static final ResourceLocation ECO_SURFACE_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_surface");
+    public static final ResourceLocation ECO_COASTAL_SEDIMENT_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID,
+            "eco_coastal_sediment");
     public static final ResourceLocation ECO_GROUNDCOVER_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_groundcover");
     public static final ResourceLocation ECO_WETLAND_GROUNDCOVER_ID = ResourceLocation.fromNamespaceAndPath(MOD_ID, "eco_wetland_groundcover");
     private static boolean initialized;
@@ -88,6 +91,7 @@ public final class TerrainDiffusionLifecycle {
     public static void registerEcologyFeatures(CodecRegistrar<Feature<?>> registrar) {
         registrar.register(ECO_TREES_ID, new EcoTreesFeature());
         registrar.register(ECO_SURFACE_ID, new EcoSurfaceFeature());
+        registrar.register(ECO_COASTAL_SEDIMENT_ID, new EcoCoastalSedimentFeature());
         registrar.register(ECO_GROUNDCOVER_ID, new EcoGroundcoverFeature());
         registrar.register(ECO_WETLAND_GROUNDCOVER_ID, new EcoWetlandGroundcoverFeature());
     }

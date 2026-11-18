@@ -9,7 +9,7 @@ PACKAGE = "com/github/xandergos/terraindiffusionmc"
 STUBS = {
 "org/slf4j/Logger.java": "package org.slf4j; public interface Logger { default void info(String s,Object... a){} default void debug(String s,Object... a){} }",
 "org/slf4j/LoggerFactory.java": "package org.slf4j; public final class LoggerFactory { public static Logger getLogger(Class<?> c){return new Logger(){};} }",
-PACKAGE+"/world/WorldScaleManager.java": "package com.github.xandergos.terraindiffusionmc.world; public final class WorldScaleManager { public static int scale=1; public static boolean fastGroundSampling=false; public static boolean isFastGroundSampling(){return fastGroundSampling;} public static int getCurrentScale(){return scale;} public static int clampScale(int s){return Math.max(1,Math.min(6,s));} }",
+PACKAGE+"/world/WorldScaleManager.java": "package com.github.xandergos.terraindiffusionmc.world; public final class WorldScaleManager { public static int scale=1; public static boolean fastGroundSampling=false,naturalTerrain=true; public static boolean isFastGroundSampling(){return fastGroundSampling;} public static boolean isNaturalTerrain(){return naturalTerrain;} public static int getCurrentScale(){return scale;} public static int clampScale(int s){return Math.max(1,Math.min(6,s));} }",
 PACKAGE+"/config/TerrainDiffusionConfig.java": "package com.github.xandergos.terraindiffusionmc.config; public final class TerrainDiffusionConfig { public static int tileSize(){return 256;} }",
 PACKAGE+"/infinitetensor/FloatTensor.java": "package com.github.xandergos.terraindiffusionmc.infinitetensor; public final class FloatTensor {}",
 PACKAGE+"/pipeline/WorldPipelineModelConfig.java": "package com.github.xandergos.terraindiffusionmc.pipeline; final class WorldPipelineModelConfig { static float nativeResolution(){return 16;} static int latentCompression(){return 8;} }",
@@ -25,12 +25,36 @@ final class WorldPipeline {
     static final AtomicInteger cropCalls = new AtomicInteger(), climateCalls = new AtomicInteger();
     static volatile CountDownLatch entered, release;
     static volatile boolean failClimate;
+    static volatile boolean wetlandFixture;
     private long seed;
     WorldPipeline(long seed, PipelineModels models) { this.seed = seed; }
     void setSeed(long seed) { this.seed = seed; }
     long getTotalComputedWindowCount() { return calls.get(); }
     java.util.Map<String,java.util.Map<String,Long>> windowTelemetry() { return java.util.Map.of(); }
     FloatTensor getCoarseSlice(int a,int b,int c,int d){return new FloatTensor();}
+    private static float elevation(int z, int x, int requestZ, int requestX,
+                                   long seed, int h, int w) {
+        if (wetlandFixture) {
+            // One globally addressed block-space basin for the active native
+            // scale. The rim extends beyond WetlandTerrain's 160-block minimum.
+            int scale = Math.max(1, com.github.xandergos.terraindiffusionmc.world.WorldScaleManager.scale);
+            int centerX = Math.floorDiv(248, scale), centerZ = Math.floorDiv(-248, scale);
+            int dx = x - centerX, dz = z - centerZ;
+            float distance = (float)Math.sqrt((double)dx * dx + (double)dz * dz) * scale;
+            if (distance <= 40) return 32f;
+            if (distance <= 128) {
+                float t = (distance - 40) / 88f;
+                t = t * t * (3 - 2 * t);
+                return 32f + 80f * t;
+            }
+            // The basin minimum is square-shaped, so retain its high rim past
+            // every 160-block corner before falling back to adversarial terrain.
+            if (distance <= 320) return 112f;
+        }
+        return (float)(Math.sin(z*.031)*450+Math.cos(x*.047)*280
+                + (requestZ % 7) * .13 + (requestX % 11) * .17
+                + h * .019 + w * .021 + seed * 10);
+    }
     float[][] get(int i,int j,int ei,int ej,boolean climate) {
         calls.incrementAndGet();
         if (climate) climateCalls.incrementAndGet();
@@ -40,7 +64,7 @@ final class WorldPipeline {
         int h=ei-i,w=ej-j,n=h*w;
         float[] elevation=new float[n], cl=climate?new float[5*n]:null;
         for(int r=0;r<h;r++) for(int c=0;c<w;c++){
-            int k=r*w+c; elevation[k]=(float)(Math.sin((i+r)*.031)*450+Math.cos((j+c)*.047)*280 + (i % 7) * .13 + (j % 11) * .17 + h * .019 + w * .021 + seed * 10);
+            int k=r*w+c; elevation[k]=elevation(i+r,j+c,i,j,seed,h,w);
             if(climate){cl[k]=15;cl[n+k]=7;cl[2*n+k]=650;cl[3*n+k]=.3f;}
         }
         return new float[][]{elevation,cl};
@@ -60,7 +84,8 @@ final class WorldPipeline {
         int h=BroadEcologyClimate.floorCoarse(ei-1,scale,stride)+2+radius-r0;
         int w=BroadEcologyClimate.floorCoarse(ej-1,scale,stride)+2+radius-c0;
         float[] e=new float[h*w],t=new float[h*w],p=new float[h*w],v=new float[h*w];
-        java.util.Arrays.fill(e,12);java.util.Arrays.fill(t,16);java.util.Arrays.fill(p,650);java.util.Arrays.fill(v,.3f);
+        float rainfall = wetlandFixture ? 1200 : 650;
+        java.util.Arrays.fill(e,12);java.util.Arrays.fill(t,16);java.util.Arrays.fill(p,rainfall);java.util.Arrays.fill(v,.3f);
         return new BroadEcologyClimate(e,t,p,v,r0,c0,h,w,i,j,ei,ej,scale,stride);
     }
 }
@@ -87,8 +112,8 @@ def main():
     sources=[]
     for name,text in STUBS.items():
         path=generated/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(text,encoding="utf-8");sources.append(path)
-    for name in ("LocalTerrainProvider","InferenceExecutor","ExactTerrainSampling","EcologyData","EcologyDataCache","FastNoiseLite","LaplacianUtils",
-                 "BiomeClassifier","TerralithBiomeClassifier","MacroBiomeContext","BroadEcologyClimate","EcologyClassifier","WetlandEcology",
+    for name in ("LocalTerrainProvider","InferenceExecutor","ExactTerrainSampling","ElevationDetail","EcologyData","EcologyDataCache","FastNoiseLite","LaplacianUtils",
+                 "BiomeClassifier","TerralithBiomeClassifier","MacroBiomeContext","BroadEcologyClimate","EcologyClassifier","WetlandEcology","WetlandTerrain",
                  "ShoreClassifier","ShoreContext","EcologyShowcaseProfile"):
         sources.append(ROOT/"common/src/main/java"/PACKAGE/"pipeline"/(name+".java"))
     sources.append(ROOT/"tools/terrain_sampling/LocalTerrainProviderCacheTest.java")

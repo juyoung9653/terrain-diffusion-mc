@@ -3,7 +3,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from validate_resources import ecological_biomes, find_cycles, resolve_tag
+from validate_resources import (ecological_biomes, find_cycles, resolve_tag,
+                                submerged_wetland_soil_writers)
 
 
 class FeatureSorterGraphTests(unittest.TestCase):
@@ -23,6 +24,27 @@ class FeatureSorterGraphTests(unittest.TestCase):
     def test_ecology_biomes_are_discovered_by_prefix(self):
         biomes = {"terrain-diffusion-mc:ecology/desert": {}, "terrain-diffusion-mc:ecology/temperate_forest": {}, "minecraft:plains": {}}
         self.assertEqual(["terrain-diffusion-mc:ecology/desert", "terrain-diffusion-mc:ecology/temperate_forest"], ecological_biomes(biomes))
+
+    def test_rejects_later_ocean_floor_disk_that_replaces_wetland_mud_with_dirt(self):
+        biome = "terrain-diffusion-mc:ecology/mangrove_swamp"
+        biomes = {biome: {"features": [[], [], ["terrain-diffusion-mc:eco_surface"], [], [], [], ["minecraft:disk_grass"]]}}
+        placed = {"minecraft:disk_grass": {"feature": "minecraft:disk_grass", "placement": [
+            {"type": "minecraft:heightmap", "heightmap": "OCEAN_FLOOR_WG"}]}}
+        configured = {"minecraft:disk_grass": {"type": "minecraft:disk", "config": {
+            "target": {"blocks": ["minecraft:dirt", "minecraft:mud"]},
+            "state_provider": {"fallback": {"state": {"Name": "minecraft:dirt"}}}}}}
+        self.assertEqual([biome + ": step 6 minecraft:disk_grass can overwrite mud underwater"],
+                         submerged_wetland_soil_writers(biomes, placed, configured))
+
+    def test_allows_later_ocean_floor_disk_that_does_not_write_dirt_or_grass(self):
+        biome = "terrain-diffusion-mc:ecology/freshwater_swamp"
+        biomes = {biome: {"features": [[], [], ["terrain-diffusion-mc:eco_surface"], [], [], [], ["minecraft:disk_clay"]]}}
+        placed = {"minecraft:disk_clay": {"feature": "minecraft:disk_clay", "placement": [
+            {"type": "minecraft:heightmap", "heightmap": "OCEAN_FLOOR_WG"}]}}
+        configured = {"minecraft:disk_clay": {"type": "minecraft:disk", "config": {
+            "target": {"blocks": ["minecraft:dirt", "minecraft:mud"]},
+            "state_provider": {"fallback": {"state": {"Name": "minecraft:clay"}}}}}}
+        self.assertEqual([], submerged_wetland_soil_writers(biomes, placed, configured))
 
 
 if __name__ == "__main__":

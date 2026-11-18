@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.world.DeepOceanFluidPolicy;
+import com.github.xandergos.terraindiffusionmc.world.WetlandFluidPicker;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import com.github.xandergos.terraindiffusionmc.world.geology.UndergroundGeneration;
 import net.minecraft.core.Holder;
@@ -30,6 +31,7 @@ import java.util.function.Supplier;
 @Mixin(NoiseBasedChunkGenerator.class)
 public abstract class DeepOceanFluidPickerMixin {
     @Unique private boolean terrainDiffusion$deepOceanProfile;
+    @Unique private boolean terrainDiffusion$wetlands;
     @Unique private int terrainDiffusion$seaLevel;
     @Unique private BlockState terrainDiffusion$defaultFluid;
 
@@ -37,10 +39,11 @@ public abstract class DeepOceanFluidPickerMixin {
     private void terrainDiffusion$detectDeepOceanProfile(BiomeSource biomeSource,
             Holder<NoiseGeneratorSettings> settings, CallbackInfo ci) {
         var source = TerrainDiffusionBiomeSources.find(biomeSource);
+        this.terrainDiffusion$wetlands = source != null && source.naturalBiomes();
         this.terrainDiffusion$deepOceanProfile = source != null
                 && source.undergroundProfileVersion() == 2
                 && settings.is(UndergroundGeneration.V2_SETTINGS);
-        if (this.terrainDiffusion$deepOceanProfile) {
+        if (source != null) {
             NoiseGeneratorSettings value = settings.value();
             this.terrainDiffusion$seaLevel = value.seaLevel();
             this.terrainDiffusion$defaultFluid = value.defaultFluid();
@@ -64,11 +67,18 @@ public abstract class DeepOceanFluidPickerMixin {
 
     @Unique
     private Aquifer.FluidPicker terrainDiffusion$picker(Supplier<Aquifer.FluidPicker> vanilla, int minY) {
-        if (!this.terrainDiffusion$deepOceanProfile) return vanilla.get();
+        Aquifer.FluidPicker original = vanilla.get();
+        if (!this.terrainDiffusion$deepOceanProfile)
+            return this.terrainDiffusion$wetlands
+                    ? new WetlandFluidPicker(original, this.terrainDiffusion$defaultFluid, this.terrainDiffusion$seaLevel)
+                    : original;
         Aquifer.FluidStatus lava = new Aquifer.FluidStatus(minY + 8, Blocks.LAVA.defaultBlockState());
         Aquifer.FluidStatus water = new Aquifer.FluidStatus(this.terrainDiffusion$seaLevel,
                 this.terrainDiffusion$defaultFluid);
-        return (x, y, z) -> DeepOceanFluidPolicy.useLava(y, minY, this.terrainDiffusion$seaLevel)
-                ? lava : water;
+        Aquifer.FluidPicker deep = (x, y, z) -> DeepOceanFluidPolicy.useLava(y, minY,
+                this.terrainDiffusion$seaLevel) ? lava : water;
+        return this.terrainDiffusion$wetlands
+                ? new WetlandFluidPicker(deep, this.terrainDiffusion$defaultFluid, this.terrainDiffusion$seaLevel)
+                : deep;
     }
 }

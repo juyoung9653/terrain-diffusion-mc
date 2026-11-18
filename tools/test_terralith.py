@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None):
     package = Path("com/github/xandergos/terraindiffusionmc/pipeline")
     sources = [ROOT / "common/src/main/java" / package / (name + ".java")
                for name in ("FastNoiseLite", "TerralithBiomeClassifier", "BiomeClassifier", "MacroBiomeContext",
-                            "BroadEcologyClimate", "EcologyClassifier", "WetlandEcology", "EcologyData", "EcologyDataCache", "EcologyShowcaseProfile", "ShoreClassifier", "ShoreContext")]
+                            "BroadEcologyClimate", "EcologyClassifier", "WetlandEcology", "WetlandTerrain", "ElevationDetail", "EcologyData", "EcologyDataCache", "EcologyShowcaseProfile", "ShoreClassifier", "ShoreContext")]
     for name in ("ShoreClassifierTest", "ShoreContextTest"):
         sources.append(ROOT / "common/src/test/java" / package / (name + ".java"))
     sources.append(ROOT / "common/src/test/java" / package / "TerralithBiomeClassifierTest.java")
@@ -129,6 +129,7 @@ def main(argv: list[str] | None = None):
     sources.append(ROOT / "common/src/test/java" / package / "BroadEcologyClimateTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "EcologyClassifierTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "WetlandEcologyTest.java")
+    sources.append(ROOT / "common/src/test/java" / package / "WetlandTerrainTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "SnowPatchGeometryTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "SnowTerrainRetentionTest.java")
     sources.append(ROOT / "common/src/test/java" / package / "EcologyShowcaseProfileTest.java")
@@ -158,6 +159,7 @@ def main(argv: list[str] | None = None):
     child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.BroadEcologyClimateTest")
     child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifierTest")
     child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.WetlandEcologyTest")
+    child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.WetlandTerrainTest")
     child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.SnowPatchGeometryTest")
     child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.SnowTerrainRetentionTest")
     child(java, "-cp", classpath, "com.github.xandergos.terraindiffusionmc.pipeline.EcologyShowcaseProfileTest")

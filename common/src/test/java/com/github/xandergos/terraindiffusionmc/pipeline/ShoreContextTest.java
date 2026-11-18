@@ -3,19 +3,19 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 /** Numeric contract for finite, globally addressed shore support. */
 public final class ShoreContextTest {
     public static void main(String[] args) {
-        int h=500,w=500,n=h*w; float[] e=new float[n], c=new float[4*n]; java.util.Arrays.fill(e,100);
+        int h=800,w=800,n=h*w; float[] e=new float[n], c=new float[4*n]; java.util.Arrays.fill(e,100);
         // A straight sea at x<0: its 96-block outer ring is half open.
-        for(int r=0;r<h;r++)for(int x=0;x<w;x++)if(x-250<0)e[r*w+x]=-20;
-        var a=MacroBiomeContext.build(e,c,-250,-250,h,w,1,16,0,10,1,1).shore();
+        for(int r=0;r<h;r++)for(int x=0;x<w;x++)if(x-400<0)e[r*w+x]=-20;
+        var a=MacroBiomeContext.build(e,c,-400,-400,h,w,1,16,0,10,1,1).shore();
         require(a.waterDistanceBlocks(0)<=24 && a.openWaterFraction(0)>.35f && a.openWaterFraction(0)<.65f,"straight shore");
-        java.util.Arrays.fill(e,100); for(int r=240;r<=260;r++)for(int x=240;x<=260;x++)e[r*w+x]=-20;
-        var b=MacroBiomeContext.build(e,c,-250,-250,h,w,1,16,0,23,1,1).shore();
+        java.util.Arrays.fill(e,100); for(int r=390;r<=410;r++)for(int x=390;x<=410;x++)e[r*w+x]=-20;
+        var b=MacroBiomeContext.build(e,c,-400,-400,h,w,1,16,0,23,1,1).shore();
         require(b.waterDistanceBlocks(0)<=24 && b.openWaterFraction(0)==0,"small lake support");
         java.util.Arrays.fill(e,100);
-        var inland=MacroBiomeContext.build(e,c,-250,-250,h,w,2,8,0,0,1,1).shore();
+        var inland=MacroBiomeContext.build(e,c,-400,-400,h,w,2,8,0,0,1,1).shore();
         require(inland.waterDistanceBlocks(0)>24 && inland.openWaterFraction(0)==0 && inland.reliefSlope(0)==0,"inland");
-        for(int r=0;r<h;r++)for(int x=0;x<w;x++) e[r*w+x]=x<250?-20:(x-250)*4;
-        var steep=MacroBiomeContext.build(e,c,-250,-250,h,w,1,16,0,1,1,1).shore();
+        for(int r=0;r<h;r++)for(int x=0;x<w;x++) e[r*w+x]=x<400?-20:(x-400)*4;
+        var steep=MacroBiomeContext.build(e,c,-400,-400,h,w,1,16,0,1,1,1).shore();
         require(steep.reliefSlope(0)>0,"relief");
         for (int scale : new int[]{1, 2}) checkSplit(scale);
         float[] owned = {3};
@@ -25,7 +25,7 @@ public final class ShoreContextTest {
         System.out.println("ShoreContextTest: PASS (pond, exposure, relief, immutable, negative-coordinate split at scales 1/2)");
     }
     private static void checkSplit(int scale) {
-        int n = 700, origin = -350;
+        int n = 800, origin = -400;
         float[] e = new float[n * n], climate = new float[4 * n * n];
         for (int z = 0; z < n; z++) for (int x = 0; x < n; x++) {
             float worldX = (origin + x + .5f) * scale - .5f;

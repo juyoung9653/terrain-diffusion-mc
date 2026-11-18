@@ -9,8 +9,10 @@ final class MacroBiomeContext {
     static final int REGION_BLOCKS = 128;
     static final int COAST_BLOCKS = 24;
     private static final int ANCHOR_JITTER = 32;
-    private static final int CONTEXT_PAD = 192;
+    // Includes every coastal path plus the exposure window at its sea-facing seed.
+    static final int CONTEXT_PAD = 288;
     private static final int HABITAT_RADIUS = 16;
+    private static final int MARINE_EXPOSURE_RADIUS = 64;
     private static final int[] RING_64_I = new int[16], RING_64_J = new int[16], RING_96_I = new int[16], RING_96_J = new int[16];
     static {
         for (int k = 0; k < 16; k++) {
@@ -27,7 +29,35 @@ final class MacroBiomeContext {
     static BiomeClassifier.TerralithContext build(float[] elevation, float[] climate,
                                                    int nativeI0, int nativeJ0, int nativeH, int nativeW,
                                                    int scale, float physicalPixelSize, int i0, int j0, int height, int width) {
-        if (climate == null || climate.length < 4 * nativeH * nativeW)
+        return build(elevation, climate, nativeI0, nativeJ0, nativeH, nativeW,
+                scale, physicalPixelSize, i0, j0, height, width, 0L, false);
+    }
+    static BiomeClassifier.TerralithContext build(float[] elevation, float[] climate,
+                                                   int nativeI0, int nativeJ0, int nativeH, int nativeW,
+                                                   int scale, float physicalPixelSize, int i0, int j0,
+                                                   int height, int width, long worldSeed) {
+        return build(elevation, climate, nativeI0, nativeJ0, nativeH, nativeW,
+                scale, physicalPixelSize, i0, j0, height, width, worldSeed, false);
+    }
+
+    /** Ground requests need the same habitat geometry, without the Terralith climate planes. */
+    static ShoreContext terrain(float[] elevation, int nativeI0, int nativeJ0, int nativeH, int nativeW,
+                                int scale, float physicalPixelSize, int i0, int j0, int height, int width) {
+        return build(elevation, null, nativeI0, nativeJ0, nativeH, nativeW,
+                scale, physicalPixelSize, i0, j0, height, width, 0L, true).shore();
+    }
+    static ShoreContext terrain(float[] elevation, int nativeI0, int nativeJ0, int nativeH, int nativeW,
+                                int scale, float physicalPixelSize, int i0, int j0, int height, int width,
+                                long worldSeed) {
+        return build(elevation, null, nativeI0, nativeJ0, nativeH, nativeW,
+                scale, physicalPixelSize, i0, j0, height, width, worldSeed, true).shore();
+    }
+
+    private static BiomeClassifier.TerralithContext build(float[] elevation, float[] climate,
+                                                   int nativeI0, int nativeJ0, int nativeH, int nativeW,
+                                                   int scale, float physicalPixelSize, int i0, int j0,
+                                                   int height, int width, long worldSeed, boolean terrainOnly) {
+        if (!terrainOnly && (climate == null || climate.length < 4 * nativeH * nativeW))
             throw new IllegalArgumentException("macro context needs four climate channels");
         int fieldI0 = i0 - CONTEXT_PAD, fieldJ0 = j0 - CONTEXT_PAD;
         int fieldH = height + 2 * CONTEXT_PAD, fieldW = width + 2 * CONTEXT_PAD;
@@ -37,6 +67,8 @@ final class MacroBiomeContext {
                     scale, fieldI0 + r, fieldJ0 + c);
 
         int[] oceanDistance = coastDistance(smooth, fieldH, fieldW, height, width);
+        int[] waterArea = waterArea(smooth, fieldH, fieldW);
+        int[] marineDistance = marineDistances(smooth, waterArea, fieldH, fieldW, physicalPixelSize);
         // Habitat follows a valley floor, not individual block-scale bumps.
         // Keep this field separate: coast distance, climate anchors and terrain
         // continue to use the original samples. The global halo keeps tile overlaps exact.
@@ -45,19 +77,23 @@ final class MacroBiomeContext {
         float[] e = new float[n], slope = new float[n], temp = new float[n], precip = new float[n], cv = new float[n];
         boolean[] coast = new boolean[n];
         float[] distance = new float[n], open = new float[n], relief = new float[n], valley = new float[n];
-        AnchorTable anchors = new AnchorTable(i0, j0, height, width);
+        float[] marine = new float[n];
+        AnchorTable anchors = terrainOnly ? null : new AnchorTable(i0, j0, height, width);
         for (int r = 0; r < height; r++) for (int c = 0; c < width; c++) {
             int worldI = i0 + r, worldJ = j0 + c;
-            Anchor anchor = anchors.nearest(worldI, worldJ);
-            int anchorI = anchor.i, anchorJ = anchor.j;
-            int fr = anchorI - fieldI0, fc = anchorJ - fieldJ0, out = r * width + c;
-            anchor.sample(smooth, fieldW, fr, fc, physicalPixelSize, climate,
-                    nativeI0, nativeJ0, nativeH, nativeW, scale);
-            e[out] = anchor.e;
-            slope[out] = anchor.slope;
-            temp[out] = anchor.temp;
-            precip[out] = anchor.precip;
-            cv[out] = anchor.cv;
+            int out = r * width + c;
+            if (!terrainOnly) {
+                Anchor anchor = anchors.nearest(worldI, worldJ);
+                int anchorI = anchor.i, anchorJ = anchor.j;
+                int fr = anchorI - fieldI0, fc = anchorJ - fieldJ0;
+                anchor.sample(smooth, fieldW, fr, fc, physicalPixelSize, climate,
+                        nativeI0, nativeJ0, nativeH, nativeW, scale);
+                e[out] = anchor.e;
+                slope[out] = anchor.slope;
+                temp[out] = anchor.temp;
+                precip[out] = anchor.precip;
+                cv[out] = anchor.cv;
+            }
             int local = out;
             coast[out] = oceanDistance[local] <= COAST_BLOCKS * COAST_BLOCKS;
             // The bounded distance transform is exact only within the coast radius.
@@ -78,7 +114,14 @@ final class MacroBiomeContext {
                     / (2 * HABITAT_RADIUS * physicalPixelSize);
             float dz = (habitat[center + HABITAT_RADIUS * fieldW] - habitat[center - HABITAT_RADIUS * fieldW])
                     / (2 * HABITAT_RADIUS * physicalPixelSize);
-            valley[out] = WetlandEcology.inlandPotential((float) Math.sqrt(dx * dx + dz * dz), crossValley);
+            float habitatSlope = (float) Math.sqrt(dx * dx + dz * dz);
+            valley[out] = WetlandEcology.inlandPotential(habitatSlope, crossValley);
+            if (marineDistance[center] <= WetlandEcology.MARINE_REACH_BLOCKS * 10) {
+                // Small raw height ripples must not punch holes in the same lowland.
+                // The path still rejects actual high barriers; vegetation checks real support.
+                marine[out] = WetlandEcology.marineLowlandPotential(centerHeight / physicalPixelSize,
+                        habitatSlope, marineDistance[center] / 10f);
+            }
             if (!coast[out]) continue;
             int wet = 0;
             float lo = Float.POSITIVE_INFINITY, hi = Float.NEGATIVE_INFINITY;
@@ -94,7 +137,102 @@ final class MacroBiomeContext {
             }
             open[out] = wet / 16f; relief[out] = (hi - lo) / (192f * physicalPixelSize);
         }
-        return new BiomeClassifier.TerralithContext(e, slope, temp, precip, cv, coast, new ShoreContext(distance, open, relief, valley));
+        // Shore/climate admission uses smooth terrain.  Water containment must
+        // instead see the exact post-detail density floor used at scale > 1.
+        // The existing 288-block halo leaves one cell for Sobel detail and the
+        // full warped wetland envelope plus its five-block dry-bank distance.
+        float[] wetlandGround = scale == 1 ? smooth : ElevationDetail.interior(smooth, fieldH, fieldW,
+                fieldI0, fieldJ0, physicalPixelSize, physicalPixelSize * scale);
+        int wetlandPad = scale == 1 ? CONTEXT_PAD : CONTEXT_PAD - 1;
+        int wetlandH = scale == 1 ? fieldH : fieldH - 2;
+        int wetlandW = scale == 1 ? fieldW : fieldW - 2;
+        return new BiomeClassifier.TerralithContext(e, slope, temp, precip, cv, coast,
+                new ShoreContext(distance, open, relief, valley, marine,
+                        WetlandTerrain.build(wetlandGround, wetlandH, wetlandW, physicalPixelSize,
+                                wetlandPad, height, width, worldSeed, j0, i0)));
+    }
+
+    /** Bounded lowland paths using only this immutable terrain halo, never generated river water.
+     * Seed land beside negative-elevation water; keep the sea out of the queue. Diagonal paths
+     * cannot cut across raised corners. Exposure is checked at the coast, not again inland:
+     * otherwise the exposure window itself truncates an otherwise connected lowland.
+     * CONTEXT_PAD covers the whole bounded path and its coastal seed's exposure window.
+     */
+    private static int[] marineDistances(float[] elevation, int[] waterArea, int h, int w,
+                                         float physicalPixelSize) {
+        int limit = WetlandEcology.MARINE_REACH_BLOCKS * 10;
+        float ceiling = WetlandEcology.MARINE_MAX_ELEVATION_BLOCKS * physicalPixelSize;
+        int[] distance = new int[elevation.length];
+        java.util.Arrays.fill(distance, limit + 1);
+        java.util.PriorityQueue<MarineStep> queue = new java.util.PriorityQueue<>(
+                java.util.Comparator.comparingInt(MarineStep::distance));
+        for (int r = MARINE_EXPOSURE_RADIUS; r < h - MARINE_EXPOSURE_RADIUS; r++)
+            for (int c = MARINE_EXPOSURE_RADIUS; c < w - MARINE_EXPOSURE_RADIUS; c++) {
+            int index = r * w + c;
+            if (!marineLand(elevation[index], ceiling)) continue;
+            int best = limit + 1;
+            for (int dr = -1; dr <= 1; dr++) for (int dc = -1; dc <= 1; dc++) {
+                if (dr == 0 && dc == 0) continue;
+                if (!(elevation[index + dr * w + dc] < 0)) continue;
+                if (dr != 0 && dc != 0 && (!marinePassable(elevation[index + dr * w], ceiling)
+                        || !marinePassable(elevation[index + dc], ceiling))) continue;
+                best = Math.min(best, dr == 0 || dc == 0 ? 10 : 14);
+            }
+            float exposure = best <= limit ? coastalWaterFraction(waterArea, w, r, c) : 0;
+            if (best <= limit && exposure >= .125f && exposure <= .85f) {
+                distance[index] = best;
+                queue.add(new MarineStep(index, best));
+            }
+        }
+        while (!queue.isEmpty()) {
+            MarineStep current = queue.remove();
+            if (current.distance != distance[current.index]) continue;
+            int r = current.index / w, c = current.index % w;
+            for (int dr = -1; dr <= 1; dr++) for (int dc = -1; dc <= 1; dc++) {
+                if ((dr == 0 && dc == 0) || r + dr < 0 || r + dr >= h || c + dc < 0 || c + dc >= w) continue;
+                int neighbor = current.index + dr * w + dc;
+                int next = current.distance + (dr == 0 || dc == 0 ? 10 : 14);
+                if (next > limit || next >= distance[neighbor] || !marineLand(elevation[neighbor], ceiling)) continue;
+                if (dr != 0 && dc != 0 && (!marinePassable(elevation[current.index + dr * w], ceiling)
+                        || !marinePassable(elevation[current.index + dc], ceiling))) continue;
+                distance[neighbor] = next;
+                queue.add(new MarineStep(neighbor, next));
+            }
+        }
+        return distance;
+    }
+
+    private record MarineStep(int index, int distance) { }
+
+    private static boolean marinePassable(float elevation, float ceiling) {
+        return Float.isFinite(elevation) && elevation <= ceiling;
+    }
+
+    private static boolean marineLand(float elevation, float ceiling) {
+        return elevation >= 0 && marinePassable(elevation, ceiling);
+    }
+
+    private static float coastalWaterFraction(int[] area, int width, int row, int col) {
+        int r0 = row - MARINE_EXPOSURE_RADIUS, r1 = row + MARINE_EXPOSURE_RADIUS + 1;
+        int c0 = col - MARINE_EXPOSURE_RADIUS, c1 = col + MARINE_EXPOSURE_RADIUS + 1;
+        int stride = width + 1;
+        int water = area[r1 * stride + c1] - area[r0 * stride + c1]
+                - area[r1 * stride + c0] + area[r0 * stride + c0];
+        return water / (float) ((r1 - r0) * (c1 - c0));
+    }
+
+    /** Area exposure varies gradually as a coastline moves across the window, unlike 16 ray votes. */
+    private static int[] waterArea(float[] elevation, int h, int w) {
+        int stride = w + 1;
+        int[] area = new int[(h + 1) * stride];
+        for (int r = 0; r < h; r++) {
+            int row = 0;
+            for (int c = 0; c < w; c++) {
+                if (elevation[r * w + c] < 0) row++;
+                area[(r + 1) * stride + c + 1] = area[r * stride + c + 1] + row;
+            }
+        }
+        return area;
     }
 
     /** Separable box mean; only interior values inside the existing global halo are used. */

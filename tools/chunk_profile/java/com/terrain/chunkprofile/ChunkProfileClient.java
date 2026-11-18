@@ -54,7 +54,10 @@ public final class ChunkProfileClient {
     private final Path progress = Path.of(System.getProperty("chunkprofile.progress", output.resolveSibling("progress.json").toString()));
     private final boolean fastnoiseBiomeAudit = Boolean.getBoolean("chunkprofile.fastnoiseBiomeAudit");
     private final boolean wetlandSpatialAudit = Boolean.getBoolean("chunkprofile.wetlandSpatialAudit");
-    private final boolean correctnessAudit = fastnoiseBiomeAudit || wetlandSpatialAudit;
+    private final boolean wetlandTerrainReview = Boolean.getBoolean("chunkprofile.wetlandTerrainReview");
+    private final boolean biomeVisualReview = Boolean.getBoolean("chunkprofile.biomeVisualReview");
+    private final String biomeReviewPlan = System.getProperty("chunkprofile.biomeReviewPlan", "");
+    private final boolean correctnessAudit = fastnoiseBiomeAudit || wetlandSpatialAudit || wetlandTerrainReview || biomeVisualReview;
     private final boolean verifyRestart = Boolean.getBoolean("chunkprofile.verifyRestart");
     private final Map<String,String> priorBiomeFingerprints = new LinkedHashMap<>();
     private final int firstX = integer("chunkprofile.chunkX", 1024, -1875000, 1875000);
@@ -176,9 +179,11 @@ public final class ChunkProfileClient {
         root.put("timingIsolated", !correctnessAudit);
         try {
             if (verifyRestart) {
-                if (!fastnoiseBiomeAudit) throw new IllegalStateException("Restart requires the biome audit");
-                loadPriorBiomeFingerprints();
-                root.put("fastnoiseBiomeAudit", Map.of("status", "passed", "mode", "saved-chunk-reload"));
+                if (!fastnoiseBiomeAudit && !biomeVisualReview) throw new IllegalStateException("Restart requires an enabled audit");
+                if (fastnoiseBiomeAudit) {
+                    loadPriorBiomeFingerprints();
+                    root.put("fastnoiseBiomeAudit", Map.of("status", "passed", "mode", "saved-chunk-reload"));
+                }
             } else if (fastnoiseBiomeAudit) {
                 root.put("fastnoiseBiomeAudit", server.submit(() -> FastNoiseBiomeAudit.run(server.overworld()))
                         .get(120, TimeUnit.SECONDS));
@@ -219,6 +224,23 @@ public final class ChunkProfileClient {
                 atomic(progress, Map.of("status", "wetland_spatial_sampling"));
                 root.put("wetlandSpatialAudit", WetlandSpatialAudit.run(server.overworld(),
                         output.resolveSibling("wetland-spatial.csv")));
+            }
+            if (wetlandTerrainReview && !verifyRestart && "success".equals(root.get("status"))) {
+                atomic(progress, Map.of("status", "wetland_terrain_review"));
+                Map<String,Object> review = WetlandTerrainReview.run(server);
+                root.put("wetlandTerrainReview", review);
+                if (!"passed".equals(review.get("status")))
+                    throw new IllegalStateException("Wetland terrain review did not complete every fixed site");
+            }
+            if (biomeVisualReview && "success".equals(root.get("status"))) {
+                if (biomeReviewPlan.isBlank()) throw new IllegalStateException("Biome visual review needs chunkprofile.biomeReviewPlan");
+                atomic(progress, Map.of("status", "biome_visual_review"));
+                Map<String,Object> review = BiomeVisualReview.run(server, Path.of(biomeReviewPlan), output);
+                root.put("biomeVisualReview", review);
+                if (!"captured".equals(review.get("status")))
+                    throw new IllegalStateException("Biome visual review did not capture required evidence");
+                server.submit(() -> server.saveEverything(false, true, true)).get(180, TimeUnit.SECONDS);
+                root.put("biomeVisualReviewSaveFlushed", true);
             }
         } catch (Throwable failure) { root.put("status","failed"); root.put("error",failure.toString()); LOG.error("Chunk profile phases failed", failure); }
         finally {
@@ -310,6 +332,15 @@ public final class ChunkProfileClient {
             report.put("readiness", Map.of("settleSecondsRequested", seconds(settleNanos), "streamsSettleSecondsRequested", seconds(streamsSettleNanos), "maxSettleSeconds",seconds(maxSettleNanos), "waitBeforeFirstTicketSeconds",seconds(readinessWait), "idleConfirmationSeconds",seconds(requiredIdleNanos()),"lastInferenceSnapshot",idleSnapshot));
             report.put("availableProcessors", Runtime.getRuntime().availableProcessors());
             report.put("timingIsolated", !correctnessAudit);
+            // A generic visual census deliberately observes the fixture after normal client
+            // startup.  It has no timing claim, so spawn-loaded target chunks are valid
+            // same-fixture evidence.  Performance and existing audit modes retain their
+            // fresh-target rejection below.
+            boolean visualEvidenceOnly = biomeVisualReview && !fastnoiseBiomeAudit && !wetlandSpatialAudit
+                    && !wetlandTerrainReview && !streamsGroundMarineAudit;
+            report.put("preloadedTargetPolicy", visualEvidenceOnly
+                    ? "accepted_same_fresh_fixture_for_visual_evidence"
+                    : "rejected_for_fresh_timing_or_existing_audit");
             report.put("timingScope", "loaded-chunk precheck through all FULL futures and ticket cleanup; baseline and cache-key snapshots are outside this interval; normal integrated-server activity continues");
             report.put("processCpuScope", "whole JVM process CPU delta, including all mod and native work during the measurement window");
             report.put("tdBefore", tdMetrics()); report.put("onnxBefore", onnxMetrics());
@@ -329,7 +360,8 @@ public final class ChunkProfileClient {
                 return result;
             }).get(180, TimeUnit.SECONDS);
             report.put("alreadyLoadedBefore", alreadyFull);
-            if (!verifyRestart && !alreadyFull.isEmpty()) throw new IllegalStateException("fresh target violation: chunks already loaded " + alreadyFull);
+            if (!verifyRestart && !visualEvidenceOnly && !alreadyFull.isEmpty())
+                throw new IllegalStateException("fresh target violation: chunks already loaded " + alreadyFull);
             atomic(progress, Map.of("status","running","phaseIndex",phaseIndex,"phaseCount",phaseCount,"completed",0,"total",chunks.size(),"startedUtc",Instant.now().toString()));
             sampler.start();
             int distance = 33 - ChunkLevel.byStatus(ChunkStatus.FULL);

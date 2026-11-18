@@ -5,6 +5,8 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
  * uses local valley convergence. Decoration must additionally check actual water/support.
  */
 public final class WetlandEcology {
+    static final int MARINE_REACH_BLOCKS = 192;
+    static final float MARINE_MAX_ELEVATION_BLOCKS = 4;
     public record Weights(float reedMarsh, float freshwaterSwamp, float mangrove, float riparian) {
         public float total() { return Math.min(1, reedMarsh + freshwaterSwamp + mangrove + riparian); }
     }
@@ -21,11 +23,34 @@ public final class WetlandEcology {
 
     public static float marineInfluence(float elevationMetres, float slope, float temperature,
                                         float moisture, float seaDistanceBlocks, float openWater, float relief) {
+        return marineClimate(temperature, moisture) * marineTerrainPotential(elevationMetres,
+                Math.max(slope, relief), seaDistanceBlocks, openWater);
+    }
+
+    static float marineClimate(float temperature, float moisture) {
+        return smooth(14, 22, temperature) * smooth(.55f, 1.05f, moisture);
+    }
+
+    /** Reach follows low land from the sea, not a radius that can jump over a coastal ridge. */
+    static float marineTerrainPotential(float elevationMetres, float habitatSlope,
+                                       float seaDistanceBlocks, float openWater) {
         if (!Float.isFinite(seaDistanceBlocks) || elevationMetres < 0 || openWater <= 0) return 0;
-        return smooth(16, 25, temperature) * smooth(.55f, 1.05f, moisture)
-                * (1 - smooth(1, 8, elevationMetres)) * (1 - smooth(.025f, .12f, Math.max(slope, relief)))
-                * (1 - smooth(6, 24, seaDistanceBlocks))
+        // Compatibility path without terrain context: keep metre-based local admission.
+        return (1 - smooth(2, 12, elevationMetres))
+                * (1 - smooth(.025f, .12f, habitatSlope))
+                * (1 - smooth(48, 96, seaDistanceBlocks))
                 * smooth(.03f, .15f, openWater) * (1 - smooth(.50f, .85f, openWater));
+    }
+
+    /** Habitat extent is measured in game blocks, like regional biome ownership.
+     * Pipeline metres must be divided by physicalPixelSize before calling this.
+     * This describes coastal woodland habitat, not a tidal flooding elevation.
+     */
+    static float marineLowlandPotential(float elevationBlocks, float habitatSlope, float seaDistanceBlocks) {
+        if (!Float.isFinite(elevationBlocks) || !Float.isFinite(seaDistanceBlocks)) return 0;
+        return (1 - smooth(2, MARINE_MAX_ELEVATION_BLOCKS, Math.max(0, elevationBlocks)))
+                * (1 - smooth(.025f, .12f, habitatSlope))
+                * (1 - smooth(128, MARINE_REACH_BLOCKS, seaDistanceBlocks));
     }
 
     public static Weights weights(EcologyClassifier.Sample sample) {

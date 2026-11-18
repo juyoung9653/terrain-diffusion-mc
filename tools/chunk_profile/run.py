@@ -21,6 +21,9 @@ sys.path.insert(0, str(ROOT / 'tools/optimization_bench'))
 sys.path.insert(0, str(ROOT / 'tools'))
 from probe_suite import exclusive_lock, atomic_json
 import launch
+from build_evidence import source_fingerprint
+from biome_review.contract import changed_biome_resource_ids, review_tool_fingerprint
+from biome_review.budget import check_budget
 import psutil
 
 WORK = ROOT / 'build/chunk-profile'
@@ -151,6 +154,8 @@ manifest_root = None
 
 def prepare(args):
     global manifest_root
+    if plan_path := getattr(args, 'biome_review_plan', None):
+        check_budget(json.loads(Path(plan_path).read_text(encoding='utf-8')))
     source = launch.DEFAULT_INSTANCE
     if args.decoder_fp16 and args.decoder_precision:
         raise RuntimeError('--decoder-fp16 cannot be combined with --decoder-precision')
@@ -372,7 +377,7 @@ def build():
         raise RuntimeError('Diagnostic source missing')
     result = subprocess.run([str(launch.DEFAULT_JAVA.with_name('javac.exe')), '-encoding', 'UTF-8', '--release', '21',
         '-proc:none', '-cp', launch.compile_classpath(launch.DEFAULT_LIBRARIES), '-d', str(classes), *map(str, sources)],
-        capture_output=True, text=True, creationflags=FLAGS)
+        capture_output=True, text=True, errors='replace', creationflags=FLAGS)
     (classes / 'compile.log').write_text(result.stdout + result.stderr, encoding='utf-8')
     if result.returncode:
         raise RuntimeError(result.stdout + result.stderr)
@@ -658,12 +663,148 @@ def _saved_chunk_headers_present(world, chunks):
     return True
 
 
+def _wetland_terrain_review_passed(receipt, target):
+    """Require the bounded final-world review without treating it as the spatial census."""
+    review = receipt.get('wetlandTerrainReview') if isinstance(receipt, dict) else None
+    if not isinstance(review, dict) or review.get('status') != 'passed':
+        return False
+    if review.get('seed') != -2049264310295890081 or review.get('scale') != 1:
+        return False
+    sites = review.get('sites')
+    expected = {'freshwater': [17383, 3260], 'mangrove': [17647, 3406],
+                'swamp_ruin': [17828, 3408]}
+    if (not isinstance(sites, list) or len(sites) != len(expected)
+            or {site.get('name') for site in sites if isinstance(site, dict)} != set(expected)):
+        return False
+    root = target.resolve()
+    for site in sites:
+        if not isinstance(site, dict) or site.get('status') != 'passed':
+            return False
+        if expected.get(site.get('name')) != site.get('center'):
+            return False
+        if site.get('reachedServerTicks', 0) < 100 or site.get('fullChunkCount') != 9:
+            return False
+        if site.get('siteChunkCount') != 9 or not site.get('clientTargetChunkArrived'):
+            return False
+        snapshots = site.get('surfaceWaterMudTreeSupportSnapshots')
+        eligibility = site.get('tickEligibility')
+        if (site.get('phase') != 'after_100_actual_server_ticks_before_ticket_release'
+                or not isinstance(snapshots, list) or len(snapshots) != 9
+                or not isinstance(eligibility, dict)
+                or eligibility.get('ticketLevel') != 31
+                or eligibility.get('allBlockTickEligible') is not True):
+            return False
+        path = site.get('screenshotPath')
+        if not isinstance(path, str):
+            return False
+        try:
+            screenshot = Path(path).resolve()
+            screenshot.relative_to(root)
+        except (OSError, ValueError):
+            return False
+        if not screenshot.is_file() or screenshot.stat().st_size < 1024:
+            return False
+    return True
+
+
+def _biome_review_plan(args, manifest, target, restart):
+    """Stage a review plan only after binding it to current sources and the clone JAR."""
+    supplied = getattr(args, 'biome_review_plan', None)
+    if not supplied:
+        return None
+    source = Path(supplied).resolve()
+    if not source.is_file():
+        raise RuntimeError(f'Biome review plan is not a file: {source}')
+    try:
+        plan = json.loads(source.read_text(encoding='utf-8'))
+    except (OSError, ValueError) as failure:
+        raise RuntimeError(f'Biome review plan is invalid JSON: {source}') from failure
+    if not isinstance(plan, dict) or plan.get('schema') != 1:
+        raise RuntimeError('Biome review plan must have schema 1')
+    check_budget(plan)  # Avoid starting Minecraft for a review that cannot run.
+    fingerprint = source_fingerprint(ROOT)
+    artifact = manifest['terrain_diffusion_artifact']['sha256']
+    if plan.get('sourceFingerprint') != fingerprint:
+        raise RuntimeError('Biome review plan sourceFingerprint differs from current production sources')
+    if plan.get('artifactSha256') != artifact:
+        raise RuntimeError('Biome review plan artifactSha256 differs from the selected fixture JAR')
+    if plan.get('seed') != manifest.get('seed') or plan.get('scale') != manifest.get('scale'):
+        raise RuntimeError('Biome review plan seed/scale differs from the prepared fixture')
+    if not isinstance(plan.get('requiredBiomes'), list) or not plan['requiredBiomes']:
+        raise RuntimeError('Biome review plan requires nonempty requiredBiomes')
+    omitted = changed_biome_resource_ids(ROOT) - set(plan['requiredBiomes'])
+    if omitted:
+        raise RuntimeError(f'Biome review plan omits changed biome resources: {sorted(omitted)}')
+    if not isinstance(plan.get('windows'), list) or not plan['windows']:
+        raise RuntimeError('Biome review plan requires windows')
+    for field in ('regressionSites', 'explicitSites'):
+        for site in plan.get(field, []):
+            if not isinstance(site, dict) or not isinstance(site.get('x'), int) or not isinstance(site.get('z'), int):
+                raise RuntimeError(f'Biome review {field} must contain integer x/z')
+            if not any(window['minX'] <= site['x'] <= window['maxX'] and window['minZ'] <= site['z'] <= window['maxZ']
+                       for window in plan['windows'] if isinstance(window, dict)):
+                raise RuntimeError('Biome review sites must stay inside plan windows')
+    staged = target / ('biome-visual-review-restart-plan.json' if restart else 'biome-visual-review-plan.json')
+    if staged.exists():
+        raise RuntimeError(f'Biome review plan destination already exists: {staged}')
+    shutil.copy2(source, staged)
+    if launch.sha256(source) != launch.sha256(staged):
+        raise RuntimeError('Biome review plan changed during staging')
+    return {'path': staged, 'sha256': launch.sha256(staged), 'source_fingerprint': fingerprint,
+            'artifact_sha256': artifact, 'review_tool_fingerprint': review_tool_fingerprint(ROOT), 'data': plan}
+
+
+def _biome_plan_chunks(plan):
+    chunks = []
+    for window in plan['windows']:
+        if not isinstance(window, dict) or not all(isinstance(window.get(key), int) for key in ('minX', 'maxX', 'minZ', 'maxZ')):
+            raise RuntimeError('Biome review plan has malformed window')
+        if window['minX'] > window['maxX'] or window['minZ'] > window['maxZ']:
+            raise RuntimeError('Biome review plan window bounds are inverted')
+        chunks.extend((x, z) for x in range(window['minX'] >> 4, (window['maxX'] >> 4) + 1)
+                      for z in range(window['minZ'] >> 4, (window['maxZ'] >> 4) + 1))
+    return chunks
+
+
+def _biome_visual_review_captured(receipt, target, plan):
+    review = receipt.get('biomeVisualReview') if isinstance(receipt, dict) else None
+    if not isinstance(review, dict) or review.get('status') != 'captured':
+        return False
+    if review.get('sourceFingerprint') != plan['source_fingerprint'] or review.get('artifactSha256') != plan['artifact_sha256']:
+        return False
+    if review.get('reviewToolFingerprint') != plan.get('review_tool_fingerprint'):
+        return False
+    if review.get('reviewToolFingerprint') != review_tool_fingerprint(ROOT):
+        return False
+    if review.get('diagnosticJarSha256') != plan.get('diagnostic_jar_sha256'):
+        return False
+    if review.get('coverageGaps') or not isinstance(review.get('sites'), list) or not review['sites']:
+        return False
+    root = target.resolve()
+    for site in review['sites']:
+        if site.get('status') != 'captured' or site.get('reachedServerTicks', 0) < 100 or site.get('tickEligible') is not True:
+            return False
+        images = site.get('images')
+        if not isinstance(images, list) or {row.get('view') for row in images if isinstance(row, dict)} != {'aerial', 'side', 'detail'}:
+            return False
+        for image in images:
+            try:
+                path = Path(image['path']).resolve()
+                path.relative_to(root)
+            except (KeyError, OSError, ValueError):
+                return False
+            if not path.is_file() or path.stat().st_size < 1024:
+                return False
+    return True
+
+
 def run(args, restart=False):
     target = WORK / launch.safe_name(args.name)
     manifest = json.loads((target / 'input-manifest.json').read_text(encoding='utf-8'))
     if not manifest['complete'] or (not restart and (target / 'process.json').exists()):
         raise RuntimeError('Run requires a prepared, unrun fixture')
     wetland_sites, wetland_baseline = _wetland_inputs(args, manifest, restart)
+    biome_review = _biome_review_plan(args, manifest, target, restart)
     if args.streams_settle_seconds and not args.request_telemetry:
         raise RuntimeError('--streams-settle-seconds requires --request-telemetry for the native trace')
     if any(p.info['name'] in ('java.exe', 'javaw.exe') for p in psutil.process_iter(['name'])):
@@ -676,6 +817,12 @@ def run(args, restart=False):
                 raise RuntimeError(f'Prepared input changed: {relative}')
     fastnoise_biome_audit = getattr(args, 'fastnoise_biome_audit', False)
     wetland_spatial_audit = getattr(args, 'wetland_spatial_audit', False)
+    wetland_terrain_review = getattr(args, 'wetland_terrain_review', False)
+    if wetland_terrain_review and restart:
+        raise RuntimeError('--wetland-terrain-review is a fresh-world-only final review')
+    if wetland_terrain_review and (manifest.get('seed') != -2049264310295890081
+                                   or manifest.get('scale') != 1):
+        raise RuntimeError('--wetland-terrain-review requires seed -2049264310295890081 and scale 1')
     expected_mods = manifest.get('expected_active_mod_jars', manifest.get('active_mod_jars')) + (1 if restart else 0)
     if len(list((target / 'mods').glob('*.jar'))) != expected_mods:
         raise RuntimeError('Prepared staged mod set changed')
@@ -713,10 +860,13 @@ def run(args, restart=False):
         prior_receipt = json.loads((target / 'receipt.json').read_text(encoding='utf-8'))
         if prior_result.get('exit_code') or prior_result.get('timed_out') or prior_receipt.get('status') != 'success':
             raise RuntimeError('Restart requires a prior successful profile run')
-        if not fastnoise_biome_audit:
-            raise RuntimeError('Restart requires --fastnoise-biome-audit')
-        if not prior.get('fastnoise_biome_audit') or not _audit_passed(prior_receipt):
+        if not (fastnoise_biome_audit or biome_review is not None):
+            raise RuntimeError('Restart requires --fastnoise-biome-audit or --biome-review-plan')
+        if fastnoise_biome_audit and (not prior.get('fastnoise_biome_audit') or not _audit_passed(prior_receipt)):
             raise RuntimeError('Restart requires a prior successful Fast Noise biome audit')
+        if biome_review is not None and (not prior.get('biome_review_plan_sha256')
+                                        or prior_receipt.get('biomeVisualReview', {}).get('status') != 'captured'):
+            raise RuntimeError('Biome visual review restart requires a prior successful capture')
         if wetland_spatial_audit != bool(prior.get('wetland_spatial_audit')):
             raise RuntimeError('Restart wetland spatial audit flag must match the prior run')
         if wetland_spatial_audit and not _wetland_spatial_audit_passed(prior_receipt, target):
@@ -731,6 +881,9 @@ def run(args, restart=False):
         requested = _requested_chunks(prior['regions'], prior['side'], prior['chunk_x'], prior['chunk_z'])
         if not _saved_chunk_headers_present(target / 'saves/chunk-profile', requested):
             raise RuntimeError('Restart requires prior generated chunks in the copied saved-world region files')
+        if biome_review is not None and not _saved_chunk_headers_present(target / 'saves/chunk-profile',
+                                                                          _biome_plan_chunks(biome_review['data'])):
+            raise RuntimeError('Biome visual review restart requires its plan windows from the first saved lifecycle')
         # Minecraft rotates latest.log on launch. Retain the first lifecycle's
         # game logs before starting the independent saved-chunk reload process.
         for name in ('latest.log', 'debug.log'):
@@ -745,7 +898,7 @@ def run(args, restart=False):
         _verify_restart_inputs(target, snapshot)
         jar = diagnostic
     else:
-        _audit_preflight(target, fastnoise_biome_audit, wetland_spatial_audit)
+        _audit_preflight(target, fastnoise_biome_audit, wetland_spatial_audit or wetland_terrain_review or biome_review is not None)
         jar = build()
         shutil.copy2(jar, target / 'mods' / jar.name)
     cfg = dict(line.split('=', 1) for line in (target / 'source-instance.cfg').read_text(encoding='utf-8').splitlines() if '=' in line)
@@ -765,6 +918,23 @@ def run(args, restart=False):
         runtime.property.append('chunkprofile.fastnoiseBiomeAudit=true')
     if wetland_spatial_audit and not restart:
         runtime.property.append('chunkprofile.wetlandSpatialAudit=true')
+    if wetland_terrain_review and not restart:
+        runtime.property.extend(('chunkprofile.wetlandTerrainReview=true',
+                                 'chunkprofile.wetlandTerrainReviewScale=1'))
+    if biome_review is not None:
+        if biome_review['review_tool_fingerprint'] != review_tool_fingerprint(ROOT):
+            raise RuntimeError('Biome review tool changed after plan staging')
+        biome_review['diagnostic_jar_sha256'] = launch.sha256(jar)
+        runtime.property.extend(('chunkprofile.biomeVisualReview=true',
+                                 f'chunkprofile.biomeReviewPlan={biome_review["path"]}',
+                                 f'chunkprofile.biomeReviewToolFingerprint={biome_review["review_tool_fingerprint"]}',
+                                 f'chunkprofile.biomeReviewDiagnosticJarSha256={biome_review["diagnostic_jar_sha256"]}'))
+        runtime.width, runtime.height = 1600, 900
+        trace_sites = biome_review['data'].get('terrainTraceSites', [])
+        if trace_sites:
+            if len(trace_sites) > 8 or any(not isinstance(s, dict) or type(s.get('x')) is not int or type(s.get('z')) is not int for s in trace_sites):
+                raise RuntimeError('terrainTraceSites requires at most 8 integer x/z positions')
+            runtime.property.append('td.wetland.tracePositions=' + ';'.join(f"{s['x']},{s['z']}" for s in trace_sites))
     if wetland_sites is not None and not restart:
         runtime.property.append(f'chunkprofile.wetlandSites={wetland_sites}')
     if restart:
@@ -803,8 +973,13 @@ def run(args, restart=False):
         'streams_ground_marine_audit': args.streams_ground_marine_audit,
         'fastnoise_biome_audit': fastnoise_biome_audit,
         'wetland_spatial_audit': wetland_spatial_audit,
+        'wetland_terrain_review': wetland_terrain_review,
         'wetland_sites': wetland_sites,
         'wetland_baseline': wetland_baseline,
+        'biome_review_plan': None if biome_review is None else str(biome_review['path']),
+        'biome_review_plan_sha256': None if biome_review is None else biome_review['sha256'],
+        'biome_review_tool_fingerprint': None if biome_review is None else biome_review['review_tool_fingerprint'],
+        'biome_review_diagnostic_jar_sha256': None if biome_review is None else biome_review['diagnostic_jar_sha256'],
         'restart': restart,
         'streams_ablation': streams_ablation,
         'heap_min_mib':runtime.heap_min_mib, 'heap_max_mib':runtime.heap_max_mib})
@@ -873,7 +1048,17 @@ def run(args, restart=False):
     passed = not (process.returncode or timed_out or value is None or value.get('status') != 'success'
                    or not unchanged or (fastnoise_biome_audit and not _audit_passed(value))
                    or (wetland_spatial_audit and not restart
-                       and not _wetland_spatial_audit_passed(value, target)))
+                       and not _wetland_spatial_audit_passed(value, target))
+                   or (wetland_terrain_review and not restart
+                       and not _wetland_terrain_review_passed(value, target))
+                   or (biome_review is not None and not _biome_visual_review_captured(value, target, biome_review)))
+    if biome_review is not None:
+        if (source_fingerprint(ROOT) != biome_review['source_fingerprint']
+                or manifest['terrain_diffusion_artifact']['sha256'] != biome_review['artifact_sha256']
+                or launch.sha256(target / 'mods' / manifest['terrain_diffusion_artifact']['source_filename']) != biome_review['artifact_sha256']
+                or launch.sha256(biome_review['path']) != biome_review['sha256']):
+            passed = False
+            result['biome_visual_review_provenance'] = {'status': 'failed', 'error': 'sources, selected artifact, or staged plan changed'}
     if wetland_spatial_audit and not restart and not process.returncode and not timed_out and value is not None:
         try:
             result['wetland_analysis'] = _wetland_report(value, target, manifest, wetland_sites, wetland_baseline)
@@ -882,7 +1067,7 @@ def run(args, restart=False):
             passed = False
     result['passed'] = passed
     save(target / result_name, result)
-    if not restart and passed and fastnoise_biome_audit:
+    if not restart and passed and (fastnoise_biome_audit or biome_review is not None):
         # Freeze only after the first lifecycle has stopped and its receipt has
         # passed. A user change between the two lifecycles is therefore rejected.
         _freeze_restart_inputs(target)
@@ -906,6 +1091,10 @@ def main():
                    help='require the Fast Noise 1.0.13 biome-palette boundary and generated-chunk audit')
     p.add_argument('--wetland-spatial-audit', action='store_true',
                    help='require a fresh 4x256x256 wetland spatial CSV audit; restart verifies the first receipt')
+    p.add_argument('--wetland-terrain-review', action='store_true',
+                   help='fresh-only bounded final review of three fixed wetland/ruin sites with native screenshots; does not run the spatial CSV census')
+    p.add_argument('--biome-review-plan', type=Path,
+                   help='schema-1 generic native biome visual-review plan bound to current sources and selected fixture JAR; supports saved-chunk restart captures')
     p.add_argument('--wetland-sites',
                    help='exactly four block-coordinate sites: x,z;x,z;x,z;x,z')
     p.add_argument('--wetland-seed', type=int,

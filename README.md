@@ -588,7 +588,8 @@ channels. Aquatic decoration additionally checks actual water and support.
 Never query later Streams generation from the initial biome classifier: that
 would make selection depend on generation order or recursively request terrain.
 The wetness and marine fields must survive ecology cache eviction, cropping and
-terrain replay; replay tiles now use format 3 and reject older snapshots.
+terrain replay; replay tiles now use format 4, retain nullable wetland water
+planes, and reject older snapshots.
 Existing chunks retain their saved biomes; inspect fresh chunks for this change.
 
 Valley habitat uses a 16-block-radius mean height field and 16-block slope
@@ -625,14 +626,48 @@ Feature weights use cached moisture rather than already-blended tree cover or
 discrete biome labels. The reed showcase uses a seasonal climate to retain its
 open canopy.
 
-Before vegetation, `eco_surface` attempts small, one-block-deep inland pools on
-natural soil. It validates the entire footprint, bed and enclosing bank before
-writing, permits at most one block of surface relief, stays inside its chunk,
-and skips structure-referenced chunks and existing water. This adds shallow water
-without changing diffusion heights or querying later Streams generation.
-`WetlandPoolPlannerTest` (included in `tools/test_terralith.py`) covers containment
-and rejected substrate/clearance cases. Existing chunks keep their saved blocks
-and biomes; validate changes in fresh fixtures.
+Natural-ecology worlds now shape shallow wetland terrain before density filling.
+`WetlandTerrain` shares the existing freshwater/mangrove habitat weights: coastal
+wetlands use sea level, while freshwater uses a stable local minimum over a
+160-block halo. Sea-level freshwater floodplains are admitted too. The planner
+lowers suitable columns by at most four blocks; coherent dry hummocks and partial
+cuts preserve gradual banks. Upsampled worlds calculate water planes from the
+same final elevation detail used by density, while habitat retains smooth terrain.
+Ground-only, partial and full sampling must agree on both shaped heights and water
+planes at scales 1?6. Worlds without `natural_biomes` retain unshaped terrain.
+
+The fluid picker fills only the shallow band below an elevated wetland surface;
+coastal water uses the native sea-level picker. Carvers preserve shallow natural
+water beds. `eco_surface` decorates existing shallow water with suitable mud and
+wetland trees can root in one or two source-water blocks over natural substrate.
+The earlier chunk-local `WetlandPools` feature is no longer invoked: it cannot
+produce a continuous flooded landscape across chunk boundaries. Existing chunks
+retain saved terrain and vegetation; inspect fresh chunks for this change.
+
+The pictured `structory:swamp_ruin` uses native beard terrain adaptation outside
+its fixed stone templates. TD worlds now exclude that structure's native beard
+from `StructureBeardifierMixin`, removing the broad artificial terrain halo while
+preserving its templates. Ordinary worlds and other native structures retain their
+existing adaptation. Validate actual template support and the surrounding terrain
+in a fresh fixture; removing beard does not rewrite already-generated chunks.
+
+For the fixed November 17 wetland/ruin sites, the chunk profiler supports
+`--wetland-terrain-review` after its requested FULL phases (seed and scale are
+guarded). It holds level-31 tickets, verifies block-tick eligibility, observes
+100 actual server ticks per 3-by-3 site, records physical snapshots, and waits for
+native screenshots before closing. Merely reaching FULL or waiting for inference
+to become idle does not establish water settlement. The disposable review world
+uses clear daytime lighting. `tools/ecology/analyze_wetland_terrain.py` separately
+reads saved FULL blocks without modifying them; use `waterByBiome` for wetland
+coverage so nearby ocean water is not counted as newly flooded swamp.
+
+The final `wetland-terrain-nov17-banks-final` full-pipeline client run passed with
+289 mods at scale 1. In two saved 256-by-256 windows, water occupied 26.88% of
+freshwater-swamp columns and 55.97% of mangrove-swamp columns (nearby ocean
+excluded). The three review sites retained source water over measured beds after
+100–101 ticking updates; native daytime screenshots were inspected, including the
+swamp ruin. These are fixed-site results, not global coverage or all-scale native
+validation. See [reviewed evidence](build/wetland-terrain-nov17-review/reviewed-evidence.json).
 
 The `wetland-breadth-20261117-verified` full-pipeline run passed at scale one
 with 289 installed mods. In the inherited freshwater window, swamp covered
@@ -646,11 +681,88 @@ and physical-block checks, not rendered scenery acceptance or global frequency.
 See the [reviewed evidence](build/chunk-profile/wetland-breadth-20261117-verified/reviewed-evidence.json)
 and [habitat map](build/chunk-profile/wetland-breadth-20261117-verified/wetland-analysis/freshwater.png).
 
+The subsequent player-site reproduction at `3570,2175`, seed
+`-2049264310295890081`, found that the installed JAR (`927326e7...`) still used
+the old reed-first weights; the tested candidate (`61f29356...`) had not been
+installed. In the same 128-by-128-block area, the actual saved world contained
+592 freshwater-swamp columns (3.6%); fresh full-pipeline generation with the
+candidate and 289 installed mods contained 8,192 (50%) across 64 FULL chunks.
+See the [saved-biome comparison](build/wetland-player-nov17/before-after.png) and
+[reviewed evidence](build/wetland-player-nov17/reviewed-evidence.json).
+This compares saved biome coverage, not matched generation order or rendered
+scenery. Resource startup errors and shutdown-time Streams prefetch cancellation
+are recorded separately from successful requested-chunk measurements.
+For recurring reports after an update, compare the installed JAR bytes with the
+tested artifact before attributing the symptom to old chunks. A source fix or
+development build with an empty validation list is not an installed fix; finish
+the validated build/install workflow below and verify the destination hash.
+The follow-up `wetland-player-nov17-release` river regression passed after 100
+settled ticks on 12 fresh chunks. The validated rebuild retained the tested
+candidate bytes and was then installed; the destination hash, previous-version
+backup, unrelated mods and original saved region hashes were checked in the
+[installation receipt](build/wetland-player-nov17/installation.json).
+
+The later screenshots at `17647,3406` (mangrove) and `17383,3260`
+(freshwater) exposed separate remaining defects: marine habitat reused the
+24-block beach context, while mud used independent per-column random rolls.
+Marine potential now follows bounded lowland paths from the sea-level terrain
+mask, with gradual area exposure and habitat-scale slope; it cannot cross raised
+coastal barriers. This is a terrain proxy, not salinity or tidal simulation:
+large enclosed below-sea-level lakes remain ambiguous. Mud uses continuous
+24/48-block fields while retaining the actual substrate and water exclusions.
+In two fresh 128-by-128 windows with the same seed and 289 mods, saved mangrove
+coverage increased from 432 to 3,296 columns; its largest connected component
+increased from 144 to 2,272 columns (approximate interior width 7 to 25 blocks).
+Actual mangrove logs/roots increased from zero to 254/841 blocks. Freshwater
+isolated mud columns fell from 475 to 16 and mud/non-mud soil-edge transitions
+from 29.0% to 5.1%. These saved-block comparisons do not match player traversal,
+generation order or render settings; do not present them as a global minimum
+biome size or a hydraulic simulation. See the
+[before](build/wetland-screens-nov17/shape-before/summary.json) and
+[after](build/wetland-screens-nov17/shape-after/summary.json) measurements.
+The matching `bab3066b...` JAR subsequently passed the settled river regression,
+was installed with the previous `61f29356...` retained, and was opened in a new
+`TD-Wetland-Fixed-20261117` preview. Both screenshot sites were also inspected
+in the actual Prism client with the user's shaders; see the
+[installation receipt](build/wetland-screens-nov17/installation.json) and
+[preview review](build/wetland-screens-nov17/preview-launch.json).
+
+That earlier mangrove result was still insufficient: its 1,024-block sampled
+window had 88 components and only 2.27% mangrove coverage. The raw 2--12-metre
+height fade cut through a single Minecraft height band at native scale 1
+(16 metres per block). Coastal habitat now uses smoothed height in game blocks,
+with full suitability through two blocks, a four-block raw barrier, and bounded
+192-block paths from qualifying coastal seeds. Sea exposure is checked at the
+seed, so an inland exposure window cannot truncate an otherwise connected path.
+These are gameplay habitat dimensions, not a tidal flood-height simulation.
+All three `MacroBiomeContext.build` callers (`handlePartial`, `handle1x`, and
+`handleUpsampled`) must supply its shared `CONTEXT_PAD`; changing only the full
+requests leaves partial biome queries with an undersized halo. Validate both
+broad connected extent and the reported coordinate, and inspect saved water
+footprints: an increased tiny component or its bounding box alone is not
+visual acceptance of a biome-sized swamp.
+The follow-up `wetland-complete-nov17-candidate-v2` run measured 512 fresh FULL
+chunks with the 289-mod pack. In the saved 256-by-256 mangrove window, the
+reported point `17583,3399` moved from an isolated 160-column component to a
+42,912-column connected component extending beyond the measurement window;
+its distance to that component's edge increased from 0 to 52 blocks. Mangrove
+logs increased from 885 to 3,542. The inland freshwater window changed from
+70 separate top-water footprints to none; the large coastal water footprint
+remained. This demonstrates removal of the repeated excavated pools locally,
+not generation of replacement ponds or a global minimum biome size. See the
+[saved-block comparison](build/wetland-complete-nov17/review/paired-review.json).
+The matching `e9450e2a...` build passed the settled 100-tick river regression
+and was installed through the guarded installer; the prior `bab3066b...` build
+was retained. Existing saves and unrelated mods were unchanged. The fresh
+`TD-Mangrove-Review-20261117` preview starts at the reported `17583,127,3399`;
+see the [installation receipt](build/wetland-complete-nov17/installation.json).
+
 The separate `eco_wetland_groundcover` pass follows ordinary groundcover in all
 23 biomes. Greeneries may replace ordinary groundcover without removing the
 continuous wetland pass. It uses survival-checked vanilla sugar cane as reeds and
 lily pads over shallow still water, including retained TD land with a Streams
-river overlay. Mangrove trees require a real shallow water bank. These features
+river overlay. Mangrove trees require native propagule support and either a
+real shallow water bank or actual mud in a strongly marine lowland. These features
 do not create water. Shore takeover ramps canopy and wetland decoration together;
 surface boundary dithering preserves the target column's wetness and marine fields.
 
@@ -2283,11 +2395,133 @@ rechecked at build/install. Production sources or the manifest changing during a
 is provenance, not a claim that the fixture covers the complete installed modpack.
 
 For an installable build, pass `--validation <fixture>/validation-evidence.json`
-to `tools/build_neoforge.py`, repeating the option for all reviewed required runs.
+and `--biome-review <review-output>/review.json` to `tools/build_neoforge.py`,
+repeating `--validation` for all reviewed required runs.
 Stale source/result evidence stops before Gradle. After a successful build, the
 tool checks again and writes `<mod.jar>.validation.json` beside the JAR, binding
 its exact hash to those results. A build without this option is still available
 for development, but has no validated-install permission.
+
+### Independent biome realism review
+
+Ecology-enabled releases require an independent Codex visual review of the exact
+candidate JAR. Both the build and installer enforce this in Python; an instruction
+in Markdown, a successful screenshot capture, or the implementing agent's own
+approval is insufficient. Development builds remain available to generate review
+worlds. A missing review, major defect, uninspected image, requested extra capture,
+changed source/tool, or changed evidence blocks release. This local guard detects
+omissions and stale evidence; it cannot prevent someone deliberately modifying
+the guard or manually copying a JAR outside the installer.
+
+Use a fresh full-modpack `tools/chunk_profile/run.py prepare` fixture with
+`--td-jar` pointing to a development build and `--world` selecting the reproduction
+metadata. Preserve the installed shaders/settings. Do not generate in the player's
+save. Create a schema-1 JSON plan with the fixture's exact `seed`, `scale`, current
+`sourceFingerprint` (from `tools/build_evidence.py`), and `artifactSha256`.
+Give each new task a stable `reviewTask` (for example `wetland-bank-repair`).
+Keep it across fixes, follow-up photos, seeds, and rebuilt JARs. Only use a new
+ID for a new task. For plans that predate this field, the ID is
+`legacy-seed-<seed>`; their existing reviews count. Pass the plan to
+`prepare --biome-review-plan PLAN.json` to check the budget before copying inputs.
+Include `requiredBiomes`, rectangular `windows` (`id,minX,maxX,minZ,maxZ`), all
+reported `regressionSites` (`id,x,z`), and `maxSites` large enough for the coverage.
+Optional `explicitSites` add requested inspection positions. Choose windows that
+include interiors and transitions to adjacent biomes, shorelines and water;
+expand them if coverage is missing. For broad generator changes include unaffected
+control biomes and more than one seed in the validation plan; one swamp fixture
+does not establish correctness of the whole world.
+
+Use `inspectionRequests` (`id,x,z,kind`, with `kind` one of `root`, `bank`,
+`underwater`, `boundary`) for follow-up views that need a particular relationship.
+The capture resolves these against measured columns within 12 blocks and the
+declared windows, retaining the requested position, resolved position and observed
+endpoints. It still captures all three views and preserves the original regression
+positions. If a former tree or bank no longer exists, record that search result
+and photograph the requested position; do not invent an object from a historical
+site name. The independent reviewer receives these hash-verified observations
+alongside the images and decides whether visible relationships remain unverified.
+Bank follow-ups frame the measured crest-to-bed profile, including an oblique
+underwater detail when applicable. Root follow-ups inspect actual root/log
+connections after settlement; a bounded search that cannot reach a trunk is
+reported as incomplete evidence, not silently replaced by a nearby healthy tree.
+
+Run the normal chunk profiler with `--biome-review-plan PLAN.json`. Its client
+diagnostic scans actual generated columns, selects regression/interior/boundary/
+random/anomalous sites and captures aerial, side and detail views. Selection uses
+the measured world rather than a few manually chosen attractive screenshots.
+Water settlement, actual support blocks and measured ground heights matter;
+fixed-time screenshots while flying do not establish spatial coverage.
+The diagnostic temporarily fixes its copied world to clear noon while scanning
+and capturing, records that lighting in the receipt, and restores the fixture's
+day/time and weather rules afterwards. Game ticks still advance for settlement;
+installed shaders remain active. This avoids late sites becoming sunset-only
+evidence during a long capture run.
+
+Check the final decoration order when a painted substrate returns to dirt:
+vanilla `disk_grass` replaces submerged mud with dirt. The old mangrove feature
+list ran it after `eco_surface`; keep it out of that wetland. Protect structures by actual piece bounds,
+not whole chunks carrying underground structure references. Physical census must
+look below lily pads, plants and roots; canopy/surface height is not bed height.
+Waterlogged mangrove roots can cover normal buried dirt: distinguish covered
+substrate from an exposed water bed before treating it as a material defect.
+When checking a suspected shelf, compare neighbouring ground heights across the
+bank, then follow that step along the bank. A long run of equal bed heights by
+itself measures a flat floor, not a vertical face. Keep water depth, exposed
+substrate, and banks hidden by roots separate in the comparison.
+For abrupt wetland cuts, compare adjacent raw heights, basin confidence, bank
+distance and ecology eligibility. Equal raw heights can diverge at a hard gate;
+increasing the maximum lowering alone does not fix that boundary. Optional plan
+`terrainTraceSites` (at most eight `x,z` pairs) records full-provider heights and
+ecology for diagnosis. This query changes cache warm-up order; omit it from the
+final normal-generation acceptance run unless that order is the intended fixture.
+If two equal pre-carver surfaces diverge later, the fixture-only JVM property
+`td.generation.tracePositions=x,z;x,z` records stage profiles and bounded actual
+block writes around sea level without pre-querying terrain. A dry swamp cap can
+sit at Y62 when sea level is 63: the cave carver can replace that cap with aquifer
+water before ecology paints the bed. Do not attribute the excavation to the last
+sediment writer.
+In particular, an owner margin must use the same continuous habitat strength as
+its basin core: the former full-strength margin cut produced a four-block drop
+beside an unchanged core at nearly equal wetness. `td.wetland.shapeTracePositions`
+logs selected columns during ordinary shaping without triggering the diagnostic
+provider pre-query; use it when generation order must remain unchanged.
+Do not prescribe a continuous coarse-dirt strip at a fixed height above water:
+that highlights ordinary block slopes as artificial perimeter paths. Keep dry
+banks on their existing climate palette. Coastal sediment and lily suitability
+share the same immutable habitat field; local relief must use converted Minecraft
+heights with the active scale/profile, not raw pipeline metres.
+
+Package and independently review the successful native run:
+
+```powershell
+python -B tools/biome_review/bundle.py --fixture FIXTURE --output build/biome-bundle-NAME
+python -B tools/biome_review/runner.py --bundle build/biome-bundle-NAME/bundle.json --output build/biome-review-NAME
+```
+
+The bundle includes measured elevation/material/water maps, column data, camera
+positions, source changes and hashed capture/build evidence. The runner invokes
+a fresh read-only `codex exec` session per image batch, groups nearby sites with
+all their views (at most nine scene images plus the measured overview), and
+retains the raw response and process logs. It uses the locally
+authenticated Codex CLI; the process must be allowed to initialize its runtime.
+Valid negative reviews do not stop later image batches: collect all location
+findings in the same run. Process failures, malformed responses or missing image
+inspection stop the run and preserve the unreviewed image IDs. Only a complete
+review without unresolved major findings or capture requests can pass.
+A task gets **three independent review rounds total** (first review plus two
+rechecks). A complete set of parallel image batches is one round. An interrupted
+or failed reviewer also consumes its round. The capture launcher checks the
+remaining budget before starting Minecraft; the runner claims a numbered slot
+before starting Codex. At the limit, stop and report what was fixed, remains
+unresolved, or lacks evidence. Exhausting the budget never turns a rejection
+into a pass. Preserve the local ledger under `build/biome-review-history/`.
+An exact bundle gets one recorded attempt, so rerunning the same images until a
+model happens to pass is rejected. Address findings or collect the requested
+evidence, preserve prior attempts, and create a new bundle. Source changes require
+a fresh generation fixture. Follow-up captures without source changes can use
+the profiler's restart path and bundle `--restart`; retain the original evidence.
+Final acceptance still requires inspecting the actual images, physical evidence
+and all independent findings, not just the aggregate `pass` label.
 
 For Streams 2.17.3 fixtures, the build also requires the settled physical river
 regression receipt and diagnostic-input hashes for the exact prepared Streams

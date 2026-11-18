@@ -14,6 +14,7 @@ public final class WorldScaleManager {
 
     private static volatile int currentScale = DEFAULT_SCALE;
     private static volatile boolean fastGroundSampling;
+    private static volatile boolean naturalTerrain;
 
     private WorldScaleManager() {
     }
@@ -36,6 +37,8 @@ public final class WorldScaleManager {
 
         currentScale = clampScale(worldScaleSettingsState.getScale());
         fastGroundSampling = worldScaleSettingsState.isFastGroundSampling();
+        var source = TerrainDiffusionBiomeSources.find(serverWorld.getChunkSource().getGenerator().getBiomeSource());
+        naturalTerrain = source != null && source.naturalBiomes();
     }
 
     /**
@@ -72,9 +75,10 @@ public final class WorldScaleManager {
         currentScale = clampedScale;
     }
 
-    /**
-     * Clamps world scale to supported runtime bounds.
-     */
+    /** Whether the active world uses the natural ecology terrain profile. */
+    public static boolean isNaturalTerrain() { return naturalTerrain; }
+
+    /** Clamps world scale to supported runtime bounds. */
     public static int clampScale(int configuredScale) {
         return Math.max(MIN_SCALE, Math.min(MAX_SCALE, configuredScale));
     }

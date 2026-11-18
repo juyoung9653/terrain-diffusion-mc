@@ -9,4 +9,6 @@ public interface LowlandCarvingContext {
     int terrainDiffusion$seaLevel();
 
     int terrainDiffusion$originalSurfaceY(ChunkAccess chunk, int localX, int localZ);
+
+    int terrainDiffusion$surfaceWaterLevel(ChunkAccess chunk, int localX, int localZ);
 }

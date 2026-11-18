@@ -14,6 +14,7 @@ import net.minecraft.world.level.levelgen.feature.FeaturePlaceContext;
 import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConfiguration;
 import net.minecraft.world.level.material.Fluids;
 
+
 /**
  * Wetland-only decoration kept separate from the normal groundcover feature: installed
  * Greeneries policies can remove the latter without disabling reeds and lily pads.
@@ -31,6 +32,7 @@ public final class EcoWetlandGroundcoverFeature extends Feature<NoneFeatureConfi
         WorldGenLevel level = context.level();
         int startX = Math.floorDiv(context.origin().getX(), 16) * 16;
         int startZ = Math.floorDiv(context.origin().getZ(), 16) * 16;
+        CoastalContext coastalSamples = new CoastalContext(context.chunkGenerator());
         boolean changed = false;
         for (int localZ = 0; localZ < 16; localZ++) {
             for (int localX = 0; localX < 16; localX++) {
@@ -42,7 +44,7 @@ public final class EcoWetlandGroundcoverFeature extends Feature<NoneFeatureConfi
                 if (surface == null || !isEligibleBiome(level, bank, surface)) continue;
                 EcologyClassifier.Sample sample = surface.climate();
                 WetlandEcology.Weights wetland = WetlandEcology.weights(sample);
-                changed |= placeLilyPad(level, x, z, sample, wetland);
+                changed |= placeLilyPad(level, x, z, sample, wetland, coastalSamples);
                 changed |= placeReed(level, bank, sample, wetland);
             }
         }
@@ -66,10 +68,13 @@ public final class EcoWetlandGroundcoverFeature extends Feature<NoneFeatureConfi
 
     private static boolean placeLilyPad(WorldGenLevel level, int x, int z,
                                         EcologyClassifier.Sample sample,
-                                        WetlandEcology.Weights wetland) {
+                                        WetlandEcology.Weights wetland,
+                                        CoastalContext coastalSamples) {
         float chance = .42F * FeatureEcologyMath.wetlandBankPlantChance(wetland.reedMarsh(),
                 wetland.freshwaterSwamp(), wetland.mangrove(), wetland.riparian(),
                 sample.temperature(), sample.slope());
+        if (wetland.mangrove() > .02F)
+            chance *= coastalSamples.sample(x, z, level.getSeed()).affinity(waterDepth(level, x, z));
         if (!FeatureEcologyMath.coordinateChance(level.getSeed(), x, z, LILY_SALT, chance)) return false;
         int waterY = level.getHeight(Heightmap.Types.WORLD_SURFACE_WG, x, z) - 1;
         BlockPos water = new BlockPos(x, waterY, z);
@@ -87,6 +92,14 @@ public final class EcoWetlandGroundcoverFeature extends Feature<NoneFeatureConfi
         if (!lower.is(Fluids.WATER)) return true;
         return lower.isSource() && !level.getFluidState(below.below()).is(Fluids.WATER);
     }
+
+    private static int waterDepth(WorldGenLevel level, int x, int z) {
+        int waterY = level.getHeight(Heightmap.Types.WORLD_SURFACE_WG, x, z) - 1;
+        int depth = 0;
+        while (depth < 4 && level.getFluidState(new BlockPos(x, waterY - depth, z)).is(Fluids.WATER)) depth++;
+        return depth;
+    }
+
 
     private static boolean isEligibleBiome(WorldGenLevel level, BlockPos pos,
                                            NaturalEcology.SurfaceSample surface) {

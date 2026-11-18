@@ -175,6 +175,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
     }
 
     public boolean naturalBiomes() { return naturalBiomes; }
+    public boolean underground() { return underground; }
     public boolean undergroundRivers() { return undergroundRivers; }
     public int undergroundRiverVersion() { return undergroundRiverVersion; }
     public int undergroundProfileVersion() { return undergroundProfileVersion; }

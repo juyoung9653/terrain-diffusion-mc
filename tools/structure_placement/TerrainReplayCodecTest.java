@@ -19,6 +19,7 @@ public final class TerrainReplayCodecTest {
     static Tile tile() {
         return new Tile(new short[][]{{Short.MIN_VALUE, -1}, {0, Short.MAX_VALUE}},
                 new short[][]{{1, 2}, {3, 4}}, null,
+                new short[][]{{30001, 30002}, {30003, 30004}},
                 new short[][]{{-1, 2, 3, 4}, {4, 3, 2, 1}},
                 new float[][]{{-0f, 0f, Float.intBitsToFloat(0x7fc12345), Float.POSITIVE_INFINITY},
                     {1f, -1f, Float.NEGATIVE_INFINITY, Float.MIN_VALUE}, {2, 3, 4, 5}, {5, 6, 7, 8}, {9, 10, 11, 12},
@@ -30,7 +31,8 @@ public final class TerrainReplayCodecTest {
         return new HeightmapData(t.heightmap(), t.biomeIds(), t.terralithBiomeIds(),
                 new EcologyData(2, 2, t.ecologyIds()[0], t.ecologyIds()[1], t.ecologyValues()[0],
                     t.ecologyValues()[1], t.ecologyValues()[2], t.ecologyValues()[3], t.ecologyValues()[4],
-                    t.ecologyValues()[5], t.ecologyValues()[6], t.ecologyValues()[7]), 2, 2);
+                    t.ecologyValues()[5], t.ecologyValues()[6], t.ecologyValues()[7]),
+                t.wetlandWaterLevels(), 2, 2);
     }
     static void resign(byte[] bytes) throws Exception {
         byte[] digest = MessageDigest.getInstance("SHA-256").digest(Arrays.copyOf(bytes, bytes.length - 32));
@@ -43,6 +45,14 @@ public final class TerrainReplayCodecTest {
                     new Tile(tile().heightmap(), null, tile().heightmap(), null, null)}) {
                 byte[] bytes = TerrainReplayCodec.encode(key, tile);
                 check(Arrays.equals(bytes, TerrainReplayCodec.encode(key, TerrainReplayCodec.decode(key, bytes))));
+                if (tile.wetlandWaterLevels() != null) {
+                    short[][] changedWater = {{30011, 30012}, {30013, 30014}};
+                    Tile changed = new Tile(tile.heightmap(), tile.biomeIds(), tile.terralithBiomeIds(),
+                            changedWater, tile.ecologyIds(), tile.ecologyValues());
+                    check(!Arrays.equals(bytes, TerrainReplayCodec.encode(key, changed)));
+                    check(Arrays.deepEquals(changedWater,
+                            TerrainReplayCodec.decode(key, TerrainReplayCodec.encode(key, changed)).wetlandWaterLevels()));
+                }
                 byte[] bad = bytes.clone(); bad[10] ^= 1;
                 rejected(() -> TerrainReplayCodec.decode(key, bad));
                 rejected(() -> TerrainReplayCodec.decode(new Key(ID, 124, scale, origin, -origin, origin + 2, -origin + 2), bytes));
@@ -50,7 +60,8 @@ public final class TerrainReplayCodecTest {
                 rejected(() -> TerrainReplayCodec.decode(key, Arrays.copyOf(bytes, bytes.length - 1)));
                 byte[] trailing = Arrays.copyOf(bytes, bytes.length + 1); resign(trailing);
                 rejected(() -> TerrainReplayCodec.decode(key, trailing));
-                byte[] version = bytes.clone(); version[7] = 2; resign(version);
+                // Version 3 had no wetland-water plane and must not silently replay dry land.
+                byte[] version = bytes.clone(); version[7] = 3; resign(version);
                 rejected(() -> TerrainReplayCodec.decode(key, version));
                 byte[] dimensions = bytes.clone(); dimensions[71] ^= 1; resign(dimensions);
                 rejected(() -> TerrainReplayCodec.decode(key, dimensions));
@@ -58,6 +69,8 @@ public final class TerrainReplayCodecTest {
                 rejected(() -> TerrainReplayCodec.decode(key, flag));
             }
             rejected(() -> TerrainReplayCodec.encode(key, new Tile(new short[1][1], null, null, null, null)));
+            rejected(() -> TerrainReplayCodec.encode(key, new Tile(null, null, null,
+                    new short[1][1], null, null)));
             rejected(() -> TerrainReplayCodec.encode(key, new Tile(null, null, null, new short[2][4], new float[4][4])));
         }
         rejected(() -> new Key(ID, 0, 0, 0, 0, 2, 2));
@@ -92,6 +105,7 @@ public final class TerrainReplayCodecTest {
                     HeightmapData data = TerrainReplayStore.replay(-123, -2, 3, 0, 5, scale);
                     check(Arrays.deepEquals(data.heightmap, tile().heightmap()));
                     check(Arrays.deepEquals(data.biomeIds, tile().biomeIds()));
+                    check(Arrays.deepEquals(data.wetlandWaterLevels, tile().wetlandWaterLevels()));
                     check(data.terralithBiomeIds == null && data.width == 2 && data.height == 2);
                     for (int z = 0; z < 2; z++) for (int x = 0; x < 2; x++) {
                         int at = z * 2 + x; var sample = data.ecology.sample(x, z);

@@ -4,6 +4,8 @@ import com.github.xandergos.terraindiffusionmc.pipeline.EcologyClassifier;
 
 /** Coordinate-continuous fields shared by ecological decoration features. */
 public final class FeatureEcologyMath {
+    public enum CoastalSediment { NONE, MUD, SILT, SAND }
+    private static final int[] COASTAL_KERNEL = {1, 2, 3, 4, 3, 2, 1};
     private static final int SOIL_PATCH_MODEL_PIXELS = 64;
     private static final float SOIL_MOISTURE_VARIATION = 0.12F;
     public enum SurfaceMaterial { GRASS, COARSE_DIRT, SAND, PODZOL, GRAVEL, STONE }
@@ -202,6 +204,111 @@ public final class FeatureEcologyMath {
                 + .28F * clamp01(riparian);
         return clamp01(habitat * warmEnough * stableGround);
     }
+
+    /**
+     * Identifies a saturated wetland floor from the same continuous ecology that
+     * selected the biome.  This deliberately has no extra coordinate-noise field:
+     * soil boundaries must follow the wetland's hydrology, not a decorative
+     * stencil laid across dry hummocks.
+     */
+    public static boolean wetlandSedimentCore(float freshwaterSwamp, float mangrove,
+                                               float wetness, float slope) {
+        float habitat = Math.max(clamp01(freshwaterSwamp), clamp01(mangrove));
+        float saturated = habitat * smoothRange(.50F, .82F, wetness)
+                * (1.0F - smoothRange(.20F, .48F, slope));
+        return saturated >= .50F;
+    }
+
+    /**
+     * A shallow marine apron inherits one continuous mangrove-habitat field on
+     * both sides of a quart biome boundary.  The caller supplies only immutable
+     * ecology samples, never the neighbouring world's block materials.
+     */
+    public static CoastalSediment coastalSediment(float weightedMangroveSupport,
+                                                   float peakMangroveSupport,
+                                                   int waterDepth, float concavity,
+                                                   float broadDeposit) {
+        float affinity = coastalMangroveAffinity(weightedMangroveSupport, peakMangroveSupport,
+                waterDepth, concavity);
+        if (affinity <= .04F) return CoastalSediment.NONE;
+        // Shoals do not switch from pure sand to pure mud at one contour. A
+        // broad supply field shifts the whole depositional transition into
+        // tongues and recesses; it is not independent per-block dither.
+        float middle = smoothRange(.12F, .88F, affinity)
+                * (1F - smoothRange(.12F, .88F, affinity));
+        float deposition = clamp01(affinity + (clamp01(broadDeposit) - .5F)
+                * (.18F + .72F * middle));
+        // Fine silt is retained only in sheltered, supply-rich pockets. It
+        // disappears from exposed reaches, so this is not a mandatory third
+        // stripe along every sand/mud contact.
+        float shelteredPocket = smoothRange(.28F, .72F, broadDeposit)
+                * smoothRange(-.70F, 1.10F, concavity);
+        float siltHalfWidth = .28F * shelteredPocket;
+        if (siltHalfWidth > 0 && Math.abs(deposition - .5F) < siltHalfWidth)
+            return CoastalSediment.SILT;
+        return deposition < .5F ? CoastalSediment.SAND : CoastalSediment.MUD;
+    }
+
+    /** Shared, continuous shelter/sediment suitability for a shallow mangrove coast. */
+    public static float coastalMangroveAffinity(float weightedMangroveSupport,
+                                                 float peakMangroveSupport,
+                                                 int waterDepth, float concavity) {
+        float connected = smoothRange(.03F, .45F, peakMangroveSupport);
+        float habitat = smoothRange(.12F, .62F, weightedMangroveSupport);
+        float shallow = 1F - smoothRange(1F, 4F, waterDepth);
+        float shelteredLow = smoothRange(-1.5F, 1.5F, concavity);
+        return clamp01(connected * (.54F * habitat + .30F * shallow + .16F * shelteredLow));
+    }
+
+    /** Surface relation to an exclusive shaped water level. */
+    public static PlannedWetlandMargin plannedWetlandMargin(int groundY, int exclusiveWaterLevel) {
+        if (exclusiveWaterLevel <= 0) return PlannedWetlandMargin.NONE;
+        int raisedAboveWetFloor = groundY - (exclusiveWaterLevel - 1);
+        if (raisedAboveWetFloor == 0) return PlannedWetlandMargin.MUD;
+        return PlannedWetlandMargin.NONE;
+    }
+
+    /** Reduces grass-like cover beside the shaped water table without changing dry land. */
+    public static float plannedWetlandGroundcoverFactor(int groundY, int exclusiveWaterLevel) {
+        if (exclusiveWaterLevel <= 0) return 1F;
+        int raisedAboveWetFloor = groundY - (exclusiveWaterLevel - 1);
+        if (raisedAboveWetFloor <= 0) return 0F;
+        return 1F;
+    }
+
+    /**
+     * Acceptance multiplier for the small set of native grass/fern random
+     * patches restored in wetland and riparian ecology biomes.  The field is
+     * continuous across chunk boundaries and deliberately leaves a low, nonzero
+     * background: openings are caused by sparse patch attempts, not a stencil.
+     */
+    public static float nativeWetlandGroundcoverFactor(boolean fern, boolean overheadCanopy,
+                                                       long seed, int blockX, int blockZ) {
+        float patch = .20F + .55F * broadPatch(seed ^ 0x47524E5041544348L,
+                blockX, blockZ, 24);
+        if (fern) return patch * (overheadCanopy ? .85F : .65F);
+        return patch * (overheadCanopy ? .30F : 1F);
+    }
+
+    /** Fixed 13-block climate-field kernel; values are row-major 7 by 7 samples. */
+    public static float coastalMangroveSupport(float[] mangroveSamples) {
+        if (mangroveSamples == null || mangroveSamples.length != 49)
+            throw new IllegalArgumentException("coastal mangrove kernel requires 49 samples");
+        float total = 0, weighted = 0;
+        for (int z = 0; z < 7; z++) for (int x = 0; x < 7; x++) {
+            float weight = COASTAL_KERNEL[x] * COASTAL_KERNEL[z];
+            total += weight;
+            weighted += clamp01(mangroveSamples[z * 7 + x]) * weight;
+        }
+        return weighted / total;
+    }
+
+    /** Dry woodland cannot use saturated habitat or an observed mud root. */
+    public static boolean allowsDryTree(boolean saturatedWetland, boolean mudSupport) {
+        return !saturatedWetland && !mudSupport;
+    }
+
+    public enum PlannedWetlandMargin { NONE, MUD }
 
     /** Wet-bank plant density; it does not imply that a water-dependent plant may survive. */
     public static float wetlandBankPlantChance(float reedMarsh, float freshwaterSwamp,

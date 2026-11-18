@@ -94,7 +94,8 @@ public final class TerrainReplayStore {
                     tile.ecologyValues()[2], tile.ecologyValues()[3], tile.ecologyValues()[4],
                     tile.ecologyValues()[5], tile.ecologyValues()[6], tile.ecologyValues()[7]);
             replayed++;
-            return new HeightmapData(tile.heightmap(), tile.biomeIds(), tile.terralithBiomeIds(), ecology, key.width(), key.height());
+            return new HeightmapData(tile.heightmap(), tile.biomeIds(), tile.terralithBiomeIds(), ecology,
+                    tile.wetlandWaterLevels(), key.width(), key.height());
         } catch (IOException | RuntimeException e) {
             misses++;
             throw fail("Terrain replay failed for seed=" + seed + " scale=" + scale + " bounds="
@@ -126,7 +127,7 @@ public final class TerrainReplayStore {
                 }
             }
             byte[] bytes = TerrainReplayCodec.encode(key, new TerrainReplayCodec.Tile(data.heightmap, data.biomeIds,
-                    data.terralithBiomeIds, ids, values));
+                    data.terralithBiomeIds, data.wetlandWaterLevels, ids, values));
             Path target = directory.resolve(key.filename()), lock = directory.resolve(".tiles.lock");
             safePath(lock);
             try (var channel = FileChannel.open(lock, CREATE, WRITE, NOFOLLOW_LINKS); var ignored = channel.lock()) {

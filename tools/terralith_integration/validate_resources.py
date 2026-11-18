@@ -32,6 +32,12 @@ BASE_BIOMES = (
 VANILLA_BUILTIN_CARVERS = {"minecraft:cave", "minecraft:cave_extra_underground", "minecraft:canyon"}
 
 
+SATURATED_WETLANDS = {
+    "terrain-diffusion-mc:ecology/freshwater_swamp",
+    "terrain-diffusion-mc:ecology/mangrove_swamp",
+}
+
+
 def resource_id(path: str, prefix: str) -> str:
     # data/<namespace>/<prefix>/<path>.json
     bits = path.split("/")
@@ -107,6 +113,53 @@ def ecological_biomes(biomes: dict[str, dict]) -> list[str]:
     return sorted(biome_id for biome_id in biomes if biome_id.startswith("terrain-diffusion-mc:ecology/"))
 
 
+def state_names(value: object) -> set[str]:
+    """Return block IDs from a configured state provider without guessing its behavior."""
+    if isinstance(value, dict):
+        names = {value["Name"]} if isinstance(value.get("Name"), str) else set()
+        for child in value.values():
+            names.update(state_names(child))
+        return names
+    if isinstance(value, list):
+        return set().union(*(state_names(child) for child in value))
+    return set()
+
+
+def submerged_wetland_soil_writers(biomes: dict[str, dict], placed: dict[str, dict],
+                                   configured: dict[str, dict]) -> list[str]:
+    """Find later ocean-floor disks that can replace wetland mud with dirt or grass."""
+    unsafe: list[str] = []
+    for biome_id, biome in biomes.items():
+        if biome_id not in SATURATED_WETLANDS:
+            continue
+        surface_step = next((step for step, features in enumerate(biome.get("features", []))
+                             if "terrain-diffusion-mc:eco_surface" in features), None)
+        if surface_step is None:
+            unsafe.append(f"{biome_id}: missing eco_surface")
+            continue
+        for step, entries in enumerate(biome.get("features", [])):
+            if step <= surface_step:
+                continue
+            for feature_id in entries:
+                feature = placed.get(feature_id)
+                if feature is None:
+                    continue
+                configured_id = feature.get("feature")
+                config = configured.get(configured_id, {})
+                if config.get("type") != "minecraft:disk":
+                    continue
+                disk = config.get("config", {})
+                target = disk.get("target", {})
+                targets = set(target.get("blocks", [])) if isinstance(target, dict) else set()
+                emitted = state_names(disk.get("state_provider", {}))
+                ocean_floor = any(isinstance(rule, dict) and rule.get("type") == "minecraft:heightmap"
+                                  and str(rule.get("heightmap", "")).startswith("OCEAN_FLOOR")
+                                  for rule in feature.get("placement", []))
+                if ocean_floor and "minecraft:mud" in targets and emitted & {"minecraft:dirt", "minecraft:grass_block"}:
+                    unsafe.append(f"{biome_id}: step {step} {feature_id} can overwrite mud underwater")
+    return unsafe
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--terralith", type=Path, default=DEFAULT_TERRALITH)
@@ -138,6 +191,8 @@ def main() -> int:
               if "/worldgen/biome/" in path}
     placed = {resource_id(path, "worldgen/placed_feature"): data for path, data in resources.items()
               if "/worldgen/placed_feature/" in path}
+    configured = {resource_id(path, "worldgen/configured_feature"): data for path, data in resources.items()
+                  if "/worldgen/configured_feature/" in path}
     classifier = ROOT / "common" / "src" / "main" / "resources" / "terralith-biomes.tsv"
     classifier_rows = []
     for line in classifier.read_text(encoding="utf-8").splitlines():
@@ -188,6 +243,7 @@ def main() -> int:
                     edges[(step, left)].add((step, right))
 
     cycles = find_cycles(edges)
+    submerged_writers = submerged_wetland_soil_writers(biomes, placed, configured)
     priority = "vanilla < common < terralith < compat" if args.common_before_terralith else "vanilla < terralith < common < compat"
     print(f"layers: {priority} (vanilla={args.vanilla.name}, terralith={args.terralith.name})")
     print(f"biomes: requested={len(requested)} base={len(BASE_BIOMES)} terralith={len(terralith)} ecology={len(ecology)} resolved={len(requested)-len(unresolved_biomes)}")
@@ -196,9 +252,10 @@ def main() -> int:
     print("unresolved placed-feature refs: " + (", ".join(sorted(unresolved_features)) if unresolved_features else "none"))
     print("unresolved configured-carver refs: " + (", ".join(sorted(unresolved_carvers)) if unresolved_carvers else "none"))
     print(f"feature sorter graph: nodes={len(edges)} edges={sum(map(len, edges.values()))} cycles={len(cycles)}")
+    print("submerged wetland soil writers: " + (", ".join(submerged_writers) if submerged_writers else "none"))
     for cycle in cycles[:8]:
         print("cycle: " + " -> ".join(f"step{step}:{feature}" for step, feature in cycle))
-    return 1 if unresolved_biomes or unresolved_features or unresolved_carvers or cycles else 0
+    return 1 if unresolved_biomes or unresolved_features or unresolved_carvers or cycles or submerged_writers else 0
 
 
 if __name__ == "__main__":

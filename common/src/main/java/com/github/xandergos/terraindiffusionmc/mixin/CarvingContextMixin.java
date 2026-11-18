@@ -24,6 +24,7 @@ public class CarvingContextMixin implements LowlandCarvingContext {
     @Unique private int terrainDiffusion$seaLevel;
     @Unique private ChunkAccess terrainDiffusion$snapshotChunk;
     @Unique private int[] terrainDiffusion$originalSurfaceY;
+    @Unique private int[] terrainDiffusion$waterLevels;
 
     @Inject(method = "<init>", at = @At("TAIL"))
     private void terrainDiffusion$captureGenerator(NoiseBasedChunkGenerator generator, RegistryAccess registryAccess,
@@ -50,15 +51,28 @@ public class CarvingContextMixin implements LowlandCarvingContext {
     public int terrainDiffusion$originalSurfaceY(ChunkAccess chunk, int localX, int localZ) {
         if (this.terrainDiffusion$snapshotChunk != chunk) {
             int[] heights = new int[256];
+            int[] water = new int[256];
+            var pos = new net.minecraft.core.BlockPos.MutableBlockPos();
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
                     // ChunkAccess#getHeight already returns the highest occupied block.
                     heights[(z << 4) | x] = chunk.getHeight(Heightmap.Types.OCEAN_FLOOR_WG, x, z);
+                    int top = chunk.getHeight(Heightmap.Types.WORLD_SURFACE_WG, x, z);
+                    pos.set(chunk.getPos().getMinBlockX() + x, top, chunk.getPos().getMinBlockZ() + z);
+                    if (chunk.getFluidState(pos).is(net.minecraft.tags.FluidTags.WATER))
+                        water[(z << 4) | x] = top + 1;
                 }
             }
             this.terrainDiffusion$snapshotChunk = chunk;
             this.terrainDiffusion$originalSurfaceY = heights;
+            this.terrainDiffusion$waterLevels = water;
         }
         return this.terrainDiffusion$originalSurfaceY[(localZ << 4) | localX];
+    }
+
+    @Override
+    public int terrainDiffusion$surfaceWaterLevel(ChunkAccess chunk, int localX, int localZ) {
+        terrainDiffusion$originalSurfaceY(chunk, localX, localZ);
+        return terrainDiffusion$waterLevels[(localZ << 4) | localX];
     }
 }

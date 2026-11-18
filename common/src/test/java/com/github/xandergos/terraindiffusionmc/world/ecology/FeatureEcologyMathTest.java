@@ -9,6 +9,9 @@ public final class FeatureEcologyMathTest {
         checkLandscape();
         checkConnectedSoils();
         checkWetlandContinuity();
+        checkCoastalSedimentField();
+        checkPlannedWetlandMargins();
+        checkNativeWetlandGroundcover();
         for (int x = -192; x <= 192; x++) {
             float value = FeatureEcologyMath.broadPatch(seed, x, x * 3, 48);
             require(value >= 0.0F && value <= 1.0F, "noise must remain normalized");
@@ -307,8 +310,172 @@ public final class FeatureEcologyMathTest {
                 "cold ground must retain existing non-wetland surface policy");
         require(FeatureEcologyMath.wetlandMudChance(0, 1, 1, 1, 18, .8f) == 0,
                 "steep ground must not receive wetland mud");
+        checkWetlandSedimentCore();
         float bank = FeatureEcologyMath.wetlandBankPlantChance(1, 0, 0, 0, 18, .08f);
         require(bank > 0 && bank <= 1, "wet-bank plant chance must remain bounded");
+    }
+
+    /** Wetland soil follows the continuous habitat and wetness fields, not an
+     * unrelated coordinate stencil. */
+    private static void checkWetlandSedimentCore() {
+        require(FeatureEcologyMath.wetlandSedimentCore(1, 0, .90f, .08f),
+                "saturated freshwater core must use mud");
+        require(FeatureEcologyMath.wetlandSedimentCore(0, 1, .90f, .08f),
+                "saturated mangrove core must use mud");
+        require(!FeatureEcologyMath.wetlandSedimentCore(1, 0, .49f, .08f),
+                "raised dry wetland margin must retain grass");
+        require(!FeatureEcologyMath.wetlandSedimentCore(1, 0, .90f, .55f),
+                "steep wetland margin must retain its dry surface");
+        require(!FeatureEcologyMath.wetlandSedimentCore(0, 0, 1, 0),
+                "non-wetland terrain must not acquire mud");
+        require(!FeatureEcologyMath.allowsDryTree(true, false),
+                "saturated wetland must reject generic dry trees");
+        require(!FeatureEcologyMath.allowsDryTree(false, true),
+                "observed mud support must reject generic dry trees");
+        require(FeatureEcologyMath.allowsDryTree(false, false),
+                "raised dry grass support may retain generic dry trees");
+    }
+
+    private static void checkCoastalSedimentField() {
+        // A smooth coastal support profile has an intervening silt deposit;
+        // changing the existing bed material must not create a checker pattern.
+        float[] support = {.0F, .18F, .34F, .46F, .73F, .89F, .70F, .43F, .20F, .0F};
+        int transitions = 0, silt = 0;
+        FeatureEcologyMath.CoastalSediment previous = FeatureEcologyMath.CoastalSediment.NONE;
+        for (float value : support) {
+            var material = FeatureEcologyMath.coastalSediment(value, .90F, 2, 0, .50F);
+            if (previous != FeatureEcologyMath.CoastalSediment.NONE && material != previous) transitions++;
+            if (material == FeatureEcologyMath.CoastalSediment.SILT) silt++;
+            previous = material;
+        }
+        require(transitions <= 3 && silt > 0,
+                "coastal support profile must grade sand into mud through a silt deposit");
+        require(FeatureEcologyMath.coastalSediment(.22F, .90F, 2, -1.0F, .10F)
+                        != FeatureEcologyMath.CoastalSediment.SILT,
+                "exposed, supply-poor contact must not receive a compulsory silt stripe");
+        require(FeatureEcologyMath.coastalSediment(.22F, .90F, 2, 1.0F, .90F)
+                        == FeatureEcologyMath.CoastalSediment.SILT,
+                "sheltered supply pocket must retain a multi-column fine deposit");
+        require(FeatureEcologyMath.coastalSediment(.65F, .90F, 1, 0, .50F)
+                        == FeatureEcologyMath.CoastalSediment.MUD,
+                "humid mangrove core must choose mud independently of incoming sand or dirt");
+        require(FeatureEcologyMath.coastalSediment(.20F, .90F, 4, 0, .50F)
+                        == FeatureEcologyMath.CoastalSediment.SAND,
+                "connected outer mangrove apron must choose mineral sand");
+        require(FeatureEcologyMath.coastalSediment(.90F, .02F, 1, 0, .50F)
+                        == FeatureEcologyMath.CoastalSediment.NONE,
+                "unconnected ocean must remain untouched");
+        float[] negativeTile = new float[49], shiftedTile = new float[49];
+        for (int z = 0; z < 7; z++) for (int x = 0; x < 7; x++) {
+            // Global-space continuous habitat field, sampled at a negative tile
+            // and after moving one source-cell east; alternating biome labels do
+            // not enter this material kernel.
+            negativeTile[z * 7 + x] = Math.max(0, 1 - Math.abs((-12 + x * 2) + 1) / 18F);
+            shiftedTile[z * 7 + x] = Math.max(0, 1 - Math.abs((-10 + x * 2) + 1) / 18F);
+        }
+        float negative = FeatureEcologyMath.coastalMangroveSupport(negativeTile);
+        float shifted = FeatureEcologyMath.coastalMangroveSupport(shiftedTile);
+        require(Math.abs(negative - shifted) < .12F,
+                "negative-coordinate source tiles must keep a smooth coastal support field");
+        require(FeatureEcologyMath.coastalMangroveSupport(new float[49]) == 0,
+                "zero mangrove field must not paint an ordinary ocean");
+        float outer = FeatureEcologyMath.coastalMangroveAffinity(.20F, .20F, 2, 0);
+        float inner = FeatureEcologyMath.coastalMangroveAffinity(.50F, .50F, 2, 0);
+        float shallow = FeatureEcologyMath.coastalMangroveAffinity(.50F, .50F, 1, 0);
+        require(inner > outer && shallow > inner,
+                "one shared affinity must grade mangrove shelter and shallow relief continuously");
+        FeatureEcologyMath.CoastalSediment[][] shore = new FeatureEcologyMath.CoastalSediment[24][48];
+        int isolated = 0, minShore = Integer.MAX_VALUE, maxShore = Integer.MIN_VALUE;
+        int minFlat = Integer.MAX_VALUE, maxFlat = Integer.MIN_VALUE;
+        java.util.Set<Integer> shorePositions = new java.util.HashSet<>();
+        int siltRows = 0, missingSiltRows = 0;
+        for (int z = 0; z < shore.length; z++) {
+            int firstMud = -1;
+            int firstFlatMud = -1;
+            for (int x = 0; x < shore[z].length; x++) {
+                float supportAtX = .08F + x * .017F;
+                float concavity = (float) Math.sin(z * .42F) * 2.2F;
+                shore[z][x] = FeatureEcologyMath.coastalSediment(supportAtX, .62F, 2,
+                        concavity, FeatureEcologyMath.broadPatch(91357L, x, z, 48));
+                if (firstMud < 0 && shore[z][x] == FeatureEcologyMath.CoastalSediment.MUD) firstMud = x;
+                if (firstFlatMud < 0 && FeatureEcologyMath.coastalSediment(supportAtX, .62F, 2,
+                        0, FeatureEcologyMath.broadPatch(91357L, x, z, 48))
+                        == FeatureEcologyMath.CoastalSediment.MUD) firstFlatMud = x;
+            }
+            if (firstMud >= 0) {
+                minShore = Math.min(minShore, firstMud);
+                maxShore = Math.max(maxShore, firstMud);
+                shorePositions.add(firstMud);
+            }
+            boolean rowSilt = false;
+            for (FeatureEcologyMath.CoastalSediment material : shore[z])
+                rowSilt |= material == FeatureEcologyMath.CoastalSediment.SILT;
+            if (rowSilt) siltRows++;
+            else missingSiltRows++;
+            if (firstFlatMud >= 0) {
+                minFlat = Math.min(minFlat, firstFlatMud);
+                maxFlat = Math.max(maxFlat, firstFlatMud);
+            }
+        }
+        for (int z = 1; z < shore.length - 1; z++) for (int x = 1; x < shore[z].length - 1; x++) {
+            var cell = shore[z][x];
+            if (cell != FeatureEcologyMath.CoastalSediment.NONE
+                    && shore[z - 1][x] != cell && shore[z + 1][x] != cell
+                    && shore[z][x - 1] != cell && shore[z][x + 1] != cell) isolated++;
+        }
+        System.out.printf("coastal tongue relief-range=%d..%d flat-range=%d..%d distinct=%d isolated=%d silt-rows=%d/%d%n",
+                minShore, maxShore, minFlat, maxFlat, shorePositions.size(), isolated, siltRows, shore.length);
+        require(maxShore - minShore >= 2 && shorePositions.size() >= 3 && isolated == 0,
+                "relief must form coherent multi-block coastal tongues, not a straight mask or pepper");
+        require(siltRows > 0 && missingSiltRows > 0,
+                "alongshore transition must contain both sheltered silt deposits and exposed direct contacts");
+    }
+
+    private static void checkPlannedWetlandMargins() {
+        require(FeatureEcologyMath.plannedWetlandMargin(64, 65)
+                        == FeatureEcologyMath.PlannedWetlandMargin.MUD,
+                "the modeled wet floor must retain continuous mud");
+        require(FeatureEcologyMath.plannedWetlandMargin(65, 65)
+                        == FeatureEcologyMath.PlannedWetlandMargin.NONE,
+                "raised banks must retain their normal surface policy");
+        require(FeatureEcologyMath.plannedWetlandGroundcoverFactor(64, 65) == 0F
+                        && FeatureEcologyMath.plannedWetlandGroundcoverFactor(67, 65) == 1F,
+                "water-table groundcover control must leave dry land unchanged");
+        require(FeatureEcologyMath.plannedWetlandGroundcoverFactor(70, 0) == 1F,
+                "absent hydrology must not suppress ordinary groundcover");
+    }
+
+    private static void checkNativeWetlandGroundcover() {
+        long seed = 91357L;
+        float grassOpen = FeatureEcologyMath.nativeWetlandGroundcoverFactor(false, false, seed, 14, -23);
+        float grassCanopy = FeatureEcologyMath.nativeWetlandGroundcoverFactor(false, true, seed, 14, -23);
+        float fernOpen = FeatureEcologyMath.nativeWetlandGroundcoverFactor(true, false, seed, 14, -23);
+        float fernCanopy = FeatureEcologyMath.nativeWetlandGroundcoverFactor(true, true, seed, 14, -23);
+        require(grassCanopy < grassOpen && grassCanopy < fernCanopy,
+                "overhead canopy must suppress grass more than fern");
+        require(fernCanopy > fernOpen,
+                "ferns must retain their sheltered-floor preference");
+        int accepted = 0, total = 0, runs = 0, longestRun = 0, run = 0;
+        for (int z = -64; z < 64; z++) for (int x = -64; x < 64; x++) {
+            float factor = FeatureEcologyMath.nativeWetlandGroundcoverFactor(false, false, seed, x, z);
+            require(factor > 0 && factor < 1,
+                    "wetland groundcover field must be a bounded non-binary multiplier");
+            boolean placed = FeatureEcologyMath.coordinateChance(seed, x, z, 0x47524E534F494CL, factor);
+            if (placed) accepted++;
+            if (z == 0) {
+                if (placed) { run++; longestRun = Math.max(longestRun, run); }
+                else { if (run > 0) runs++; run = 0; }
+            }
+            total++;
+        }
+        if (run > 0) runs++;
+        float coverage = accepted / (float) total;
+        System.out.printf("native wetland groundcover coverage=%.3f row-runs=%d longest=%d%n",
+                coverage, runs, longestRun);
+        require(coverage > .18F && coverage < .62F,
+                "patch field must reduce carpet coverage while retaining vegetation");
+        require(runs > 1 && longestRun > 1,
+                "stable field must retain clustered growth and openings");
     }
 
     private static void require(boolean condition, String message) {

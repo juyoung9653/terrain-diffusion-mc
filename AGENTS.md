@@ -55,6 +55,10 @@ of duplicating them here.
 
 ## Review evidence and avoid repeated work
 
+- Biome work targets realistic terrain. Use the mandatory independent visual
+  review and release guard in [README.md](README.md#independent-biome-realism-review);
+  capture completion or an implementer's approval is not visual acceptance.
+
 - Require process success and a fresh successful diagnostic receipt. A printed
   PASS or `BUILD SUCCESSFUL` is insufficient after a probe or ZIPFS failure;
   inspect selected logs, especially `AccessDeniedException`.

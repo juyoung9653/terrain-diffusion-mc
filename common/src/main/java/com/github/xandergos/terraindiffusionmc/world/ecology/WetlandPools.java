@@ -25,18 +25,13 @@ public final class WetlandPools {
         if (hasStart || hasReference) return false;
         for (int attempt = 0; attempt < 2; attempt++) {
             long hash = mix(level.getSeed(), chunkX, chunkZ, attempt);
-            int radius = 3 + (int) ((hash >>> 7) & 1L);
-            int range = 16 - 2 * (radius + 1);
-            int cx = chunkX + radius + 1 + Math.floorMod((int) hash, range);
-            int cz = chunkZ + radius + 1 + Math.floorMod((int) (hash >>> 32), range);
-            List<WetlandPoolPlanner.Cell> plan = WetlandPoolPlanner.plan(chunkX, chunkZ, cx, cz, radius, hash,
+            int cx = chunkX + 1 + Math.floorMod((int) hash, 14);
+            int cz = chunkZ + 1 + Math.floorMod((int) (hash >>> 32), 14);
+            List<WetlandPoolPlanner.Cell> plan = WetlandPoolPlanner.plan(chunkX, chunkZ, cx, cz,
                     new Surface(level, generator));
             if (plan.isEmpty()) continue;
-            int waterY = plan.stream().mapToInt(WetlandPoolPlanner.Cell::topY).min().orElseThrow();
             for (WetlandPoolPlanner.Cell cell : plan) {
-                BlockPos water = new BlockPos(cell.x(), waterY, cell.z());
-                if (cell.topY() > waterY) level.setBlock(water.above(), Blocks.AIR.defaultBlockState(), 2);
-                level.setBlock(water.below(), Blocks.MUD.defaultBlockState(), 2);
+                BlockPos water = new BlockPos(cell.x(), cell.waterY(), cell.z());
                 level.setBlock(water, Blocks.WATER.defaultBlockState(), 2);
             }
             return true;

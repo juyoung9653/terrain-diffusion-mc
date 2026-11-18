@@ -2,5 +2,12 @@
   "required": true,
   "package": "com.terrain.chunkprofile.mixin",
   "compatibilityLevel": "JAVA_21",
-  "mixins": ["StreamsBuildTraceMixin"]
+  "mixins": [
+    "StreamsBuildTraceMixin",
+    "GenerationStageTraceMixin",
+    "GenerationFeatureStageTraceMixin",
+    "ProtoChunkGenerationWriteTraceMixin",
+    "LevelChunkGenerationWriteTraceMixin",
+    "StreamsGenerationStageTraceMixin"
+  ]
 }

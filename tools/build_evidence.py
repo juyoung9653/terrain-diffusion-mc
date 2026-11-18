@@ -1,7 +1,8 @@
 """Bind local probe results to production sources and the built NeoForge JAR.
 
 These local receipts detect stale/mismatched evidence, not malicious forgery.
-Streams 2.17.3 has mandatory river coverage; other coverage remains a reviewer decision.
+Streams 2.17.3 has mandatory river coverage. Ecology-enabled releases also require
+an independent biome realism review of the exact candidate artifact.
 """
 from __future__ import annotations
 
@@ -98,8 +99,18 @@ def assert_release_jar(mod: Path) -> None:
         raise ValueError(f"release contains diagnostic output: {diagnostic[0]}")
 
 
+def check_biome_review(root: Path, path: Path | None, *, releasing: bool,
+                       artifact: str | None = None) -> dict | None:
+    from biome_review.contract import required, validate_review
+    if path is None:
+        if releasing and required(root):
+            raise ValueError("release requires --biome-review from an independent realism review")
+        return None
+    return validate_review(path, root, artifact)
+
+
 def write_release(root: Path, mod: Path, fingerprint: str, validations: list[dict],
-                  build_command: list[str]) -> Path:
+                  build_command: list[str], biome_review: Path | None = None) -> Path:
     if source_fingerprint(root) != fingerprint:
         raise ValueError("production sources changed during build")
     # Recheck the original evidence too, not only its pre-build in-memory copy.
@@ -111,9 +122,11 @@ def write_release(root: Path, mod: Path, fingerprint: str, validations: list[dic
     from streams_probe.release_checks import require_streams_coverage
     require_streams_coverage(validations, root=root)
     assert_release_jar(mod)
+    independent = check_biome_review(root, biome_review, releasing=bool(validations), artifact=sha256(mod))
     target = mod.with_name(mod.name + RELEASE_SUFFIX)
     value = {"schema": 1, "kind": "validated-neoforge-build", "sourceFingerprint": fingerprint,
-             "modSha256": sha256(mod), "validations": validations, "buildCommand": build_command}
+             "modSha256": sha256(mod), "validations": validations, "buildCommand": build_command,
+             "biomeReview": independent}
     temporary = target.with_name(target.name + ".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     temporary.replace(target)
@@ -137,5 +150,10 @@ def verify_release(mod: Path, root: Path = ROOT) -> dict:
         read_validation(evidence, fingerprint, root)
     from streams_probe.release_checks import require_streams_coverage
     require_streams_coverage(row["validations"], root=root)
+    independent = row.get("biomeReview")
+    review_path = Path(independent["path"]) if independent else None
+    if independent and sha256(review_path) != independent.get("sha256"):
+        raise ValueError("installation independent biome review changed")
+    check_biome_review(root, review_path, releasing=True, artifact=sha256(mod))
     assert_release_jar(mod)
     return row

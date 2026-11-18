@@ -34,6 +34,7 @@ public final class LocalTerrainProviderCacheTest {
             boundedPartialCache(provider);
             referenceCacheReuseAndBound(provider);
             exactPartialParity(provider);
+            naturalTerrainOptOut(provider);
             completeTileDefaultReusesInterleavedRegions(provider);
             recentTileBoundariesAndInvalidation(provider);
             recentTileEvictionAndRecency(provider);
@@ -160,12 +161,16 @@ public final class LocalTerrainProviderCacheTest {
         LocalTerrainProvider.clearCache();provider.resetPerformanceMetrics();
         provider.fetchGroundHeightmap(0,0,16,16);
         provider.fetchGroundHeightmap(0,16,16,32);
-        check(provider.performanceSnapshot().referenceHits()==1 && provider.performanceSnapshot().referenceMisses()==1,
-                "adjacent ground reads share original full reference bounds");
+        var afterGround = provider.performanceSnapshot();
+        check(afterGround.referenceHits()==1 && afterGround.referenceMisses()==1,
+                "adjacent ground reads share one height reference: hits=" + afterGround.referenceHits()
+                        + " misses=" + afterGround.referenceMisses());
         provider.fetchBiomeHeightmap(0,0,16,16);
         provider.fetchGroundHeightmap(0,32,16,48);
-        check(provider.performanceSnapshot().referenceMisses()==2 && provider.performanceSnapshot().referenceHits()==2,
-                "climate upgrades ground reference once and remains reusable by height-only callers");
+        var afterBiome = provider.performanceSnapshot();
+        check(afterBiome.referenceMisses()==1 && afterBiome.referenceHits()==2,
+                "climate upgrades the retained ground reference and remains reusable by height-only callers: hits="
+                        + afterBiome.referenceHits() + " misses=" + afterBiome.referenceMisses());
         for(int i=1;i<5;i++)provider.fetchBiomeHeightmap(0,i*256,16,i*256+16);
         var metrics=provider.performanceSnapshot();
         check(metrics.referenceBytes()<=32L*1024*1024 && metrics.referenceTiles()<=8,"native reference retained memory bounded");
@@ -179,22 +184,77 @@ public final class LocalTerrainProviderCacheTest {
     }
 
     private static void exactPartialParity(LocalTerrainProvider provider) {
+        exactPartialParity(provider, false);
+        exactPartialParity(provider, true);
+    }
+
+    private static void exactPartialParity(LocalTerrainProvider provider, boolean wetlandFixture) {
+        WorldPipeline.wetlandFixture = wetlandFixture;
+        try {
         for(int scale=1;scale<=6;scale++) {
             WorldScaleManager.scale=scale;LocalTerrainProvider.clearCache();
             // Partial first so a full cache hit cannot disguise a sparse-path difference.
             var ground=provider.fetchGroundHeightmap(-256,240,-240,256);
             var biome=provider.fetchBiomeHeightmap(-256,240,-240,256);
             var full=provider.fetchHeightmap(-256,0,0,256);
+            int wetlandColumns = 0;
             for(int r=0;r<16;r++)for(int c=0;c<16;c++) {
                 check(ground.heightmap[r][c]==full.heightmap[r][240+c],"ground scale="+scale);
                 check(biome.heightmap[r][c]==full.heightmap[r][240+c],"biome ground scale="+scale);
+                check(waterLevel(ground, r, c)==waterLevel(full, r, 240+c),
+                        "ground wetland water scale="+scale);
+                check(waterLevel(biome, r, c)==waterLevel(full, r, 240+c),
+                        "biome wetland water scale="+scale);
+                if (waterLevel(full, r, 240+c) != 0) wetlandColumns++;
                 check(biome.biomeIds[r][c]==full.biomeIds[r][240+c],"vanilla scale="+scale);
                 check(biome.terralithBiomeIds[r][c]==full.terralithBiomeIds[r][240+c],"terralith scale="+scale);
                 check(biome.ecology.terrainBiomeId(c,r)==full.ecology.terrainBiomeId(c+240,r),"ecology terrain scale="+scale);
                 check(biome.ecology.sample(c,r).equals(full.ecology.sample(c+240,r)),"ecology fields scale="+scale);
             }
+            if (wetlandFixture)
+            {
+                int coreX = 248, coreZ = 8;
+                var core = full.ecology.sample(coreX, coreZ);
+                check(wetlandColumns > 0, "wetland fixture exercises shaped water scale=" + scale
+                        + " for full/partial/fast-ground parity: height=" + full.heightmap[coreZ][coreX]
+                        + " water=" + waterLevel(full, coreZ, coreX) + " wet=" + core.wetness()
+                        + " moisture=" + core.moisture() + " slope=" + core.slope()
+                        + " " + wetlandContext(provider, scale));
+            }
         }
+        } finally { WorldPipeline.wetlandFixture = false; }
         WorldScaleManager.scale=1;
+    }
+
+    private static void naturalTerrainOptOut(LocalTerrainProvider provider) {
+        WorldScaleManager.scale = 1;
+        WorldPipeline.wetlandFixture = true;
+        try {
+            WorldScaleManager.naturalTerrain = true;
+            LocalTerrainProvider.init(321); LocalTerrainProvider.clearCache();
+            var enabled = provider.fetchHeightmap(-256, 0, 0, 256);
+            check(waterColumns(enabled) > 0, "natural terrain fixture is shaped before opt-out");
+
+            WorldScaleManager.naturalTerrain = false;
+            LocalTerrainProvider.init(321); LocalTerrainProvider.clearCache();
+            var disabled = provider.fetchHeightmap(-256, 0, 0, 256);
+            check(disabled.wetlandWaterLevels == null, "natural-terrain opt-out leaves no wetland water plane");
+            check(disabled.heightmap[8][248] == 32,
+                    "natural-terrain opt-out retains the fixture's raw core height");
+            check(!Arrays.deepEquals(enabled.heightmap, disabled.heightmap),
+                    "natural-terrain opt-out restores original unshaped heights");
+
+            WorldScaleManager.naturalTerrain = true;
+            LocalTerrainProvider.init(321); LocalTerrainProvider.clearCache();
+            var restored = provider.fetchHeightmap(-256, 0, 0, 256);
+            check(Arrays.deepEquals(enabled.heightmap, restored.heightmap)
+                            && Arrays.deepEquals(enabled.wetlandWaterLevels, restored.wetlandWaterLevels),
+                    "re-enabling natural terrain at init restores deterministic wetland shaping");
+        } finally {
+            WorldPipeline.wetlandFixture = false;
+            WorldScaleManager.naturalTerrain = true;
+            LocalTerrainProvider.init(321); LocalTerrainProvider.clearCache();
+        }
     }
 
     private static void recentTileBoundariesAndInvalidation(LocalTerrainProvider provider) throws Exception {
@@ -277,17 +337,8 @@ public final class LocalTerrainProviderCacheTest {
         System.setProperty("td.inference.legacySampling", "true");
         WorldScaleManager.fastGroundSampling = true;
         LocalTerrainProvider.init(91);
-        for (int scale = 1; scale <= 6; scale++) {
-            WorldScaleManager.scale = scale;
-            LocalTerrainProvider.clearCache();
-            int climates = WorldPipeline.climateCalls.get();
-            var ground = provider.fetchGroundHeightmap(-16, 240, 0, 256);
-            check(WorldPipeline.climateCalls.get() == climates, "fast ground avoids climate scale=" + scale);
-            var full = provider.fetchHeightmap(-256, 0, 0, 256);
-            check(full.ecology != null && full.biomeIds.length == 256, "full after ground remains complete scale=" + scale);
-            for (int r = 0; r < 16; r++) for (int c = 0; c < 16; c++)
-                check(ground.heightmap[r][c] == full.heightmap[240 + r][240 + c], "fast ground/full parity scale=" + scale);
-        }
+        fastGroundWaterParity(provider, false);
+        fastGroundWaterParity(provider, true);
         WorldScaleManager.scale = 1;
         LocalTerrainProvider.clearCache();
         int fullCrops = WorldPipeline.cropCalls.get();
@@ -327,6 +378,34 @@ public final class LocalTerrainProviderCacheTest {
         check(sampled[0] != Integer.MIN_VALUE && sampled[0] == sampled[1], "sampling cursor falls back to a stable complete tile");
         WorldScaleManager.fastGroundSampling = false;
         LocalTerrainProvider.init(91);
+    }
+
+    private static void fastGroundWaterParity(LocalTerrainProvider provider, boolean wetlandFixture) {
+        WorldPipeline.wetlandFixture = wetlandFixture;
+        try {
+        for (int scale = 1; scale <= 6; scale++) {
+            WorldScaleManager.scale = scale;
+            LocalTerrainProvider.clearCache();
+            int climates = WorldPipeline.climateCalls.get();
+            int groundZ = wetlandFixture ? -256 : -16;
+            int groundEndZ = wetlandFixture ? -240 : 0;
+            int fullRow = wetlandFixture ? 0 : 240;
+            var ground = provider.fetchGroundHeightmap(groundZ, 240, groundEndZ, 256);
+            check(WorldPipeline.climateCalls.get() == climates, "fast ground avoids climate scale=" + scale);
+            var full = provider.fetchHeightmap(-256, 0, 0, 256);
+            check(full.ecology != null && full.biomeIds.length == 256, "full after ground remains complete scale=" + scale);
+            int wetlandColumns = 0;
+            for (int r = 0; r < 16; r++) for (int c = 0; c < 16; c++) {
+                check(ground.heightmap[r][c] == full.heightmap[fullRow + r][240 + c],
+                        "fast ground/full parity scale=" + scale);
+                check(waterLevel(ground, r, c) == waterLevel(full, fullRow + r, 240 + c),
+                        "fast ground wetland water scale=" + scale);
+                if (waterLevel(full, fullRow + r, 240 + c) != 0) wetlandColumns++;
+            }
+            if (wetlandFixture)
+                check(wetlandColumns > 0, "fast ground fixture exercises shaped water scale=" + scale);
+        }
+        } finally { WorldPipeline.wetlandFixture = false; }
     }
 
     /** The sampler cursor must preserve the fast-ground result, including its own nested scope. */
@@ -633,4 +712,39 @@ public final class LocalTerrainProviderCacheTest {
     }
 
     private static void check(boolean condition,String message){if(!condition)throw new AssertionError(message);}
+
+    private static short waterLevel(LocalTerrainProvider.HeightmapData data, int z, int x) {
+        return data.wetlandWaterLevels == null ? 0 : data.wetlandWaterLevels[z][x];
+    }
+
+    private static int waterColumns(LocalTerrainProvider.HeightmapData data) {
+        if (data.wetlandWaterLevels == null) return 0;
+        int count = 0;
+        for (short[] row : data.wetlandWaterLevels) for (short level : row)
+            if (level != 0) count++;
+        return count;
+    }
+
+    /** Diagnostic only: inspect the exact bounded terrain context used by the full tile. */
+    private static String wetlandContext(LocalTerrainProvider provider, int scale) {
+        try {
+            var field = LocalTerrainProvider.class.getDeclaredField("pipeline");
+            field.setAccessible(true); Object pipeline = field.get(provider);
+            var get = pipeline.getClass().getDeclaredMethod("get", int.class, int.class,
+                    int.class, int.class, boolean.class);
+            get.setAccessible(true);
+            int i1 = -256, j1 = 0, i2 = 0, j2 = 256;
+            int i1n = Math.floorDiv(i1, scale), j1n = Math.floorDiv(j1, scale);
+            int i2n = -Math.floorDiv(-i2, scale), j2n = -Math.floorDiv(-j2, scale);
+            int halo = (int) Math.ceil((MacroBiomeContext.CONTEXT_PAD + 2f) / scale) + 2;
+            int ni = i1n - halo, nj = j1n - halo, nh = i2n - i1n + 2 * halo, nw = j2n - j1n + 2 * halo;
+            float[][] macro = (float[][]) get.invoke(pipeline, ni, nj, ni + nh, nj + nw, true);
+            var context = MacroBiomeContext.build(macro[0], macro[1], ni, nj, nh, nw,
+                    scale, 16f / scale, i1, j1, 256, 256);
+            var terrain = context.shore().wetlandTerrain();
+            return "plane=" + terrain.waterPlane(248, 8) + " confidence=" + terrain.basinConfidence(248, 8);
+        } catch (ReflectiveOperationException failure) {
+            return "context=" + failure.getClass().getSimpleName();
+        }
+    }
 }

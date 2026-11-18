@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Independent biome realism review",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "summary", "inspectedImageIds", "findings", "additionalCaptures", "coverageGaps"],
+  "properties": {
+    "verdict": {"enum": ["pass", "revise", "insufficient_evidence"]},
+    "summary": {"type": "string"},
+    "inspectedImageIds": {"type": "array", "items": {"type": "string"}},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "category", "siteId", "imageIds", "description", "evidence", "requestedChange"],
+        "properties": {
+          "id": {"type": "string"},
+          "severity": {"enum": ["blocker", "major", "minor"]},
+          "category": {"type": "string"},
+          "siteId": {"type": "string"},
+          "imageIds": {"type": "array", "items": {"type": "string"}},
+          "description": {"type": "string"},
+          "evidence": {"type": "string"},
+          "requestedChange": {"type": "string"}
+        }
+      }
+    },
+    "additionalCaptures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["reason", "x", "z", "view"],
+        "properties": {
+          "reason": {"type": "string"},
+          "x": {"type": "number"},
+          "z": {"type": "number"},
+          "view": {"enum": ["aerial", "ground", "bank", "underwater", "root", "boundary"]}
+        }
+      }
+    },
+    "coverageGaps": {"type": "array", "items": {"type": "string"}}
+  }
+}
