@@ -29,6 +29,7 @@ public final class WetlandTerrain {
             -24, -22, -17, -9, 0, 9, 17, 22};
     private static final int[] DRAINAGE_Z = {0, 9, 17, 22, 24, 22, 17, 9,
             0, -9, -17, -22, -24, -22, -17, -9};
+    private static final int[] TENT_WEIGHTS = {1, 4, 6, 4, 1};
     // An owner-plane margin is at most sixteen columns.  Higher dry banks
     // retain the separate five-block cap below, never a general flattening rule.
     private static final int MAX_FRESH_BANK_LOWERING = 5;
@@ -47,17 +48,20 @@ public final class WetlandTerrain {
         private final float[] confidence;
         private final float[] drainage;
         private final float[] terrainSlope;
+        private final float[] terrainSuitability;
         private final byte[] bankDistance;
         private final short[] bankPlane;
 
         private Context(int width, int height, int[] plane, float[] confidence, float[] drainage,
-                        float[] terrainSlope, byte[] bankDistance, short[] bankPlane) {
+                        float[] terrainSlope, float[] terrainSuitability,
+                        byte[] bankDistance, short[] bankPlane) {
             this.width = width;
             this.height = height;
             this.plane = plane;
             this.confidence = confidence;
             this.drainage = drainage;
             this.terrainSlope = terrainSlope;
+            this.terrainSuitability = terrainSuitability;
             this.bankDistance = bankDistance;
             this.bankPlane = bankPlane;
         }
@@ -68,6 +72,8 @@ public final class WetlandTerrain {
         public float basinConfidence(int x, int z) { return confidence[index(x, z)]; }
         public float drainage(int x, int z) { return drainage[index(x, z)]; }
         public float terrainSlope(int x, int z) { return terrainSlope[index(x, z)]; }
+        /** Smoothed terrain-only hollow suitability; ecology remains a separate gate. */
+        public float terrainSuitability(int x, int z) { return terrainSuitability[index(x, z)]; }
         public int bankDistance(int x, int z) { return bankDistance[index(x, z)] & 0xff; }
         public int bankPlane(int x, int z) { return bankPlane[index(x, z)]; }
         private int index(int x, int z) {
@@ -128,6 +134,24 @@ public final class WetlandTerrain {
         float[] confidence = new float[planes.length];
         float[] drainage = new float[planes.length];
         float[] terrainSlope = new float[planes.length];
+        // Drainage and slope are derivatives of the model field.  Only retain
+        // the output plus the two-cell tent halo, rather than allocating across
+        // the much larger basin-context pad.
+        int landformWidth = width + 4;
+        float[] terrainLandform = new float[landformWidth * (height + 4)];
+        for (int z = -2; z < height + 2; z++) for (int x = -2; x < width + 2; x++) {
+            float drainageValue = localDrainage(paddedElevation, fieldWidth, x + pad, z + pad,
+                    metresPerBlock);
+            float slopeValue = localSlope(paddedElevation, fieldWidth, x + pad, z + pad,
+                    metresPerBlock);
+            terrainLandform[(z + 2) * landformWidth + x + 2] = terrainLandform(drainageValue, slopeValue);
+            if (x >= 0 && x < width && z >= 0 && z < height) {
+                int target = z * width + x;
+                drainage[target] = drainageValue;
+                terrainSlope[target] = slopeValue;
+            }
+        }
+        float[] terrainSuitability = new float[planes.length];
         for (int z = 0; z < height; z++) for (int x = 0; x < width; x++) {
             int source = (z + pad) * fieldWidth + x + pad;
             int target = z * width + x;
@@ -138,10 +162,8 @@ public final class WetlandTerrain {
             int shiftZ = warped ? boundaryWarp(worldSeed, outputX + x, outputZ + z, 1) : 0;
             confidence[target] = clamp(1f - Math.abs(inner[(z + pad + shiftZ) * fieldWidth + x + pad + shiftX]
                     - outer[(z + pad + shiftZ) * fieldWidth + x + pad + shiftX]) / 2f);
-            drainage[target] = localDrainage(paddedElevation, fieldWidth, x + pad, z + pad,
-                    metresPerBlock);
-            terrainSlope[target] = localSlope(paddedElevation, fieldWidth, x + pad, z + pad,
-                    metresPerBlock);
+            terrainSuitability[target] = smoothedTerrainLandform(terrainLandform, landformWidth,
+                    x + 2, z + 2);
         }
         // Only a stable local plane is a shore-core seed.  Its owner plane is
         // propagated a bounded distance so the irregular edge can use the same
@@ -152,7 +174,8 @@ public final class WetlandTerrain {
         for (int z = 0; z < height; z++)
             { System.arraycopy(distances.distance, (z + pad) * fieldWidth + pad, cropped, z * width, width);
               System.arraycopy(distances.ownerPlane, (z + pad) * fieldWidth + pad, croppedPlanes, z * width, width); }
-        return new Context(width, height, planes, confidence, drainage, terrainSlope, cropped, croppedPlanes);
+        return new Context(width, height, planes, confidence, drainage, terrainSlope,
+                terrainSuitability, cropped, croppedPlanes);
     }
 
     /**
@@ -201,8 +224,17 @@ public final class WetlandTerrain {
         // A local water table needs a real depression or gently drained hollow.
         // This continuous value comes from the smooth terrain field, so it
         // removes square-min terraces without replacing them with a seeded mask.
-        float landform = smooth(.005f, .05f, basins.drainage(localX, localZ))
-                * (1 - smooth(.10f, .32f, basins.terrainSlope(localX, localZ)));
+        // Preserve a true basin floor's local depression. Raised columns use
+        // the padded suitability field so noisy derivatives cannot carve an
+        // alternating wet/dry perimeter through one stable basin.
+        float localLandform = terrainLandform(basins.drainage(localX, localZ),
+                basins.terrainSlope(localX, localZ));
+        // Density-to-block quantization can put a genuine model minimum one
+        // game Y above its retained plane.  Blend that strong local floor into
+        // the tent field continuously; the reported +2 bank stays filtered.
+        float filteredLandform = basins.terrainSuitability(localX, localZ);
+        float floorWeight = originalBoundary <= plane + 1 ? smooth(.75f, .95f, localLandform) : 0;
+        float landform = filteredLandform + (localLandform - filteredLandform) * floorWeight;
         float freshStrength = ecologyStrength * landform;
         float edge = freshStrength * confidence;
         float hummock = smooth(.50f, .80f, coherent(seed ^ 0x48554D4F434B5F4CL, x, z, 24));
@@ -274,10 +306,23 @@ public final class WetlandTerrain {
         // epsilon.  Use the same bounded profile, but fade its strength to zero
         // at each admission edge.  Water still requires the shaped bed to fall
         // below sea level; a marginal sample therefore remains dry.
+        // The ecology anchor uses a one-cell slope.  On a stable tidal
+        // lowland, a single detail spike can therefore leave a dry grass
+        // finger between water cells.  The Context slope is the same rise/run
+        // unit over six cells.  Blend only toward the lower physical relief in
+        // the saturated near-sea reach, then fade back to the anchor rule on a
+        // higher shore; this leaves real steep coasts and hummocks intact.
+        float lowland = 1 - smooth(SEA_LEVEL + 2, SEA_LEVEL + 4, originalBoundary);
+        float tidal = smooth(.75f, .90f, marine)
+                * smooth(.75f, .90f, ecology.marineInfluence())
+                * smooth(.85f, 1.10f, ecology.moisture()) * (1 - hummock);
+        float physicalSlope = basins == null ? ecology.slope() : basins.terrainSlope(localX, localZ);
+        float coastalSlope = ecology.slope() + (Math.min(ecology.slope(), physicalSlope) - ecology.slope())
+                * lowland * tidal;
         float suitability = smooth(.35f, .65f, marine)
                 * smooth(.25f, .55f, ecology.marineInfluence())
                 * smooth(.45f, .65f, ecology.moisture())
-                * (1 - smooth(.18f, .35f, ecology.slope()))
+                * (1 - smooth(.18f, .35f, coastalSlope))
                 * (1 - hummock);
         if (originalBoundary <= SEA_LEVEL + 8) {
             Column strict = blendCut(originalMeters, originalBoundary, SEA_LEVEL,
@@ -413,8 +458,16 @@ public final class WetlandTerrain {
         // bounded 1..3 block bed whose coherent variation cannot make a cliff.
         // The total lowering remains within the old four-block maximum.
         if (target < water) {
-            int maximumDepth = Math.min(3, 4 - aboveWater);
-            float core = smooth(.60f, .85f, suitability);
+            // Raised-margin cells enter at one block below the water table;
+            // reserve the varied 2..3 block bed for the actual basin floor.
+            int maximumDepth = Math.min(aboveWater == 0 ? 3 : 1, 4 - aboveWater);
+            // A newly admitted cell must enter the water table at its shallow
+            // edge.  Deepening it from absolute suitability made a raised
+            // margin jump directly from dry ground to a three-block mud bed.
+            // The fraction beyond the rounded submersion admission then grows
+            // its bed toward the existing varied core depth.
+            float admission = (aboveWater + .5f) / permitted;
+            float core = smooth(.60f, .85f, suitability) * smooth(admission, 1, suitability);
             float relief = .35f + .65f * coherent(seed ^ 0x5745545F4245444CL, x, z, 48);
             int depth = 1 + (int) Math.floor(2 * core * relief);
             depth = Math.max(1, Math.min(maximumDepth, depth));
@@ -469,6 +522,24 @@ public final class WetlandTerrain {
         float dx = elevation[z * width + x + radius] - elevation[z * width + x - radius];
         float dz = elevation[(z + radius) * width + x] - elevation[(z - radius) * width + x];
         return (float) Math.sqrt(dx * dx + dz * dz) / (2 * radius * metresPerBlock);
+    }
+
+    private static float terrainLandform(float drainage, float slope) {
+        return smooth(.005f, .05f, drainage) * (1 - smooth(.10f, .32f, slope));
+    }
+
+    /** A compact separable five-column tent suppresses one-cell derivative flips without
+     * extending wetland ecology beyond its separately checked climate habitat. */
+    private static float smoothedTerrainLandform(float[] values, int width, int x, int z) {
+        float total = 0;
+        for (int dz = -2; dz <= 2; dz++) {
+            int wz = TENT_WEIGHTS[dz + 2];
+            for (int dx = -2; dx <= 2; dx++) {
+                int wx = TENT_WEIGHTS[dx + 2];
+                total += values[(z + dz) * width + x + dx] * wx * wz;
+            }
+        }
+        return total / 256f;
     }
 
     private static int[] squareMin(int[] values, int h, int w, int radius) {

@@ -5,6 +5,7 @@ public final class MacroBiomeContextTest {
     public static void main(String[] args) {
         checkCoastMask();
         checkOverlapInvariant();
+        checkMarineTransitionDisplacement();
         checkVanillaIdsUnchanged();
         checkFragmentReduction();
         System.out.println("MacroBiomeContextTest: PASS");
@@ -90,6 +91,30 @@ public final class MacroBiomeContextTest {
         require(newComponents < oldComponents, "macro context did not reduce fragments: "+newComponents+" >= "+oldComponents);
     }
 
+    private static void checkMarineTransitionDisplacement() {
+        long seed = -5015832354012275148L;
+        // The saved mangrove view is a marginal coastal transition near this
+        // coordinate. A constant plateau must remain constant regardless of its
+        // world address or seed, so no detached habitat can be invented there.
+        float plateau = .47809526f;
+        require(Float.floatToRawIntBits(MacroBiomeContext.displaceMarineTransition(
+                plateau, 0, seed, 2080, 2795)) == Float.floatToRawIntBits(plateau),
+                "flat marginal marine plateau changed at saved seam");
+        require(MacroBiomeContext.displaceMarineTransition(0, .1f, seed, 2080, 2795) == 0
+                        && MacroBiomeContext.displaceMarineTransition(1, .1f, seed, 2080, 2795) == 1,
+                "marine path/barrier or full interior changed");
+        float shifted = MacroBiomeContext.displaceMarineTransition(plateau, .02f, seed, 2080, 2795);
+        require(shifted >= 0 && shifted <= 1 && Math.abs(shifted - plateau) <= .12f,
+                "saved seam displacement exceeded six-block contour bound");
+        float beforeCell = MacroBiomeContext.displaceMarineTransition(plateau, .02f, seed, 2111, 2795);
+        float afterCell = MacroBiomeContext.displaceMarineTransition(plateau, .02f, seed, 2112, 2795);
+        require(Math.abs(afterCell - beforeCell) < .01f,
+                "marine contour gained a lattice seam");
+        float insideCell = MacroBiomeContext.displaceMarineTransition(plateau, .02f, seed, 2096, 2795);
+        require(Float.floatToRawIntBits(insideCell) != Float.floatToRawIntBits(shifted),
+                "marine contour displacement is constant inside its coherent cell");
+    }
+
     private static void checkVanillaIdsUnchanged() {
         int h = 3, w = 3, n = h * w; float[] elevation = new float[n], padded = new float[(h + 2) * (w + 2)], climate = new float[4 * n];
         java.util.Arrays.fill(elevation, 300); java.util.Arrays.fill(padded, 300);
@@ -114,7 +139,9 @@ public final class MacroBiomeContextTest {
     }
     private static boolean shoreEqual(ShoreContext a, ShoreContext b, int size) {
         for (int i = 0; i < size; i++) if (Float.floatToRawIntBits(a.valleyPotential(i))
-                != Float.floatToRawIntBits(b.valleyPotential(i))) return false;
+                != Float.floatToRawIntBits(b.valleyPotential(i))
+                || Float.floatToRawIntBits(a.marinePotential(i))
+                != Float.floatToRawIntBits(b.marinePotential(i))) return false;
         return true;
     }
     private static int components(short[] values,int h,int w) { boolean[] seen=new boolean[values.length]; int count=0; int[] queue=new int[values.length]; for(int s=0;s<values.length;s++) if(!seen[s]) { count++; short id=values[s]; int head=0,tail=0;seen[s]=true;queue[tail++]=s;while(head<tail){int n=queue[head++],r=n/w,c=n%w;int[] next={n-w,n+w,n-1,n+1};for(int q:next)if(q>=0&&q<values.length&&((q/w==r)||q==n-w||q==n+w)&&!seen[q]&&values[q]==id){seen[q]=true;queue[tail++]=q;}}}return count; }

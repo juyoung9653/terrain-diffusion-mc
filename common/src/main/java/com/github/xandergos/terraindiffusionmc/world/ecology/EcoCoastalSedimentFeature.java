@@ -14,7 +14,6 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.feature.Feature;
 import net.minecraft.world.level.levelgen.feature.FeaturePlaceContext;
 import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConfiguration;
-import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import java.util.List;
 
 /**
@@ -41,7 +40,8 @@ public final class EcoCoastalSedimentFeature extends Feature<NoneFeatureConfigur
         int chunkX = Math.floorDiv(startX, 16);
         int chunkZ = Math.floorDiv(startZ, 16);
         ChunkAccess owner = level.getChunk(chunkX, chunkZ);
-        List<BoundingBox> protectedPieces = EcoSurfaceFeature.structurePieces(level, owner, chunkX, chunkZ);
+        List<EcoSurfaceFeature.StructureProtection> protectedPieces =
+                EcoSurfaceFeature.structurePieces(level, owner, chunkX, chunkZ);
         CoastalContext samples = new CoastalContext(generator);
         // Keep the feature load-order safe for worlds without Immersive
         // Weathering: clay is the closest vanilla non-falling fine sediment.
@@ -52,7 +52,7 @@ public final class EcoCoastalSedimentFeature extends Feature<NoneFeatureConfigur
         for (int localZ = 0; localZ < 16; localZ++) for (int localX = 0; localX < 16; localX++) {
             int x = startX + localX, z = startZ + localZ;
             Bed bed = shallowBed(level, x, z, seaLevel, silt);
-            if (bed == null || EcoSurfaceFeature.intersectsStructure(protectedPieces, bed.pos())) continue;
+            if (bed == null || EcoSurfaceFeature.intersectsSedimentProtection(protectedPieces, bed.pos())) continue;
             CoastalContext.Sample support = samples.sedimentSample(x, z, level.getSeed());
             // Mangrove habitat can extend inland. Its presence alone does not
             // turn an enclosed forest pool into a marine sand apron.

@@ -7,6 +7,7 @@ import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.ShoreClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.WetlandEcology;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
+import com.github.xandergos.terraindiffusionmc.world.structure.StructurePieceOccupancy;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.world.level.ChunkPos;
@@ -27,7 +28,6 @@ import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.levelgen.feature.Feature;
 import net.minecraft.world.level.levelgen.feature.FeaturePlaceContext;
 import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConfiguration;
-import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.levelgen.structure.StructurePiece;
 import net.minecraft.world.level.levelgen.structure.StructureStart;
 
@@ -48,6 +48,8 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
             ResourceLocation.fromNamespaceAndPath("immersive_weathering", "sandy_dirt");
     private static final ResourceLocation IW_GRASSY_SANDY_DIRT =
             ResourceLocation.fromNamespaceAndPath("immersive_weathering", "grassy_sandy_dirt");
+    private static final ResourceLocation STRUCTORY_SWAMP_RUIN =
+            ResourceLocation.fromNamespaceAndPath("structory", "swamp_ruin");
     public EcoSurfaceFeature() {
         super(NoneFeatureConfiguration.CODEC);
     }
@@ -72,7 +74,7 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         // A structure reference covers the whole chunk in its bookkeeping, but
         // its pieces do not.  Protect only actual template cells: an underground
         // reference must not leave a 16-by-16 natural wetland bed unpainted.
-        List<BoundingBox> protectedStructurePieces = structurePieces(level, owner, chunkX, chunkZ);
+        List<StructureProtection> protectedStructurePieces = structurePieces(level, owner, chunkX, chunkZ);
         for (int localZ = 0; localZ < 16; localZ++) {
             for (int localX = 0; localX < 16; localX++) {
                 int x = startX + localX;
@@ -81,8 +83,7 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 int surfaceY = level.getHeight(Heightmap.Types.WORLD_SURFACE_WG, x, z) - 1;
                 BlockPos top = new BlockPos(x, topY, z);
                 boolean waterCover = surfaceWaterCover(level, top, surfaceY);
-                if (intersectsStructure(protectedStructurePieces, top)
-                        || !level.getFluidState(top).isEmpty()) continue;
+                if (!level.getFluidState(top).isEmpty()) continue;
                 NaturalEcology.SurfaceSample surfaceSample = NaturalEcology.surfaceSample(generator, x, z);
                 if (surfaceSample == null) continue;
                 EcologyClassifier.Sample sample = surfaceSample.climate();
@@ -119,6 +120,7 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 boolean ordinaryBeachTurf = net.minecraft.world.level.biome.Biomes.BEACH.location().equals(currentBiome)
                         && surface.is(Blocks.GRASS_BLOCK);
                 if (ordinaryBeachTurf && !dryShore && !dryOriginalLandBeach) {
+                    if (intersectsStructureEnvelope(protectedStructurePieces, top)) continue;
                     if (narrowDryTurfProjection(level, top, true, dryShoreSurfaces))
                         changed |= placeSupportedSand(level, top, false);
                     continue;
@@ -174,19 +176,25 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                     // climate palette so coastal mud reaches mineral sand without
                     // an artificial grass ribbon.
                     changed |= placeWetlandSediment(level, top, protectedStructurePieces);
-                } else if (material == FeatureEcologyMath.SurfaceMaterial.SAND) {
-                    changed |= placeSupportedSand(level, top, allowImmersiveWeatheringSandySoil);
-                } else if (dryGravelShore) {
-                    changed |= placeSupportedMineral(level, top, Blocks.GRAVEL.defaultBlockState(), Blocks.STONE.defaultBlockState());
                 } else {
-                    BlockState target = switch (material) {
-                        case COARSE_DIRT -> Blocks.COARSE_DIRT.defaultBlockState();
-                        case PODZOL -> Blocks.PODZOL.defaultBlockState();
-                        case GRAVEL -> Blocks.GRAVEL.defaultBlockState();
-                        case STONE -> Blocks.STONE.defaultBlockState();
-                        default -> Blocks.GRASS_BLOCK.defaultBlockState();
-                    };
-                    changed |= replace(level, top, target);
+                    // Dry mineral and palette writes retain the conservative
+                    // whole structure envelope.  Only wetland sediment may use
+                    // a known Structory template's empty cells.
+                    if (intersectsStructureEnvelope(protectedStructurePieces, top)) continue;
+                    if (material == FeatureEcologyMath.SurfaceMaterial.SAND) {
+                        changed |= placeSupportedSand(level, top, allowImmersiveWeatheringSandySoil);
+                    } else if (dryGravelShore) {
+                        changed |= placeSupportedMineral(level, top, Blocks.GRAVEL.defaultBlockState(), Blocks.STONE.defaultBlockState());
+                    } else {
+                        BlockState target = switch (material) {
+                            case COARSE_DIRT -> Blocks.COARSE_DIRT.defaultBlockState();
+                            case PODZOL -> Blocks.PODZOL.defaultBlockState();
+                            case GRAVEL -> Blocks.GRAVEL.defaultBlockState();
+                            case STONE -> Blocks.STONE.defaultBlockState();
+                            default -> Blocks.GRASS_BLOCK.defaultBlockState();
+                        };
+                        changed |= replace(level, top, target);
+                    }
                 }
                 // A neighbouring patch can arrive before this chunk paints its soil.
                 // Use the same shaped-water factor as the later native Greeneries writer.
@@ -210,10 +218,11 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                 .orElse(null);
     }
 
-    static List<BoundingBox> structurePieces(WorldGenLevel level, ChunkAccess owner,
+    static List<StructureProtection> structurePieces(WorldGenLevel level, ChunkAccess owner,
                                                       int chunkX, int chunkZ) {
-        List<BoundingBox> boxes = new ArrayList<>();
-        addStructurePieces(boxes, owner.getAllStarts().values());
+        List<StructureProtection> boxes = new ArrayList<>();
+        int minX=chunkX<<4, minZ=chunkZ<<4;
+        addStructurePieces(level, boxes, owner.getAllStarts().values(), minX, minZ);
         for (var entry : owner.getAllReferences().entrySet()) {
             for (long packedReference : entry.getValue()) {
                 int referenceX = ChunkPos.getX(packedReference);
@@ -222,23 +231,50 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         ? owner : level.getChunk(referenceX, referenceZ, ChunkStatus.STRUCTURE_STARTS, false);
                 if (source == null) continue;
                 StructureStart start = source.getStartForStructure(entry.getKey());
-                if (start != null) addStructurePieces(boxes, List.of(start));
+                if (start != null) addStructurePieces(level, boxes, List.of(start), minX, minZ);
             }
         }
         return boxes;
     }
 
-    private static void addStructurePieces(List<BoundingBox> boxes, Iterable<StructureStart> starts) {
+    private static void addStructurePieces(WorldGenLevel level, List<StructureProtection> boxes,
+                                           Iterable<StructureStart> starts, int chunkMinX, int chunkMinZ) {
         for (StructureStart start : starts) {
             if (start == null || !start.isValid()) continue;
-            for (StructurePiece piece : start.getPieces()) boxes.add(piece.getBoundingBox());
+            ResourceLocation id = level.registryAccess().registryOrThrow(Registries.STRUCTURE)
+                    .getKey(start.getStructure());
+            boolean selectivelyUnprotectWetlandBed = STRUCTORY_SWAMP_RUIN.equals(id);
+            for (StructurePiece piece : start.getPieces()) {
+                var bounds=piece.getBoundingBox();
+                if (bounds.maxX()<chunkMinX || bounds.minX()>chunkMinX+15
+                        || bounds.maxZ()<chunkMinZ || bounds.minZ()>chunkMinZ+15) continue;
+                var templateWrites=selectivelyUnprotectWetlandBed
+                        ? StructurePieceOccupancy.templateWritePositions(piece) : null;
+                boxes.add(new StructureProtection(piece, templateWrites));
+            }
         }
     }
 
-    static boolean intersectsStructure(List<BoundingBox> boxes, BlockPos pos) {
-        for (BoundingBox box : boxes) if (box.isInside(pos)) return true;
+    /** The prior conservative guard for every non-sediment surface write. */
+    static boolean intersectsStructureEnvelope(List<StructureProtection> boxes, BlockPos pos) {
+        for (StructureProtection protection : boxes)
+            if (protection.piece().getBoundingBox().isInside(pos)) return true;
         return false;
     }
+
+    /** Narrow exception for natural wetland sediment inside an audited swamp ruin. */
+    static boolean intersectsSedimentProtection(List<StructureProtection> boxes, BlockPos pos) {
+        for (StructureProtection protection : boxes) {
+            if (!protection.piece().getBoundingBox().isInside(pos)) continue;
+            // Structory's swamp ruin has broad empty template bounds over this
+            // wetland.  Preserve its authored writes, but let normal sediment
+            // treatment reach an otherwise untouched bed within those bounds.
+            if (protection.templateWrites()==null || protection.templateWrites().contains(pos.asLong())) return true;
+        }
+        return false;
+    }
+
+    record StructureProtection(StructurePiece piece, java.util.Set<Long> templateWrites) { }
 
     private static boolean isEcologyBiomeId(ResourceLocation id) {
         return id.getNamespace().equals(TerrainDiffusionLifecycle.MOD_ID) && id.getPath().startsWith("ecology/");
@@ -369,11 +405,11 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
      * contiguous natural soft soil beneath their surface.
      */
     private static boolean placeWetlandSediment(WorldGenLevel level, BlockPos top,
-                                                List<BoundingBox> protectedStructurePieces) {
+                                                List<StructureProtection> protectedStructurePieces) {
         boolean changed = false;
         BlockPos cursor = top;
         for (int layer = 0; layer < 3; layer++) {
-            if (intersectsStructure(protectedStructurePieces, cursor)
+            if (intersectsSedimentProtection(protectedStructurePieces, cursor)
                     || !isNaturalWetlandSedimentSoil(level.getBlockState(cursor))
                     || !level.getFluidState(cursor).isEmpty()) break;
             changed |= replace(level, cursor, Blocks.MUD.defaultBlockState());

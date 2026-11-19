@@ -2530,6 +2530,23 @@ block writes around sea level without pre-querying terrain. A dry swamp cap can
 sit at Y62 when sea level is 63: the cave carver can replace that cap with aquifer
 water before ecology paints the bed. Do not attribute the excavation to the last
 sediment writer.
+The Structory swamp ruin can expose a rectangular dirt bed even where its
+rotated `pond1` template has no block at all. Compare the settled block at the
+reported Y with the authored positions in every palette, not just the bounding
+box. Keep authored air and masonry protected; only empty template space is
+eligible for the wet sediment pass. Keep the conservative box for unknown pieces.
+For a dirt-to-mud step inside one stable basin, compare neighbouring drainage
+and slope admission before changing the bank palette. In the November 19
+freshwater transect at Z=2637, both original Y60/Y64 steps had equal raw
+boundary height (65) and water plane (63) on either side. Measure the true
+wet/dry edge as well as the two reported columns: a step can disappear simply
+because the shoreline moved. Measure saved biome IDs separately from water edges.
+In a tidal pool, also check for narrow grass strips with water on **both**
+sides. At X2115, Z2806/2808/2810 the high-marine terrain had raw boundaries
+64/65/65 and no hummock, but the one-block slopes were 0.180/0.322/0.142.
+Only the middle cell stayed dry. Compare the wider physical slope before
+adjusting biome selection; use a sustained steep bank as a control. A line of
+equal heights inside a forest does not measure a strip surrounded by water.
 In particular, an owner margin must use the same continuous habitat strength as
 its basin core: the former full-strength margin cut produced a four-block drop
 beside an unchanged core at nearly equal wetness. `td.wetland.shapeTracePositions`

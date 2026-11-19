@@ -19,8 +19,10 @@ public final class WetlandTerrainTest {
         checkCoastalAdmissionContinuity();
         checkStrictWaterAdmissionAndCoastalShoulder();
         checkCoastalShoulderContinuity();
+        checkCoastalSlopeSpikeRelief();
         checkVariableCoreBeds();
         checkDrainageLandform();
+        checkNoisyHollowAdmission();
         checkExclusionsAndCoast();
         checkFreshwaterFloodplain();
         System.out.println("WetlandTerrainTest: PASS");
@@ -595,6 +597,30 @@ public final class WetlandTerrainTest {
         }
     }
 
+    /**
+     * The reported mangrove fingers had raw boundary 65 and ecology slopes
+     * .142 beside .322, despite flat physical tidal ground.  Both must admit
+     * the same water there; a sustained steep physical rise still stays dry.
+     */
+    private static void checkCoastalSlopeSpikeRelief() {
+        final float metres = 16f;
+        WetlandTerrain.Context level = levelTerrace(65, metres);
+        WetlandTerrain.Context steep = steepCoastalContext(metres);
+        EcologyClassifier.Sample gentle = coastalSample(2f, .142f, .93f);
+        EcologyClassifier.Sample spike = coastalSample(2f, .322f, .93f);
+        var lowSlope = WetlandTerrain.shape(metres(65, metres), 65, gentle, (short) 0,
+                32, 32, 719L, metres, level, 32, 32);
+        var spikeOnLevel = WetlandTerrain.shape(metres(65, metres), 65, spike, (short) 0,
+                32, 32, 719L, metres, level, 32, 32);
+        var spikeOnSteep = WetlandTerrain.shape(metres(65, metres), 65, spike, (short) 0,
+                32, 32, 719L, metres, steep, 32, 32);
+        require(level.terrainSlope(32, 32) < .01f, "level coastal fixture retained relief");
+        require(steep.terrainSlope(32, 32) > .35f, "steep coastal fixture lost relief");
+        require(lowSlope.flooded() && spikeOnLevel.flooded(),
+                "one-cell ecology slope spike split a flat tidal lowland");
+        require(!spikeOnSteep.flooded(), "physical steep coast was flattened into tidal water");
+    }
+
     /** Strong wet cores keep a level water table but no longer rasterize as one flat one-block bed. */
     private static void checkVariableCoreBeds() {
         final long seed = 6101722349327285760L;
@@ -684,6 +710,34 @@ public final class WetlandTerrainTest {
         }
     }
 
+    /** One-cell convex/concave noise must not split a stable wet core into
+     * alternating water and unchanged terrain.  Flat and inclined controls stay
+     * covered by checkDrainageLandform. */
+    private static void checkNoisyHollowAdmission() {
+        final float metres = 16f;
+        WetlandTerrain.Context noisy = noisyHollowAt(68, metres);
+        float previous = -1;
+        int previousGround = Integer.MIN_VALUE;
+        int flooded = 0;
+        for (int x = 8; x < 56; x++) {
+            float suitability = noisy.terrainSuitability(x, 32);
+            require(suitability > 0, "noisy hollow lost terrain suitability at " + x);
+            if (previous >= 0) require(Math.abs(suitability - previous) <= .5f,
+                    "one-cell terrain derivative made an admission cliff at " + x);
+            var shaped = WetlandTerrain.shape(metres(69, metres), 69, wet(), (short) 0,
+                    x, 32, 4201L, metres, noisy, x, 32);
+            int ground = boundary(shaped.terrainMeters(), metres);
+            if (shaped.flooded()) flooded++;
+            if (previousGround != Integer.MIN_VALUE)
+                require(Math.abs(ground - previousGround) <= 1,
+                        "noisy raised margin made a ground-height scarp at " + x
+                                + " from " + previousGround + " to " + ground);
+            previous = suitability;
+            previousGround = ground;
+        }
+        require(flooded > 0 && flooded < 48, "noisy raised margin did not exercise a dry-to-wet transition");
+    }
+
     private static WetlandTerrain.Context flat(int boundary, float metresPerBlock) {
         return hollowAt(0, 0, boundary, metresPerBlock);
     }
@@ -707,6 +761,20 @@ public final class WetlandTerrainTest {
         int field = SIZE + PAD * 2;
         float[] values = new float[field * field];
         java.util.Arrays.fill(values, encodedBoundary(boundary, metresPerBlock));
+        return WetlandTerrain.build(values, field, field, metresPerBlock, PAD, SIZE, SIZE);
+    }
+    private static WetlandTerrain.Context noisyHollowAt(int boundary, float metresPerBlock) {
+        int field = SIZE + PAD * 2;
+        float[] values = new float[field * field];
+        for (int z = 0; z < field; z++) for (int x = 0; x < field; x++) {
+            int worldX = x - PAD, worldZ = z - PAD;
+            float bowlBlocks = .0001f * (worldX * worldX + worldZ * worldZ);
+            // Keep every sample in the same output height bin: this exercises
+            // the derivative admission only, not block-height quantization.
+            float ripple = ((worldX + worldZ) & 1) == 0 ? -.12f : .12f;
+            values[z * field + x] = encodedBoundary(boundary, metresPerBlock)
+                    + (.50f + bowlBlocks + ripple) * metresPerBlock;
+        }
         return WetlandTerrain.build(values, field, field, metresPerBlock, PAD, SIZE, SIZE);
     }
     private static WetlandTerrain.Context tiltedTerrace(int boundary, float metresPerBlock) {
@@ -736,6 +804,15 @@ public final class WetlandTerrainTest {
             int worldX = originX + x - PAD, worldZ = originZ + z - PAD;
             values[z * field + x] = metres(worldX == 0 && worldZ == 0 ? 64 : 70, metresPerBlock);
         }
+        return WetlandTerrain.build(values, field, field, metresPerBlock, PAD, SIZE, SIZE);
+    }
+
+    private static WetlandTerrain.Context steepCoastalContext(float metresPerBlock) {
+        int field = SIZE + PAD * 2;
+        float[] values = new float[field * field];
+        for (int z = 0; z < field; z++) for (int x = 0; x < field; x++)
+            values[z * field + x] = encodedBoundary(65, metresPerBlock)
+                    + (x - PAD - 32) * .5f * metresPerBlock;
         return WetlandTerrain.build(values, field, field, metresPerBlock, PAD, SIZE, SIZE);
     }
 

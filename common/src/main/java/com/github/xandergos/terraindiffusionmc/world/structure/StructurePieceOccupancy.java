@@ -4,6 +4,7 @@ import com.github.xandergos.terraindiffusionmc.mixin.*;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.levelgen.structure.PoolElementStructurePiece;
 import net.minecraft.world.level.levelgen.structure.StructurePiece;
+import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.levelgen.structure.pools.*;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplate;
 import net.minecraft.world.level.levelgen.structure.templatesystem.StructureTemplateManager;
@@ -35,6 +36,45 @@ public final class StructurePieceOccupancy {
     public static boolean requiresTerrainSupport(StructurePiece piece) {
         if (!(piece instanceof PoolElementStructurePiece pool)) return true;
         return hasBlocks(pool.getElement(),((PoolElementPieceAccess)pool).terrainDiffusion$templates(),true);
+    }
+    /**
+     * One immutable world-space write mask for a known rigid single-pool
+     * element. Unknown elements and spatial processors return {@code null} so
+     * callers retain their conservative envelope.
+     */
+    public static Set<Long> templateWritePositions(StructurePiece piece) {
+        if (piece.getClass()!=PoolElementStructurePiece.class) return null;
+        var pool=(PoolElementStructurePiece)piece;
+        if (pool.getElement().getClass()!=SinglePoolElement.class
+                || pool.getElement().getProjection()!=StructureTemplatePool.Projection.RIGID
+                || !ruleOnly(pool)) return null;
+        var template=((SinglePoolTemplateAccess)pool.getElement()).terrainDiffusion$template(
+                ((PoolElementPieceAccess)pool).terrainDiffusion$templates());
+        var positions=new HashSet<Long>();
+        for (var palette:((StructureTemplatePaletteAccess)template).terrainDiffusion$palettes())
+            for (var block:palette.blocks()) if (ComponentGeometry.write(BuiltInRegistries.BLOCK
+                    .getKey(block.state().getBlock()).toString(),
+                    block.nbt()==null ? null : block.nbt().getString("final_state"),false)
+                    != ComponentGeometry.Write.NONE) {
+                var local=block.pos();
+                int x, z;
+                switch (pool.getRotation()) {
+                    case NONE -> { x=local.getX(); z=local.getZ(); }
+                    case CLOCKWISE_90 -> { x=-local.getZ(); z=local.getX(); }
+                    case CLOCKWISE_180 -> { x=-local.getX(); z=-local.getZ(); }
+                    case COUNTERCLOCKWISE_90 -> { x=local.getZ(); z=-local.getX(); }
+                    default -> { return null; }
+                }
+                positions.add(BlockPos.asLong(pool.getPosition().getX()+x,
+                        pool.getPosition().getY()+local.getY(),pool.getPosition().getZ()+z));
+            }
+        return Set.copyOf(positions);
+    }
+    private static boolean ruleOnly(PoolElementStructurePiece pool) {
+        for (var processor:((SinglePoolTemplateAccess)pool.getElement()).terrainDiffusion$processors()
+                .value().list()) if (processor.getClass()!=net.minecraft.world.level.levelgen.structure
+                .templatesystem.RuleProcessor.class) return false;
+        return true;
     }
     /** Exact, unprocessed bottom-layer soil only; never infer a floor from a roof or a road. */
     public static List<SoilFloor> soilFloor(PoolElementStructurePiece pool) {

@@ -13,6 +13,11 @@ final class MacroBiomeContext {
     static final int CONTEXT_PAD = 288;
     private static final int HABITAT_RADIUS = 16;
     private static final int MARINE_EXPOSURE_RADIUS = 64;
+    // This is a displacement of an existing coastal contour, never an
+    // independent habitat mask. Its size stays far below the connected
+    // lowland reach, so a coast retains its broad connected form.
+    private static final int MARINE_TRANSITION_CELL = 64;
+    private static final float MARINE_TRANSITION_SHIFT_BLOCKS = 6f;
     private static final int[] RING_64_I = new int[16], RING_64_J = new int[16], RING_96_I = new int[16], RING_96_J = new int[16];
     static {
         for (int k = 0; k < 16; k++) {
@@ -110,18 +115,10 @@ final class MacroBiomeContext {
                         + worldJ + RING_64_J[k + 8] - fieldJ0];
                 crossValley = Math.max(crossValley, Math.min(left, right) - centerHeight);
             }
-            float dx = (habitat[center + HABITAT_RADIUS] - habitat[center - HABITAT_RADIUS])
-                    / (2 * HABITAT_RADIUS * physicalPixelSize);
-            float dz = (habitat[center + HABITAT_RADIUS * fieldW] - habitat[center - HABITAT_RADIUS * fieldW])
-                    / (2 * HABITAT_RADIUS * physicalPixelSize);
-            float habitatSlope = (float) Math.sqrt(dx * dx + dz * dz);
+            float habitatSlope = habitatSlope(habitat, fieldW, center, physicalPixelSize);
             valley[out] = WetlandEcology.inlandPotential(habitatSlope, crossValley);
-            if (marineDistance[center] <= WetlandEcology.MARINE_REACH_BLOCKS * 10) {
-                // Small raw height ripples must not punch holes in the same lowland.
-                // The path still rejects actual high barriers; vegetation checks real support.
-                marine[out] = WetlandEcology.marineLowlandPotential(centerHeight / physicalPixelSize,
-                        habitatSlope, marineDistance[center] / 10f);
-            }
+            marine[out] = marinePotential(habitat, fieldW, center, marineDistance,
+                    physicalPixelSize);
             if (!coast[out]) continue;
             int wet = 0;
             float lo = Float.POSITIVE_INFINITY, hi = Float.NEGATIVE_INFINITY;
@@ -137,6 +134,25 @@ final class MacroBiomeContext {
             }
             open[out] = wet / 16f; relief[out] = (hi - lo) / (192f * physicalPixelSize);
         }
+        // A uniform marginal lowland must retain a uniform transition.  Where
+        // the connected lowland field already has a contour, displace that
+        // contour by at most six blocks with a world-addressed coherent field.
+        // The local gradient is zero on a plateau, so this cannot create a
+        // detached mangrove island or make an existing barrier/path eligible.
+        for (int r = 0; r < height; r++) for (int c = 0; c < width; c++) {
+            int out = r * width + c;
+            float base = marine[out];
+            if (base <= 0 || base >= 1) continue;
+            int center = (r + CONTEXT_PAD) * fieldW + c + CONTEXT_PAD;
+            float dx = marinePotential(habitat, fieldW, center + 1, marineDistance,
+                    physicalPixelSize) - marinePotential(habitat, fieldW, center - 1,
+                    marineDistance, physicalPixelSize);
+            float dz = marinePotential(habitat, fieldW, center + fieldW, marineDistance,
+                    physicalPixelSize) - marinePotential(habitat, fieldW, center - fieldW,
+                    marineDistance, physicalPixelSize);
+            float gradient = .5f * (float) Math.sqrt(dx * dx + dz * dz);
+            marine[out] = displaceMarineTransition(base, gradient, worldSeed, j0 + c, i0 + r);
+        }
         // Shore/climate admission uses smooth terrain.  Water containment must
         // instead see the exact post-detail density floor used at scale > 1.
         // The existing 288-block halo leaves one cell for Sobel detail and the
@@ -150,6 +166,48 @@ final class MacroBiomeContext {
                 new ShoreContext(distance, open, relief, valley, marine,
                         WetlandTerrain.build(wetlandGround, wetlandH, wetlandW, physicalPixelSize,
                                 wetlandPad, height, width, worldSeed, j0, i0)));
+    }
+
+    private static float marinePotential(float[] habitat, int width, int center,
+                                         int[] marineDistance, float physicalPixelSize) {
+        if (marineDistance[center] > WetlandEcology.MARINE_REACH_BLOCKS * 10) return 0;
+        return WetlandEcology.marineLowlandPotential(habitat[center] / physicalPixelSize,
+                habitatSlope(habitat, width, center, physicalPixelSize), marineDistance[center] / 10f);
+    }
+
+    private static float habitatSlope(float[] habitat, int width, int center, float physicalPixelSize) {
+        float dx = (habitat[center + HABITAT_RADIUS] - habitat[center - HABITAT_RADIUS])
+                / (2 * HABITAT_RADIUS * physicalPixelSize);
+        float dz = (habitat[center + HABITAT_RADIUS * width] - habitat[center - HABITAT_RADIUS * width])
+                / (2 * HABITAT_RADIUS * physicalPixelSize);
+        return (float) Math.sqrt(dx * dx + dz * dz);
+    }
+
+    static float displaceMarineTransition(float base, float gradient, long seed, int worldJ, int worldI) {
+        if (gradient <= 0) return base;
+        float envelope = EcologyClassifier.smooth(.05f, .30f, base)
+                * (1 - EcologyClassifier.smooth(.70f, .95f, base));
+        if (envelope <= 0) return base;
+        float contourShift = (coherent(seed ^ 0x4D4152494E455F43L, worldJ, worldI,
+                MARINE_TRANSITION_CELL) * 2 - 1) * MARINE_TRANSITION_SHIFT_BLOCKS;
+        return Math.max(0, Math.min(1, base + contourShift * gradient * envelope));
+    }
+
+    private static float coherent(long seed, int x, int z, int cell) {
+        int x0 = Math.floorDiv(x, cell), z0 = Math.floorDiv(z, cell);
+        float fx = (x - (long) x0 * cell) / (float) cell;
+        float fz = (z - (long) z0 * cell) / (float) cell;
+        fx = fx * fx * (3 - 2 * fx); fx = fx * fx * (3 - 2 * fx);
+        fz = fz * fz * (3 - 2 * fz); fz = fz * fz * (3 - 2 * fz);
+        float a = unit(seed, x0, z0), b = unit(seed, x0 + 1, z0);
+        float c = unit(seed, x0, z0 + 1), d = unit(seed, x0 + 1, z0 + 1);
+        return a + (b - a) * fx + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fz;
+    }
+
+    private static float unit(long seed, int x, int z) {
+        int seedBits = (int) (seed ^ seed >>> 32);
+        return Integer.toUnsignedLong(hash(x ^ seedBits,
+                z + Integer.rotateLeft(seedBits, 13))) * 0x1.0p-32f;
     }
 
     /** Bounded lowland paths using only this immutable terrain halo, never generated river water.
