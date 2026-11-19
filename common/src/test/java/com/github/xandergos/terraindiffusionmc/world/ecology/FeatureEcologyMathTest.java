@@ -22,6 +22,14 @@ public final class FeatureEcologyMathTest {
         checkSpecies(15.0F, 0.9F, false, false, false, "temperate");
         checkSpecies(28.0F, 0.4F, false, true, false, "warm dry");
         checkSpecies(28.0F, 1.6F, false, false, true, "warm wet");
+        require(FeatureEcologyMath.coastalTropicalCanopy(27, .9f, .12f, .5f),
+                "humid gentle tropical coast must allow a closed canopy");
+        require(!FeatureEcologyMath.coastalTropicalCanopy(27, .55f, .12f, .5f),
+                "dry tropical coast must retain its acacia-capable woodland");
+        require(!FeatureEcologyMath.coastalTropicalCanopy(27, .9f, .42f, .5f),
+                "steep coast must not select a broadleaf shore canopy");
+        require(!FeatureEcologyMath.coastalTropicalCanopy(27, .9f, .12f, .2f),
+                "inland tropical woodland must retain its ordinary species mix");
         FeatureEcologyMath.SpeciesWeights below = FeatureEcologyMath.speciesWeights(16.9F, 0.7F);
         FeatureEcologyMath.SpeciesWeights above = FeatureEcologyMath.speciesWeights(17.1F, 0.7F);
         require(Math.abs(below.acacia() - above.acacia()) < 0.04F, "acacia eligibility must taper smoothly");
@@ -337,34 +345,9 @@ public final class FeatureEcologyMathTest {
     }
 
     private static void checkCoastalSedimentField() {
-        // A smooth coastal support profile has an intervening silt deposit;
-        // changing the existing bed material must not create a checker pattern.
-        float[] support = {.0F, .18F, .34F, .46F, .73F, .89F, .70F, .43F, .20F, .0F};
-        int transitions = 0, silt = 0;
-        FeatureEcologyMath.CoastalSediment previous = FeatureEcologyMath.CoastalSediment.NONE;
-        for (float value : support) {
-            var material = FeatureEcologyMath.coastalSediment(value, .90F, 2, 0, .50F);
-            if (previous != FeatureEcologyMath.CoastalSediment.NONE && material != previous) transitions++;
-            if (material == FeatureEcologyMath.CoastalSediment.SILT) silt++;
-            previous = material;
-        }
-        require(transitions <= 3 && silt > 0,
-                "coastal support profile must grade sand into mud through a silt deposit");
-        require(FeatureEcologyMath.coastalSediment(.22F, .90F, 2, -1.0F, .10F)
-                        != FeatureEcologyMath.CoastalSediment.SILT,
-                "exposed, supply-poor contact must not receive a compulsory silt stripe");
-        require(FeatureEcologyMath.coastalSediment(.22F, .90F, 2, 1.0F, .90F)
-                        == FeatureEcologyMath.CoastalSediment.SILT,
-                "sheltered supply pocket must retain a multi-column fine deposit");
-        require(FeatureEcologyMath.coastalSediment(.65F, .90F, 1, 0, .50F)
-                        == FeatureEcologyMath.CoastalSediment.MUD,
-                "humid mangrove core must choose mud independently of incoming sand or dirt");
-        require(FeatureEcologyMath.coastalSediment(.20F, .90F, 4, 0, .50F)
-                        == FeatureEcologyMath.CoastalSediment.SAND,
-                "connected outer mangrove apron must choose mineral sand");
-        require(FeatureEcologyMath.coastalSediment(.90F, .02F, 1, 0, .50F)
-                        == FeatureEcologyMath.CoastalSediment.NONE,
-                "unconnected ocean must remain untouched");
+        checkDitheredCoastalHandoff();
+        checkSandContactMix();
+        checkReportedSiltFieldPotential();
         float[] negativeTile = new float[49], shiftedTile = new float[49];
         for (int z = 0; z < 7; z++) for (int x = 0; x < 7; x++) {
             // Global-space continuous habitat field, sampled at a negative tile
@@ -384,51 +367,136 @@ public final class FeatureEcologyMathTest {
         float shallow = FeatureEcologyMath.coastalMangroveAffinity(.50F, .50F, 1, 0);
         require(inner > outer && shallow > inner,
                 "one shared affinity must grade mangrove shelter and shallow relief continuously");
-        FeatureEcologyMath.CoastalSediment[][] shore = new FeatureEcologyMath.CoastalSediment[24][48];
-        int isolated = 0, minShore = Integer.MAX_VALUE, maxShore = Integer.MIN_VALUE;
-        int minFlat = Integer.MAX_VALUE, maxFlat = Integer.MIN_VALUE;
-        java.util.Set<Integer> shorePositions = new java.util.HashSet<>();
-        int siltRows = 0, missingSiltRows = 0;
-        for (int z = 0; z < shore.length; z++) {
-            int firstMud = -1;
-            int firstFlatMud = -1;
-            for (int x = 0; x < shore[z].length; x++) {
-                float supportAtX = .08F + x * .017F;
-                float concavity = (float) Math.sin(z * .42F) * 2.2F;
-                shore[z][x] = FeatureEcologyMath.coastalSediment(supportAtX, .62F, 2,
-                        concavity, FeatureEcologyMath.broadPatch(91357L, x, z, 48));
-                if (firstMud < 0 && shore[z][x] == FeatureEcologyMath.CoastalSediment.MUD) firstMud = x;
-                if (firstFlatMud < 0 && FeatureEcologyMath.coastalSediment(supportAtX, .62F, 2,
-                        0, FeatureEcologyMath.broadPatch(91357L, x, z, 48))
-                        == FeatureEcologyMath.CoastalSediment.MUD) firstFlatMud = x;
-            }
-            if (firstMud >= 0) {
-                minShore = Math.min(minShore, firstMud);
-                maxShore = Math.max(maxShore, firstMud);
-                shorePositions.add(firstMud);
-            }
-            boolean rowSilt = false;
-            for (FeatureEcologyMath.CoastalSediment material : shore[z])
-                rowSilt |= material == FeatureEcologyMath.CoastalSediment.SILT;
-            if (rowSilt) siltRows++;
-            else missingSiltRows++;
-            if (firstFlatMud >= 0) {
-                minFlat = Math.min(minFlat, firstFlatMud);
-                maxFlat = Math.max(maxFlat, firstFlatMud);
-            }
+    }
+
+    /** Final, per-column sediment selection must soften a depth contour while
+     * leaving the adjacent mineral cores intact. */
+    private static void checkDitheredCoastalHandoff() {
+        int sand = 0, silt = 0, mud = 0;
+        for (int x = -64; x < 64; x++) for (int z = -64; z < 64; z++) {
+            // A broad supply transect is what the production feature samples;
+            // a constant high value is a mud core, not a meaningful handoff.
+            float supply = (x + 64) / 127F;
+            var material = FeatureEcologyMath.ditheredCoastalSediment(.22F, .90F, 2, 1.0F, supply,
+                    91357L, x, z);
+            require(material == FeatureEcologyMath.ditheredCoastalSediment(.22F, .90F, 2, 1.0F, supply,
+                            91357L, x, z),
+                    "coastal dither must be independent of traversal and chunk boundaries");
+            if (material == FeatureEcologyMath.CoastalSediment.SAND) sand++;
+            else if (material == FeatureEcologyMath.CoastalSediment.SILT) silt++;
+            else if (material == FeatureEcologyMath.CoastalSediment.MUD) mud++;
         }
-        for (int z = 1; z < shore.length - 1; z++) for (int x = 1; x < shore[z].length - 1; x++) {
-            var cell = shore[z][x];
-            if (cell != FeatureEcologyMath.CoastalSediment.NONE
-                    && shore[z - 1][x] != cell && shore[z + 1][x] != cell
-                    && shore[z][x - 1] != cell && shore[z][x + 1] != cell) isolated++;
+        System.out.printf("coastal pocket composition sand=%d silt=%d mud=%d%n", sand, silt, mud);
+        // This arbitrary transect may contain no lobe; silt is never a
+        // mandatory stripe between every sand and mud contact.
+        require(sand > 150 && mud > 150 && silt < 2048,
+                "a coastal handoff must retain bounded mineral cores");
+        int mudCoreSandLoss = 0, mudCoreSilt = 0, sandCoreLoss = 0, openOceanWrites = 0;
+        for (int x = -64; x < 64; x++) for (int z = -64; z < 64; z++) {
+            var core = FeatureEcologyMath.ditheredCoastalSediment(.90F, .90F, 1, 0, .90F,
+                    91357L, x, z);
+            if (core == FeatureEcologyMath.CoastalSediment.SAND) mudCoreSandLoss++;
+            if (core == FeatureEcologyMath.CoastalSediment.SILT) mudCoreSilt++;
+            var outer = FeatureEcologyMath.ditheredCoastalSediment(.20F, .90F, 4, 0, .50F,
+                    91357L, x, z);
+            if (outer != FeatureEcologyMath.CoastalSediment.SAND) sandCoreLoss++;
+            if (FeatureEcologyMath.ditheredCoastalSediment(.90F, .02F, 1, 0, .50F,
+                    91357L, x, z) != FeatureEcologyMath.CoastalSediment.NONE) openOceanWrites++;
         }
-        System.out.printf("coastal tongue relief-range=%d..%d flat-range=%d..%d distinct=%d isolated=%d silt-rows=%d/%d%n",
-                minShore, maxShore, minFlat, maxFlat, shorePositions.size(), isolated, siltRows, shore.length);
-        require(maxShore - minShore >= 2 && shorePositions.size() >= 3 && isolated == 0,
-                "relief must form coherent multi-block coastal tongues, not a straight mask or pepper");
-        require(siltRows > 0 && missingSiltRows > 0,
-                "alongshore transition must contain both sheltered silt deposits and exposed direct contacts");
+        System.out.printf("coastal final handoff sand=%d silt=%d mud=%d core-sand/silt-loss=%d/%d outer-loss=%d%n",
+                sand, silt, mud, mudCoreSandLoss, mudCoreSilt, sandCoreLoss);
+        require(mudCoreSandLoss == 0 && mudCoreSilt > 0 && mudCoreSilt < 4096 && sandCoreLoss == 0,
+                "silt must form bounded mud-core deposits without eroding either mineral core");
+        require(openOceanWrites == 0, "coastal dither must not extend into an unconnected ocean");
+        checkCoastalContactConnectivity();
+    }
+
+    /** The final contact must read as patches and tongues, never as isolated
+     * diagonal material checks.  Use a flat synthetic bed so this verifies the
+     * field itself rather than hiding a bad threshold behind terrain relief. */
+    private static void checkCoastalContactConnectivity() {
+        final int size = 96;
+        FeatureEcologyMath.CoastalSediment[][] field =
+                new FeatureEcologyMath.CoastalSediment[size][size];
+        for (int z = 0; z < size; z++) for (int x = 0; x < size; x++) {
+            float supply = x / (float) (size - 1);
+            field[z][x] = FeatureEcologyMath.ditheredCoastalSediment(.22F, .90F, 2, 1.0F,
+                    supply, 91357L, x - size / 2, z - size / 2);
+        }
+        int isolated = 0, siltBridges = 0;
+        for (int z = 1; z < size - 1; z++) for (int x = 1; x < size - 1; x++) {
+            FeatureEcologyMath.CoastalSediment center = field[z][x];
+            if (center == FeatureEcologyMath.CoastalSediment.NONE) continue;
+            if (field[z - 1][x] != center && field[z + 1][x] != center
+                    && field[z][x - 1] != center && field[z][x + 1] != center)
+                isolated++;
+            if (center == FeatureEcologyMath.CoastalSediment.SILT
+                    && ((isSandMudPair(field[z][x - 1], field[z][x + 1]))
+                    || isSandMudPair(field[z - 1][x], field[z + 1][x])))
+                siltBridges++;
+        }
+        require(isolated == 0,
+                "coastal contact must not contain isolated material checks: " + isolated);
+        require(siltBridges == 0,
+                "silt must form sheltered pockets, never a one-column sand/mud outline: " + siltBridges);
+    }
+
+    private static void checkSandContactMix() {
+        var sand = FeatureEcologyMath.CoastalSediment.SAND;
+        var silt = FeatureEcologyMath.CoastalSediment.SILT;
+        var mud = FeatureEcologyMath.CoastalSediment.MUD;
+        var none = FeatureEcologyMath.CoastalSediment.NONE;
+        require(FeatureEcologyMath.mixSandContact(mud, silt) == mud &&
+                        FeatureEcologyMath.mixSandContact(silt, mud) == silt &&
+                        FeatureEcologyMath.mixSandContact(none, silt) == none &&
+                        FeatureEcologyMath.mixSandContact(silt, none) == silt,
+                "dithering only exchanges sand with fines in a classified marine bed");
+        // A flat, straight contact at a negative chunk boundary. A wavy but
+        // still solid edge cannot contain two material reversals on a transect.
+        int sandInFines = 0, finesInSand = 0, interleaved = 0;
+        for (int z = -256; z < 256; z++) {
+            var previous = sand;
+            int switches = 0;
+            for (int x = -24; x <= -8; x++) {
+                int offset = FeatureEcologyMath.contactOffset(321L, x, z);
+                var here = x < -16 ? sand : silt;
+                var sampled = x + offset < -16 ? sand : silt;
+                var result = FeatureEcologyMath.mixSandContact(here, sampled);
+                require(Math.abs(offset) <= 5 && (x >= -21 && x < -11 || result == here),
+                        "a uniform core beyond the contact must not acquire speckles");
+                if (result != previous) switches++;
+                if (here == sand && result == silt) finesInSand++;
+                if (here == silt && result == sand) sandInFines++;
+                previous = result;
+            }
+            if (switches > 1) interleaved++;
+        }
+        require(sandInFines > 0 && finesInSand > 0 && interleaved > 20,
+                "a sand/fines contact must mix in both directions rather than move a hard line");
+    }
+
+    private static boolean isSandMudPair(FeatureEcologyMath.CoastalSediment left,
+                                         FeatureEcologyMath.CoastalSediment right) {
+        return (left == FeatureEcologyMath.CoastalSediment.SAND
+                && right == FeatureEcologyMath.CoastalSediment.MUD)
+                || (left == FeatureEcologyMath.CoastalSediment.MUD
+                && right == FeatureEcologyMath.CoastalSediment.SAND);
+    }
+
+    /** The frozen report window retains sparse sheltered silt opportunities;
+     * the replacement must not solve an outline by deleting the material. */
+    private static void checkReportedSiltFieldPotential() {
+        long seed = -150482944371831313L;
+        int silt = 0;
+        for (int x = -1920; x <= -1713; x++) for (int z = 1552; z <= 1711; z++) {
+            float supply = FeatureEcologyMath.broadPatch(seed ^ 0x434F41535444CL, x, z, 48);
+            if (FeatureEcologyMath.ditheredCoastalSediment(.22F, .90F, 2, 0.0F,
+                    supply, seed, x, z) == FeatureEcologyMath.CoastalSediment.SILT)
+                silt++;
+        }
+        System.out.printf("reported silt-window synthetic pockets=%d%n", silt);
+        require(silt >= 32 && silt < 5000,
+                "reported shore must retain sparse silt pockets without a dominant silt apron");
     }
 
     private static void checkPlannedWetlandMargins() {

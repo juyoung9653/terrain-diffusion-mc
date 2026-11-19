@@ -58,6 +58,8 @@ public final class BiomeVisualReview {
     private static final int TICKS = 100;
     private static final int RADIUS = 1;
     private static final int TICKET_DISTANCE = 2;
+    private static final int PREFETCH = 8;
+    private static final long WINDOW_LOAD_TIMEOUT_SECONDS = 900;
     private static final TicketType<ChunkPos> TICKET = TicketType.create("td-biome-visual-review",
             Comparator.comparingLong(ChunkPos::toLong));
 
@@ -213,10 +215,8 @@ public final class BiomeVisualReview {
         for (Window window : plan.windows) {
             List<ChunkPos> chunks = new ArrayList<>();
             for (int z = (window.minZ >> 4) - 1; z <= (window.maxZ >> 4) + 1; z++) for (int x = (window.minX >> 4) - 1; x <= (window.maxX >> 4) + 1; x++) chunks.add(new ChunkPos(x, z));
-            server.submit(() -> chunks.forEach(pos -> level.getChunkSource().addRegionTicket(TICKET, pos, TICKET_DISTANCE, pos))).get(60, TimeUnit.SECONDS);
             try {
-                List<? extends CompletableFuture<?>> futures = server.submit(() -> chunks.stream().map(pos -> level.getChunkSource().getChunkFuture(pos.x, pos.z, ChunkStatus.FULL, true)).toList()).get(30, TimeUnit.SECONDS);
-                for (CompletableFuture<?> future : futures) future.get(180, TimeUnit.SECONDS);
+                loadFullBatches(server, level, chunks, System.nanoTime() + TimeUnit.SECONDS.toNanos(WINDOW_LOAD_TIMEOUT_SECONDS));
                 long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
                 while (!server.submit(() -> chunks.stream().allMatch(pos -> level.shouldTickBlocksAt(pos.toLong()))).get(30, TimeUnit.SECONDS)) {
                     if (System.nanoTime() > deadline) throw new IllegalStateException("review window did not become tick eligible");
@@ -239,6 +239,32 @@ public final class BiomeVisualReview {
             }
         }
         return result;
+    }
+
+    /**
+     * Ticket mutation remains on the server thread, but requesting FULL futures
+     * off-thread avoids blocking that thread behind asynchronous chunk admission.
+     * Keeping completed tickets until the caller's finally block preserves the
+     * whole-window tick and census coverage.
+     */
+    private static void loadFullBatches(MinecraftServer server, ServerLevel level,
+                                        List<ChunkPos> chunks, long deadline) throws Exception {
+        for (int offset = 0; offset < chunks.size(); offset += PREFETCH) {
+            List<ChunkPos> batch = chunks.subList(offset, Math.min(chunks.size(), offset + PREFETCH));
+            server.submit(() -> batch.forEach(pos -> level.getChunkSource().addRegionTicket(TICKET, pos, TICKET_DISTANCE, pos)))
+                    .get(remainingSeconds(deadline), TimeUnit.SECONDS);
+            // Do not wrap this in server.submit: ChunkProfileClient uses this
+            // same off-thread future acquisition to prevent server-thread stalls.
+            List<? extends CompletableFuture<?>> futures = batch.stream()
+                    .map(pos -> level.getChunkSource().getChunkFuture(pos.x, pos.z, ChunkStatus.FULL, true)).toList();
+            for (CompletableFuture<?> future : futures) future.get(remainingSeconds(deadline), TimeUnit.SECONDS);
+        }
+    }
+
+    private static long remainingSeconds(long deadline) {
+        long remaining = TimeUnit.NANOSECONDS.toSeconds(deadline - System.nanoTime());
+        if (remaining < 1) throw new IllegalStateException("review chunk load deadline exceeded");
+        return remaining;
     }
 
     private static Column observe(ServerLevel level, int x, int z) {
@@ -581,9 +607,8 @@ public final class BiomeVisualReview {
         if (selected.inspection != null && "root".equals(selected.inspection.request.kind)) ticketSet.addAll(rootRequestTickets(selected.inspection.request.x, selected.inspection.request.z));
         List<ChunkPos> chunks = new ArrayList<>(ticketSet); List<Map<String, Object>> images = new ArrayList<>();
         try {
-            server.submit(() -> chunks.forEach(pos -> level.getChunkSource().addRegionTicket(TICKET, pos, TICKET_DISTANCE, pos))).get(60, TimeUnit.SECONDS);
-            List<? extends CompletableFuture<?>> futures = server.submit(() -> chunks.stream().map(pos -> level.getChunkSource().getChunkFuture(pos.x, pos.z, ChunkStatus.FULL, true)).toList()).get(30, TimeUnit.SECONDS);
-            for (CompletableFuture<?> future : futures) future.get(180, TimeUnit.SECONDS);
+            loadFullBatches(server, level, chunks,
+                    System.nanoTime() + TimeUnit.SECONDS.toNanos(WINDOW_LOAD_TIMEOUT_SECONDS));
             boolean eligible = server.submit(() -> chunks.stream().allMatch(pos -> level.shouldTickBlocksAt(pos.toLong()))).get(30, TimeUnit.SECONDS);
             result.put("tickEligible", eligible); if (!eligible) throw new IllegalStateException("review chunks not tick eligible");
             server.submit(() -> server.getPlayerList().getPlayers().getFirst().teleportTo(level, selected.x + .5, selected.column.surfaceY + 24D, selected.z + .5, 180F, 55F)).get(30, TimeUnit.SECONDS);
@@ -647,18 +672,27 @@ public final class BiomeVisualReview {
                         aimYaw(side.x, side.z, sideTarget.x + .5, sideTarget.z + .5),
                         aimPitch(side.x, side.y + 1.62, side.z, sideTarget.x + .5, sideTarget.y, sideTarget.z + .5), side.obstruction, side.lineOfSight,
                         side.visibilityClearRays, side.visibilityRayCount));
-                ViewTarget detailTarget = inspectionTarget(selected.inspection, actual, currentInspectionEndpoints, true);
+                CrownSample waterlineCrown = selected.inspection != null
+                        && "waterline".equals(selected.inspection.request.detailView)
+                        ? server.submit(() -> coralCrown(level, captureActual)).get(30, TimeUnit.SECONDS) : null;
+                if (selected.inspection != null && "waterline".equals(selected.inspection.request.detailView)
+                        && waterlineCrown == null)
+                    throw new IllegalStateException("waterline detail found no coral crown near " + selected.id);
+                ViewTarget detailTarget = waterlineCrown == null
+                        ? inspectionTarget(selected.inspection, actual, currentInspectionEndpoints, true)
+                        : new ViewTarget(waterlineCrown.x, waterlineCrown.z, waterlineCrown.y + .5);
                 List<Vec3> detailContext = !currentProfile.isEmpty() ? detailProfileTargets(currentProfile)
                         : server.submit(() -> rootTargets(level, captureActual, selected.inspection)).get(30, TimeUnit.SECONDS);
                 List<Column> detailProfile = currentProfile;
                 Camera detail = server.submit(() -> openDetailCamera(level, detailTarget.x, detailTarget.z, captureActual.groundY,
-                        underwaterDetail, detailTarget.y, detailContext, detailProfile)).get(30, TimeUnit.SECONDS);
+                        underwaterDetail, detailTarget.y, detailContext, detailProfile, waterlineCrown != null)).get(30, TimeUnit.SECONDS);
                 Map<String, Object> detailImage = capture(selected, runId, "detail", detail.x, detail.y, detail.z,
                         aimYaw(detail.x, detail.z, detailTarget.x + .5, detailTarget.z + .5),
                         aimPitch(detail.x, detail.y + 1.62, detail.z, detailTarget.x + .5, detailTarget.y, detailTarget.z + .5), detail.obstruction, detail.lineOfSight,
                         detail.visibilityClearRays, detail.visibilityRayCount);
                 detailImage.put("eyeMedium", server.submit(() -> eyeMedium(level, detail)).get(30, TimeUnit.SECONDS));
                 detailImage.put("gameMode", underwaterDetail ? GameType.SPECTATOR.getName() : "unchanged");
+                if (waterlineCrown != null) detailImage.put("waterlineCrown", waterlineCrown.toMap());
                 images.add(detailImage);
             } finally {
                 setHudHidden(priorHud);
@@ -677,13 +711,18 @@ public final class BiomeVisualReview {
                                                 String obstruction, Boolean lineOfSight, Integer visibilityClearRays,
                                                 Integer visibilityRayCount) throws Exception {
         String filename = "td-biome-review-" + runId + "-" + safe(site.id) + "-" + view + ".png";
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120); long moved = -1;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(120);
         while (System.nanoTime() < deadline) {
-            CompletableFuture<Boolean> arrived = new CompletableFuture<>();
-            Minecraft.getInstance().execute(() -> { try { Minecraft mc = Minecraft.getInstance(); boolean ready = clientNeighborhoodArrived(mc, site.x, site.z); if (ready) camera(mc, x, y, z, yaw, pitch); arrived.complete(ready); } catch (Throwable failure) { arrived.completeExceptionally(failure); } });
-            if (!arrived.get(30, TimeUnit.SECONDS)) { Thread.sleep(250); continue; }
-            if (moved < 0) { moved = System.nanoTime(); Thread.sleep(250); continue; }
-            if (System.nanoTime() - moved < TimeUnit.SECONDS.toNanos(3)) { Thread.sleep(100); continue; }
+            CompletableFuture<CaptureFrameWait.Sample> pending = new CompletableFuture<>();
+            Minecraft.getInstance().execute(() -> { try {
+                Minecraft mc = Minecraft.getInstance();
+                boolean loaded = clientNeighborhoodArrived(mc, site.x, site.z);
+                if (loaded) camera(mc, x, y, z, yaw, pitch);
+                pending.complete(CaptureFrameWait.poll(filename, loaded, !"aerial".equals(view),
+                        x, loaded ? mc.player.getEyeY() : y, z, yaw, pitch));
+            } catch (Throwable failure) { pending.completeExceptionally(failure); } });
+            CaptureFrameWait.Sample frameWait = pending.get(30, TimeUnit.SECONDS);
+            if (!frameWait.ready()) { Thread.sleep(100); continue; }
             CompletableFuture<String> saved = new CompletableFuture<>();
             Minecraft.getInstance().execute(() -> { try { Minecraft mc = Minecraft.getInstance(); camera(mc, x, y, z, yaw, pitch); Screenshot.grab(mc.gameDirectory, filename, mc.getMainRenderTarget(), message -> saved.complete(message.getString())); } catch (Throwable failure) { saved.completeExceptionally(failure); } });
             String message = saved.get(30, TimeUnit.SECONDS); Path path = Minecraft.getInstance().gameDirectory.toPath().resolve("screenshots").resolve(filename).toAbsolutePath();
@@ -694,7 +733,9 @@ public final class BiomeVisualReview {
             result.put("camera", Map.of("x", x, "y", y, "z", z, "yaw", yaw, "pitch", pitch));
             result.put("obstruction", obstruction); result.put("lineOfSight", lineOfSight);
             result.put("visibilityClearRays", visibilityClearRays); result.put("visibilityRayCount", visibilityRayCount);
-            result.put("renderDelaySeconds", 3); result.put("message", message);
+            result.put("renderDelaySeconds", frameWait.elapsedNanos() / 1e9);
+            result.put("renderWaitMode", frameWait.mode()); result.put("stableRenderedFrames", frameWait.frames());
+            result.put("message", message);
             return result;
         }
         throw new IllegalStateException("client did not render " + site.id + "/" + view);
@@ -848,7 +889,8 @@ public final class BiomeVisualReview {
     }
     /** Short oblique detail view frames several bed blocks and the adjoining toe instead of a single texture. */
     private static Camera openDetailCamera(ServerLevel level, int targetX, int targetZ, int targetGroundY, boolean water,
-                                           double centreTargetY, List<Vec3> contextTargets, List<Column> profile) {
+                                           double centreTargetY, List<Vec3> contextTargets, List<Column> profile,
+                                           boolean waterline) {
         int[][] directions = detailDirections(targetX, targetZ, profile);
         int[][] targetPatch = {{0,0},{1,0},{-1,0},{0,1},{0,-1}};
         Camera best = null;
@@ -857,7 +899,8 @@ public final class BiomeVisualReview {
             int x = (int) Math.floor(targetX + direction[0] * radius), z = (int) Math.floor(targetZ + direction[1] * radius);
             int localGroundY = substrate(level, x, z, level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1);
             int localTopWater = topWater(level, x, z, level.getHeight(Heightmap.Types.WORLD_SURFACE, x, z) - 1);
-            List<Double> eyes = water ? underwaterEyes(localGroundY, localTopWater, lift) : List.of(localGroundY + 2.62 + lift);
+            List<Double> eyes = water ? (waterline ? waterlineEyes(localGroundY, localTopWater, lift)
+                    : underwaterEyes(localGroundY, localTopWater, lift)) : List.of(localGroundY + 2.62 + lift);
             for (double eyeY : eyes) {
             double y = eyeY - 1.62;
             BlockPos eyeBlock = BlockPos.containing(x + .5, eyeY, z + .5);
@@ -902,6 +945,28 @@ public final class BiomeVisualReview {
             if (value > groundY + 1 && value < topWater + 1 && eyes.stream().noneMatch(other -> Math.abs(other-value)<.001)) eyes.add(value);
         return eyes;
     }
+    /** Waterline evidence starts near the top water cell but remains submerged. */
+    static List<Double> waterlineEyes(int groundY, int topWater, int lift) {
+        List<Double> eyes = new ArrayList<>(underwaterEyes(groundY, topWater, lift));
+        java.util.Collections.reverse(eyes); return eyes;
+    }
+    /** Bounded physical sample for the optional waterline detail, not a coral-placement decision. */
+    private static CrownSample coralCrown(ServerLevel level, Column anchor) {
+        CrownSample best = null;
+        for (int dz=-6; dz<=6; dz++) for (int dx=-6; dx<=6; dx++) {
+            int x=anchor.x+dx,z=anchor.z+dz, top=level.getHeight(Heightmap.Types.WORLD_SURFACE,x,z)-1;
+            int floor=Math.max(anchor.groundY-2, top-8);
+            for (int y=top; y>=floor; y--) {
+                BlockState state=level.getBlockState(new BlockPos(x,y,z));
+                if (!state.is(BlockTags.CORALS) && !state.is(BlockTags.CORAL_BLOCKS)) continue;
+                int waterTop=topWater(level,x,z,top);
+                CrownSample candidate=new CrownSample(x,y,z,blockId(state),waterTop);
+                if (best==null || candidate.y>best.y || (candidate.y==best.y && candidate.distance(anchor)<best.distance(anchor))) best=candidate;
+                break;
+            }
+        }
+        return best;
+    }
     /** Bed, lower face, mid face, upper face and crest: solid face hits near these are valid evidence. */
     private static List<Vec3> detailProfileTargets(List<Column> path) {
         if (path.isEmpty()) return List.of(); List<Vec3> out = new ArrayList<>();
@@ -936,7 +1001,12 @@ public final class BiomeVisualReview {
 
     private record Window(String id, int minX, int maxX, int minZ, int maxZ) { }
     private record Explicit(String id, int x, int z) { }
-    private record InspectionRequest(String id, int x, int z, String kind) { }
+    private record InspectionRequest(String id, int x, int z, String kind, String detailView) { }
+    private record CrownSample(int x, int y, int z, String block, int waterTop) {
+        int distance(Column column) { return Math.max(Math.abs(x-column.x),Math.abs(z-column.z)); }
+        Map<String,Object> toMap() { return Map.of("x",x,"y",y,"z",z,"block",block,"waterTop",waterTop,
+                "submerged", y < waterTop, "waterLevelsAboveCrown", Math.max(0L,(long)waterTop-y)); }
+    }
     private record Profile(Column crest, Column toe) { }
     private record InspectionResolution(InspectionRequest request, Column resolved, int candidateCount, String reason,
                                         List<Column> endpoints, RootConnectivity rootConnectivity) {
@@ -946,6 +1016,7 @@ public final class BiomeVisualReview {
         Map<String, Object> toMap() {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("id", request.id); result.put("kind", request.kind);
+            result.put("detailView", request.detailView);
             result.put("requested", Map.of("x", request.x, "z", request.z));
             result.put("resolved", Map.of("x", resolved.x, "z", resolved.z));
             result.put("candidateCount", candidateCount); result.put("reason", reason);
@@ -1015,7 +1086,7 @@ public final class BiomeVisualReview {
         @SuppressWarnings("unchecked") static List<String> strings(Object raw,String name){ if (!(raw instanceof List<?> rows)) throw new IllegalArgumentException(name+" must be an array"); List<String> out=new ArrayList<>(); for(Object v:rows){if(!(v instanceof String s)||s.isBlank())throw new IllegalArgumentException(name+" contains invalid id");out.add(s);} return out; }
         @SuppressWarnings("unchecked") static List<Window> windows(Object raw){ if (!(raw instanceof List<?> rows)) throw new IllegalArgumentException("windows must be an array"); List<Window> out=new ArrayList<>(); Set<String> ids=new LinkedHashSet<>(); for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException("window must be an object");String id=text(map.get("id"),"window id");int minX=num(map.get("minX"),"minX"),maxX=num(map.get("maxX"),"maxX"),minZ=num(map.get("minZ"),"minZ"),maxZ=num(map.get("maxZ"),"maxZ");if(!ids.add(id)||minX>maxX||minZ>maxZ||Math.floorMod(minX,16)!=0||Math.floorMod(minZ,16)!=0||Math.floorMod(maxX+1,16)!=0||Math.floorMod(maxZ+1,16)!=0)throw new IllegalArgumentException("window bounds must be unique inclusive whole chunks");out.add(new Window(id,minX,maxX,minZ,maxZ));}return out; }
         @SuppressWarnings("unchecked") static List<Explicit> explicit(Object raw,String name){if(raw==null)return new ArrayList<>();if(!(raw instanceof List<?> rows))throw new IllegalArgumentException(name+" must be an array");List<Explicit> out=new ArrayList<>();for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException(name+" entry must object");out.add(new Explicit(text(map.get("id"),name+" id"),num(map.get("x"),"x"),num(map.get("z"),"z")));}return out;}
-        @SuppressWarnings("unchecked") static List<InspectionRequest> inspectionRequests(Object raw, List<Window> windows){if(raw==null)return List.of();if(!(raw instanceof List<?> rows))throw new IllegalArgumentException("inspectionRequests must be an array");List<InspectionRequest> out=new ArrayList<>();Set<String> ids=new LinkedHashSet<>();for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException("inspection request must object");String id=text(map.get("id"),"inspection request id"),kind=text(map.get("kind"),"inspection request kind");if(!Set.of("root","bank","underwater","boundary").contains(kind))throw new IllegalArgumentException("unsupported inspection request kind "+kind);int x=num(map.get("x"),"inspection request x"),z=num(map.get("z"),"inspection request z");if(!ids.add(id)||!windows.stream().anyMatch(w->x>=w.minX&&x<=w.maxX&&z>=w.minZ&&z<=w.maxZ))throw new IllegalArgumentException("inspection request id must be unique and inside a window");out.add(new InspectionRequest(id,x,z,kind));}return out;}
+        @SuppressWarnings("unchecked") static List<InspectionRequest> inspectionRequests(Object raw, List<Window> windows){if(raw==null)return List.of();if(!(raw instanceof List<?> rows))throw new IllegalArgumentException("inspectionRequests must be an array");List<InspectionRequest> out=new ArrayList<>();Set<String> ids=new LinkedHashSet<>();for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException("inspection request must object");String id=text(map.get("id"),"inspection request id"),kind=text(map.get("kind"),"inspection request kind"),detail=map.get("detailView")==null?"bed":text(map.get("detailView"),"inspection detailView");if(!Set.of("root","bank","underwater","boundary").contains(kind))throw new IllegalArgumentException("unsupported inspection request kind "+kind);if(!Set.of("bed","waterline").contains(detail)||("waterline".equals(detail)&&!"underwater".equals(kind)))throw new IllegalArgumentException("waterline detailView requires underwater inspection");int x=num(map.get("x"),"inspection request x"),z=num(map.get("z"),"inspection request z");if(!ids.add(id)||!windows.stream().anyMatch(w->x>=w.minX&&x<=w.maxX&&z>=w.minZ&&z<=w.maxZ))throw new IllegalArgumentException("inspection request id must be unique and inside a window");out.add(new InspectionRequest(id,x,z,kind,detail));}return out;}
         static String text(Object raw,String name){if(!(raw instanceof String value)||value.isBlank())throw new IllegalArgumentException(name+" must be nonblank");return value;} static int num(Object raw,String name){if(!(raw instanceof Number value))throw new IllegalArgumentException(name+" must be number");return value.intValue();}
     }
 }

@@ -23,6 +23,21 @@ ANALYZE = importlib.util.module_from_spec(ANALYZE_SPEC)
 ANALYZE_SPEC.loader.exec_module(ANALYZE)
 
 
+class JavaWorkloadTest(unittest.TestCase):
+    def test_only_version_queries_are_ignored(self):
+        class Process:
+            info = {'name': 'java.exe'}
+            def __init__(self, args): self.args = args
+            def cmdline(self):
+                if self.args is None: raise RUN.psutil.AccessDenied()
+                return self.args
+        for args, blocking in [(['java', '-version'], False), (['java', '--version'], False),
+                               (['java', '-jar', 'server.jar', '--version'], True),
+                               ([], True), (None, True)]:
+            with self.subTest(args=args), patch.object(RUN.psutil, 'process_iter', return_value=[Process(args)]):
+                self.assertEqual(RUN.active_java_workload(), blocking)
+
+
 class TdJarIdentityTest(unittest.TestCase):
     def setUp(self):
         root = ROOT / "build/chunk-profile"
@@ -501,6 +516,34 @@ class WetlandWorkflowTest(unittest.TestCase):
         self.receipt['wetlandSpatialAudit']['csvSha256'] = RUN.launch.sha256(csv)
         with self.assertRaisesRegex(RuntimeError, 'CSV geometry differs'):
             RUN._wetland_report(self.receipt, target, self.manifest, None, None)
+
+class NativeBiomePlanPreflightTest(unittest.TestCase):
+    def plan(self):
+        return {
+            'schema': 1,
+            'windows': [{'id': 'one', 'minX': -32, 'maxX': -17, 'minZ': 16, 'maxZ': 31}],
+            'regressionSites': [{'id': 'reported', 'x': -20, 'z': 20}],
+            'explicitSites': [{'id': 'detail', 'x': -19, 'z': 21}],
+            'inspectionRequests': [{'id': 'bank', 'x': -20, 'z': 20, 'kind': 'bank'}],
+            'generationTraceSites': [{'x': -20, 'z': 20}],
+            'maxSites': 16,
+        }
+
+    def test_accepts_native_whole_chunk_plan(self):
+        RUN._validate_native_biome_plan(self.plan())
+
+    def test_rejects_java_invalid_window_before_launch(self):
+        plan = self.plan(); plan['windows'][0]['maxZ'] = 30
+        with self.assertRaisesRegex(RuntimeError, 'inclusive whole chunks'):
+            RUN._validate_native_biome_plan(plan)
+
+    def test_rejects_duplicate_or_out_of_window_evidence(self):
+        plan = self.plan(); plan['explicitSites'][0]['id'] = 'reported'
+        with self.assertRaisesRegex(RuntimeError, 'unique and inside'):
+            RUN._validate_native_biome_plan(plan)
+        plan = self.plan(); plan['inspectionRequests'][0]['x'] = 0
+        with self.assertRaisesRegex(RuntimeError, 'unique and inside'):
+            RUN._validate_native_biome_plan(plan)
 
 
 if __name__ == "__main__":

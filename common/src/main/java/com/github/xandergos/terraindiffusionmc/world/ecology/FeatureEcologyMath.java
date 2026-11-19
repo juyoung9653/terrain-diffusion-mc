@@ -220,33 +220,86 @@ public final class FeatureEcologyMath {
     }
 
     /**
-     * A shallow marine apron inherits one continuous mangrove-habitat field on
-     * both sides of a quart biome boundary.  The caller supplies only immutable
-     * ecology samples, never the neighbouring world's block materials.
+     * Resolves the visible bed at an existing coastal contact.  The broad field
+     * still owns deposition and preserves its cores.  Only the sand/mud handoff
+     * gets a deterministic, connected threshold.  Its two broad fields taper a
+     * sheltered tongue into the sand; there is deliberately no per-block roll,
+     * because that makes diagonal checks and isolated inversions at a flat bed.
      */
-    public static CoastalSediment coastalSediment(float weightedMangroveSupport,
-                                                   float peakMangroveSupport,
-                                                   int waterDepth, float concavity,
-                                                   float broadDeposit) {
+    public static CoastalSediment ditheredCoastalSediment(float weightedMangroveSupport,
+                                                           float peakMangroveSupport,
+                                                           int waterDepth, float concavity,
+                                                           float broadDeposit,
+                                                           long seed, int blockX, int blockZ) {
+        float deposition = coastalDeposition(weightedMangroveSupport, peakMangroveSupport,
+                waterDepth, concavity, broadDeposit);
+        if (deposition < 0) return CoastalSediment.NONE;
+        float contact = 1F - smoothRange(.09F, .40F, Math.abs(deposition - .5F));
+        CoastalSediment base;
+        if (!(contact > 0F)) {
+            // Preserve ordinary mineral cores, but keep a high-supply mud core
+            // eligible for a localized fine deposit.
+            base = deposition < .5F ? CoastalSediment.SAND : CoastalSediment.MUD;
+        } else {
+            float noise = coastalDitherNoise(seed, blockX, blockZ);
+            // The contact is allowed to wander, but not far enough to turn a calm
+            // shallow into long, saw-toothed fingers.
+            // A modest coherent offset makes a 3--5-block mineral handoff
+            // without turning one contour into saw-toothed fingers.
+            float threshold = .5F + (noise - .5F) * .12F * contact;
+            base = deposition < threshold ? CoastalSediment.SAND : CoastalSediment.MUD;
+        }
+        // Fine silt is a localized deposit inside a sheltered muddy lobe, never
+        // a mandatory third stripe.  A 13-block coherent grain field breaks the
+        // lobe into muddy inclusions and broad patches rather than a uniform
+        // plate.  Its sparse sand-side reach is limited to the local handoff,
+        // so the open sand remains continuous.
+        if (broadDeposit < .74F) return base;
+        float siltLobe = broadPatch(seed ^ 0x53494C54504F434BL, blockX, blockZ, 72);
+        if (siltLobe < .80F) return base;
+        float grain = broadPatch(seed ^ 0x475241494E53494CL, blockX, blockZ, 13);
+        if (base == CoastalSediment.MUD && grain >= .50F)
+            return CoastalSediment.SILT;
+        if (base == CoastalSediment.SAND && Math.abs(deposition - .5F) <= .055F
+                && grain >= .78F)
+            return CoastalSediment.SILT;
+        return base;
+    }
+
+    private static float coastalDeposition(float weightedMangroveSupport, float peakMangroveSupport,
+                                            int waterDepth, float concavity, float broadDeposit) {
         float affinity = coastalMangroveAffinity(weightedMangroveSupport, peakMangroveSupport,
                 waterDepth, concavity);
-        if (affinity <= .04F) return CoastalSediment.NONE;
+        if (affinity <= .04F) return -1F;
         // Shoals do not switch from pure sand to pure mud at one contour. A
         // broad supply field shifts the whole depositional transition into
         // tongues and recesses; it is not independent per-block dither.
         float middle = smoothRange(.12F, .88F, affinity)
                 * (1F - smoothRange(.12F, .88F, affinity));
-        float deposition = clamp01(affinity + (clamp01(broadDeposit) - .5F)
+        return clamp01(affinity + (clamp01(broadDeposit) - .5F)
                 * (.18F + .72F * middle));
-        // Fine silt is retained only in sheltered, supply-rich pockets. It
-        // disappears from exposed reaches, so this is not a mandatory third
-        // stripe along every sand/mud contact.
-        float shelteredPocket = smoothRange(.28F, .72F, broadDeposit)
-                * smoothRange(-.70F, 1.10F, concavity);
-        float siltHalfWidth = .28F * shelteredPocket;
-        if (siltHalfWidth > 0 && Math.abs(deposition - .5F) < siltHalfWidth)
-            return CoastalSediment.SILT;
-        return deposition < .5F ? CoastalSediment.SAND : CoastalSediment.MUD;
+    }
+
+    private static float coastalDitherNoise(long seed, int blockX, int blockZ) {
+        float small = broadPatch(seed ^ 0x434F415354534D4CL, blockX, blockZ, 13);
+        float medium = broadPatch(seed ^ 0x434F4153544D4544L, blockX, blockZ, 37);
+        // Both inputs are smooth, so a material contact can make tapering tongues
+        // and pockets but never a corner-touching checkerboard.
+        return clamp01(.64F * small + .36F * medium);
+    }
+
+    // Sample the material field a few blocks away. Nearby columns tend to choose
+    // similar offsets, but the per-column part breaks up the remaining hard line.
+    // The offset is bounded so neither uniform bed can get speckles in its core.
+    static int contactOffset(long axisSeed, int x, int z) {
+        float patch = broadPatch(axisSeed, x, z, 3);
+        float grain = hash01(axisSeed ^ 0x5041525449434c45L, x, z);
+        return Math.round(10F * (.70F * patch + .30F * grain - .5F));
+    }
+
+    static CoastalSediment mixSandContact(CoastalSediment here, CoastalSediment nearby) {
+        if (here == CoastalSediment.NONE || nearby == CoastalSediment.NONE) return here;
+        return (here == CoastalSediment.SAND) != (nearby == CoastalSediment.SAND) ? nearby : here;
     }
 
     /** Shared, continuous shelter/sediment suitability for a shallow mangrove coast. */
@@ -399,6 +452,17 @@ public final class FeatureEcologyMath {
         float forest = smoothRange(0.45F, 0.85F, cover);
         float multiplier = lerp(clustered, lerp(0.75F, 1.15F, grove), forest);
         return 0.5F * clamp01(cover * multiplier);
+    }
+
+    /**
+     * A humid, low-slope tropical coastal fringe can support a closed broadleaf
+     * canopy. This deliberately excludes both dry inland woodland and exposed
+     * beach columns; the caller also verifies connected dry ground.
+     */
+    public static boolean coastalTropicalCanopy(float temperature, float moisture, float slope,
+                                                float marineInfluence) {
+        return temperature >= 23.0F && moisture >= .72F && slope <= .34F
+                && marineInfluence >= .32F;
     }
 
     private static float landscapePatch(long seed, int x, int z, int scale) {

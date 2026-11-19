@@ -18,6 +18,7 @@ public final class WetlandTerrainTest {
         checkOwnerMarginWetnessContinuity();
         checkCoastalAdmissionContinuity();
         checkStrictWaterAdmissionAndCoastalShoulder();
+        checkCoastalShoulderContinuity();
         checkVariableCoreBeds();
         checkDrainageLandform();
         checkExclusionsAndCoast();
@@ -572,6 +573,25 @@ public final class WetlandTerrainTest {
             require(!coastalBank.flooded(), "coastal shoulder created water scale=" + scale);
             require(boundary(coastalBank.terrainMeters(), metres) <= 65,
                     "coastal high bank retained the cut wall scale=" + scale);
+        }
+    }
+
+    /** A five-block coastal lowering needs two dry outer cells to avoid its final wall. */
+    private static void checkCoastalShoulderContinuity() {
+        for (float metres : new float[] {30f, 16f}) {
+            WetlandTerrain.Context basin = basinAt(0, 0, metres);
+            int previous = Integer.MIN_VALUE;
+            for (int distance = 1; distance <= 7; distance++) {
+                var shoulder = WetlandTerrain.shape(metres(70, metres), 70, mangrove(), (short) 0,
+                        distance, 0, 17L, metres, basin, distance, 0);
+                int ground = boundary(shoulder.terrainMeters(), metres);
+                require(!shoulder.flooded(), "coastal shoulder admitted water at d=" + distance);
+                if (previous != Integer.MIN_VALUE) {
+                    require(ground >= previous && ground - previous <= 1,
+                            "coastal dry shoulder made a shelf wall at d=" + distance + " scale=" + metres);
+                }
+                previous = ground;
+            }
         }
     }
 

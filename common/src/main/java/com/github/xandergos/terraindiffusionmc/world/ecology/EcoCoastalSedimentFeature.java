@@ -1,5 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.world.ecology;
 
+import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSources;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -52,11 +53,34 @@ public final class EcoCoastalSedimentFeature extends Feature<NoneFeatureConfigur
             int x = startX + localX, z = startZ + localZ;
             Bed bed = shallowBed(level, x, z, seaLevel, silt);
             if (bed == null || EcoSurfaceFeature.intersectsStructure(protectedPieces, bed.pos())) continue;
-            CoastalContext.Sample support = samples.sample(x, z, level.getSeed());
-            FeatureEcologyMath.CoastalSediment material = FeatureEcologyMath.coastalSediment(
-                    support.weighted(), support.peak(), bed.depth(), support.concavity(),
-                    FeatureEcologyMath.broadPatch(level.getSeed() ^ 0x434F4153544CL, x, z, 48));
+            CoastalContext.Sample support = samples.sedimentSample(x, z, level.getSeed());
+            // Mangrove habitat can extend inland. Its presence alone does not
+            // turn an enclosed forest pool into a marine sand apron.
+            if (!support.sedimentMarineBed()) {
+                // A cave carver can open a riparian grass cap to aquifer water.
+                // Dress only its exposed soil (or the single-block sand veneer
+                // on soil); keep deep mineral deposits and natural gravel/clay.
+                if (isForestPoolBed(level, bed)) {
+                    float fines = FeatureEcologyMath.broadPatch(level.getSeed() ^ 0x504f4e44434c4159L, x, z, 7);
+                    BlockState target = fines > .71F ? Blocks.CLAY.defaultBlockState() : Blocks.MUD.defaultBlockState();
+                    changed |= level.setBlock(bed.pos(), target, 2);
+                }
+                continue;
+            }
+            long seed = level.getSeed();
+            FeatureEcologyMath.CoastalSediment material = sedimentAt(support, bed.depth(), seed, x, z);
             if (material == FeatureEcologyMath.CoastalSediment.NONE) continue;
+            int sx = x + FeatureEcologyMath.contactOffset(seed ^ 0x53414e4458L, x, z);
+            int sz = z + FeatureEcologyMath.contactOffset(seed ^ 0x53414e445aL, x, z);
+            if (sx != x || sz != z) {
+                CoastalContext.Sample nearby = samples.sedimentSample(sx, sz, seed);
+                if (nearby.sedimentMarineBed()) {
+                    // Use the destination depth on both samples. Dither the horizontal
+                    // contact without importing a deep- or dry-bed material.
+                    material = FeatureEcologyMath.mixSandContact(material,
+                            sedimentAt(nearby, bed.depth(), seed, sx, sz));
+                }
+            }
             BlockState target = switch (material) {
                 case MUD -> Blocks.MUD.defaultBlockState();
                 case SILT -> silt;
@@ -70,6 +94,25 @@ public final class EcoCoastalSedimentFeature extends Feature<NoneFeatureConfigur
             if (!bed.state().equals(target)) changed |= level.setBlock(bed.pos(), target, 2);
         }
         return changed;
+    }
+
+    private static FeatureEcologyMath.CoastalSediment sedimentAt(CoastalContext.Sample support, int depth,
+                                                                  long seed, int x, int z) {
+        return FeatureEcologyMath.ditheredCoastalSediment(support.weighted(), support.peak(), depth,
+                support.concavity(), FeatureEcologyMath.broadPatch(seed ^ 0x434F4153544CL, x, z, 48),
+                seed, x, z);
+    }
+
+    private static boolean isForestPoolBed(WorldGenLevel level, Bed bed) {
+        BlockState soil = bed.state().is(Blocks.SAND) ? level.getBlockState(bed.pos().below()) : bed.state();
+        if (!soil.is(Blocks.DIRT) && !soil.is(Blocks.GRASS_BLOCK)
+                && !soil.is(Blocks.COARSE_DIRT) && !soil.is(Blocks.PODZOL)) return false;
+        return level.getBiome(bed.pos()).unwrapKey().map(key -> key.location())
+                .filter(id -> id.getNamespace().equals(TerrainDiffusionLifecycle.MOD_ID))
+                .map(id -> switch (id.getPath()) {
+                    case "ecology/riparian_forest", "ecology/freshwater_swamp", "ecology/mangrove_swamp" -> true;
+                    default -> false;
+                }).orElse(false);
     }
 
     private static Bed shallowBed(WorldGenLevel level, int x, int z, int seaLevel, BlockState silt) {

@@ -1,0 +1,13 @@
+{
+  "issue": "Living coral in a shallow tropical woodland inlet",
+  "hypothesis": "A marine coral feature can place blocks across the warm-ocean boundary.",
+  "disproof": "If the colored blocks are not living coral, or the same pattern survives with the feature gated, trace the block writer before changing the rule.",
+  "streams": "not-needed-for-local-check",
+  "seed": -150482944371831313,
+  "scale": 1,
+  "y": [44, 63],
+  "sites": [
+    {"id":"woodland-inlet","role":"reported","bounds":[-1892,1572,-1883,1581],"coral":"absent"},
+    {"id":"deep-warm-reef","role":"control","bounds":[-960,1648,-945,1663],"coral":"present"}
+  ]
+}

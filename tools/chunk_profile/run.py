@@ -152,6 +152,23 @@ def disable_natural_rivers(path):
 manifest_root = None
 
 
+def active_java_workload():
+    for process in psutil.process_iter(['name']):
+        if (process.info['name'] or '').lower() not in ('java.exe', 'javaw.exe'):
+            continue
+        try:
+            argv = process.cmdline()
+        except psutil.NoSuchProcess:
+            continue
+        except psutil.AccessDenied:
+            return True
+        # Oracle's Windows javapath shim can linger after a version query.
+        # Any VM flags, unknown command, class, or jar still blocks the run.
+        if argv[1:] not in (['-version'], ['--version']):
+            return True
+    return False
+
+
 def prepare(args):
     global manifest_root
     if plan_path := getattr(args, 'biome_review_plan', None):
@@ -162,7 +179,7 @@ def prepare(args):
     target = WORK / launch.safe_name(args.name)
     if target.exists():
         raise RuntimeError('Fixture already exists; choose a fresh name')
-    if any(p.info['name'] in ('java.exe', 'javaw.exe') for p in psutil.process_iter(['name'])):
+    if active_java_workload():
         raise RuntimeError('Java is running; inspect before preparing a fixture')
     pack = json.loads((source.parent / 'mmc-pack.json').read_text(encoding='utf-8'))
     versions = {c['uid']: c['version'] for c in pack['components']}
@@ -721,6 +738,7 @@ def _biome_review_plan(args, manifest, target, restart):
         raise RuntimeError(f'Biome review plan is invalid JSON: {source}') from failure
     if not isinstance(plan, dict) or plan.get('schema') != 1:
         raise RuntimeError('Biome review plan must have schema 1')
+    _validate_native_biome_plan(plan)
     check_budget(plan)  # Avoid starting Minecraft for a review that cannot run.
     fingerprint = source_fingerprint(ROOT)
     artifact = manifest['terrain_diffusion_artifact']['sha256']
@@ -745,13 +763,79 @@ def _biome_review_plan(args, manifest, target, restart):
                        for window in plan['windows'] if isinstance(window, dict)):
                 raise RuntimeError('Biome review sites must stay inside plan windows')
     staged = target / ('biome-visual-review-restart-plan.json' if restart else 'biome-visual-review-plan.json')
-    if staged.exists():
+    if staged.is_symlink() or (staged.exists() and (not staged.is_file() or launch.sha256(source) != launch.sha256(staged))):
         raise RuntimeError(f'Biome review plan destination already exists: {staged}')
-    shutil.copy2(source, staged)
+    if not staged.exists():
+        shutil.copy2(source, staged)
     if launch.sha256(source) != launch.sha256(staged):
         raise RuntimeError('Biome review plan changed during staging')
     return {'path': staged, 'sha256': launch.sha256(staged), 'source_fingerprint': fingerprint,
             'artifact_sha256': artifact, 'review_tool_fingerprint': review_tool_fingerprint(ROOT), 'data': plan}
+
+
+def _validate_native_biome_plan(plan):
+    """Reject plan shapes that BiomeVisualReview would reject after client launch."""
+    def integer(value):
+        return isinstance(value, int) and not isinstance(value, bool)
+
+    windows = plan.get('windows')
+    if not isinstance(windows, list) or not windows:
+        raise RuntimeError('Biome review plan requires nonempty windows')
+    window_ids = set()
+    for window in windows:
+        if not isinstance(window, dict):
+            raise RuntimeError('Biome review window must be an object')
+        identifier = window.get('id')
+        values = tuple(window.get(key) for key in ('minX', 'maxX', 'minZ', 'maxZ'))
+        if not isinstance(identifier, str) or not identifier.strip() or not all(map(integer, values)):
+            raise RuntimeError('Biome review window has malformed id or bounds')
+        min_x, max_x, min_z, max_z = values
+        if (identifier in window_ids or min_x > max_x or min_z > max_z
+                or min_x % 16 or min_z % 16 or (max_x + 1) % 16 or (max_z + 1) % 16):
+            raise RuntimeError('Biome review window bounds must be unique inclusive whole chunks')
+        window_ids.add(identifier)
+
+    def inside(x, z):
+        return any(w['minX'] <= x <= w['maxX'] and w['minZ'] <= z <= w['maxZ'] for w in windows)
+
+    site_ids = set()
+    for field in ('regressionSites', 'explicitSites'):
+        rows = plan.get(field, [])
+        if not isinstance(rows, list):
+            raise RuntimeError(f'Biome review {field} must be an array')
+        for site in rows:
+            if (not isinstance(site, dict) or not isinstance(site.get('id'), str)
+                    or not site['id'].strip() or not integer(site.get('x')) or not integer(site.get('z'))):
+                raise RuntimeError(f'Biome review {field} contains a malformed site')
+            if site['id'] in site_ids or not inside(site['x'], site['z']):
+                raise RuntimeError(f'Biome review {field} site must be unique and inside a window')
+            site_ids.add(site['id'])
+
+    requests = plan.get('inspectionRequests', [])
+    if not isinstance(requests, list):
+        raise RuntimeError('Biome review inspectionRequests must be an array')
+    request_ids = set()
+    for request in requests:
+        if (not isinstance(request, dict) or not isinstance(request.get('id'), str)
+                or not request['id'].strip() or request.get('kind') not in {'root', 'bank', 'underwater', 'boundary'}
+                or not integer(request.get('x')) or not integer(request.get('z'))):
+            raise RuntimeError('Biome review inspection request is malformed')
+        detail_view = request.get('detailView', 'bed')
+        if (detail_view not in {'bed', 'waterline'}
+                or (detail_view == 'waterline' and request['kind'] != 'underwater')):
+            raise RuntimeError('Biome review waterline detail requires underwater inspection')
+        if request['id'] in request_ids or not inside(request['x'], request['z']):
+            raise RuntimeError('Biome review inspection request must be unique and inside a window')
+        request_ids.add(request['id'])
+
+    maximum = plan.get('maxSites', 16)
+    if not integer(maximum) or not 1 <= maximum <= 64:
+        raise RuntimeError('Biome review maxSites must be 1..64')
+    for field in ('terrainTraceSites', 'generationTraceSites'):
+        rows = plan.get(field, [])
+        if not isinstance(rows, list) or len(rows) > 8 or any(not isinstance(row, dict)
+                or not integer(row.get('x')) or not integer(row.get('z')) for row in rows):
+            raise RuntimeError(f'Biome review {field} requires at most 8 integer x/z positions')
 
 
 def _biome_plan_chunks(plan):
@@ -807,7 +891,7 @@ def run(args, restart=False):
     biome_review = _biome_review_plan(args, manifest, target, restart)
     if args.streams_settle_seconds and not args.request_telemetry:
         raise RuntimeError('--streams-settle-seconds requires --request-telemetry for the native trace')
-    if any(p.info['name'] in ('java.exe', 'javaw.exe') for p in psutil.process_iter(['name'])):
+    if active_java_workload():
         raise RuntimeError('Java is running; inspect before starting the GPU workload')
     if not restart:
         for relative, entry in manifest['files'].items():
@@ -935,6 +1019,19 @@ def run(args, restart=False):
             if len(trace_sites) > 8 or any(not isinstance(s, dict) or type(s.get('x')) is not int or type(s.get('z')) is not int for s in trace_sites):
                 raise RuntimeError('terrainTraceSites requires at most 8 integer x/z positions')
             runtime.property.append('td.wetland.tracePositions=' + ';'.join(f"{s['x']},{s['z']}" for s in trace_sites))
+        generation_trace_sites = biome_review['data'].get('generationTraceSites', [])
+        if generation_trace_sites:
+            if (len(generation_trace_sites) > 8
+                    or any(not isinstance(s, dict) or type(s.get('x')) is not int
+                           or type(s.get('z')) is not int for s in generation_trace_sites)):
+                raise RuntimeError('generationTraceSites requires at most 8 integer x/z positions')
+            # The diagnostic trace records stage-local block writes during normal
+            # generation.  It does not query the provider before generation, so
+            # it preserves the candidate's cache warm-up order.
+            runtime.property.append('td.generation.tracePositions='
+                                    + ';'.join(f"{s['x']},{s['z']}" for s in generation_trace_sites))
+            runtime.property.append('td.wetland.shapeTracePositions='
+                                    + ';'.join(f"{s['x']},{s['z']}" for s in generation_trace_sites))
     if wetland_sites is not None and not restart:
         runtime.property.append(f'chunkprofile.wetlandSites={wetland_sites}')
     if restart:

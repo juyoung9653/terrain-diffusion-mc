@@ -15,6 +15,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 from build_evidence import source_fingerprint, input_fingerprint
+from biome_review import budget
 
 VIEWS = {"aerial", "side", "detail"}
 REASONS = {"interior", "boundary", "random"}
@@ -22,7 +23,8 @@ INSPECTION_KINDS = {"root", "bank", "underwater", "boundary"}
 REVIEW_INPUTS = (
     Path("tools/biome_review"), Path("tools/chunk_profile/java"),
     Path("tools/chunk_profile/run.py"), Path("tools/build_evidence.py"),
-    Path("tools/build_neoforge.py"),
+    Path("tools/build_neoforge.py"), Path("tools/biome_iteration/shore_check.py"),
+    Path("tools/biome_iteration/measure.py"),
 )
 
 
@@ -185,11 +187,15 @@ def validate_inspection_requests(plan: dict, capture: dict, native_sites: dict[s
     windows = _inspection_windows(plan)
     plan_by_id: dict[str, dict] = {}
     for row in requested:
-        if (not isinstance(row, dict) or set(row) != {"id", "x", "z", "kind"}
+        if (not isinstance(row, dict) or set(row) - {"id", "x", "z", "kind", "detailView"}
                 or not isinstance(row.get("id"), str) or not row["id"]
                 or row.get("kind") not in INSPECTION_KINDS
                 or any(not isinstance(row[key], int) or isinstance(row[key], bool) for key in ("x", "z"))):
             raise ValueError("Inspection request plan entry is invalid")
+        detail_view = row.get("detailView", "bed")
+        if (detail_view not in {"bed", "waterline"}
+                or (detail_view == "waterline" and row["kind"] != "underwater")):
+            raise ValueError("Inspection waterline detail requires underwater request")
         if row["id"] in plan_by_id:
             raise ValueError("Duplicate inspection request ID")
         point = row["x"], row["z"]
@@ -217,7 +223,8 @@ def validate_inspection_requests(plan: dict, capture: dict, native_sites: dict[s
         requested_point = _coordinate(row["requested"], "requested")
         resolved_point = _coordinate(row["resolved"], "resolved")
         planned_point = planned["x"], planned["z"]
-        if row["kind"] != planned["kind"] or requested_point != planned_point:
+        if (row["kind"] != planned["kind"] or requested_point != planned_point
+                or row.get("detailView", "bed") != planned.get("detailView", "bed")):
             raise ValueError("Native inspection request differs from the plan")
         if (not _within_windows(resolved_point, windows)
                 or max(abs(resolved_point[0] - planned_point[0]), abs(resolved_point[1] - planned_point[1])) > 12):
@@ -240,6 +247,65 @@ def validate_inspection_requests(plan: dict, capture: dict, native_sites: dict[s
             raise ValueError("Inspection request lacks a resolved three-view native site")
 
 
+def _scope_fact_rows(value: dict, label: str) -> dict[str, dict]:
+    if (value.get("schema") != 1 or value.get("kind") != "scoped-biome-baseline-facts"
+            or not isinstance(value.get("seed"), int) or not isinstance(value.get("scale"), int)
+            or not isinstance(value.get("artifactSha256"), str)
+            or not isinstance(value.get("sourceFingerprint"), str)
+            or not isinstance(value.get("sites"), list)):
+        raise ValueError(f"Malformed {label} scoped facts")
+    rows: dict[str, dict] = {}
+    for row in value["sites"]:
+        if (not isinstance(row, dict) or set(row) != {"id", "x", "z", "bounds", "metrics"}
+                or not isinstance(row["id"], str) or not isinstance(row["x"], int)
+                or not isinstance(row["z"], int) or not isinstance(row["bounds"], list)
+                or len(row["bounds"]) != 4 or any(type(v) is not int for v in row["bounds"])
+                or not isinstance(row["metrics"], dict)
+                or any((type(v) not in (int, float) or isinstance(v, bool))
+                       and not (isinstance(v, str) and v.strip()) for v in row["metrics"].values())
+                or row["id"] in rows):
+            raise ValueError(f"Malformed {label} scoped fact row")
+        rows[row["id"]] = row
+    return rows
+
+
+def _validate_scope_facts(bundle: dict, scoped: dict, root: Path, plan: dict, capture: dict) -> None:
+    baseline_ref = scoped["baseline"]["facts"]
+    baseline_path = Path(baseline_ref["path"])
+    if not baseline_path.is_absolute():
+        baseline_path = root / baseline_path
+    if not baseline_path.is_file() or digest(baseline_path) != baseline_ref["sha256"]:
+        raise ValueError("Scoped baseline facts changed or are unavailable")
+    baseline = load(baseline_path)
+    candidate_path = checked_file(bundle.get("scopeFacts"), root)
+    candidate = load(candidate_path)
+    baseline_rows = _scope_fact_rows(baseline, "baseline")
+    candidate_rows = _scope_fact_rows(candidate, "candidate")
+    expected_ids = {site for criterion in scoped["criteria"] for site in criterion["siteIds"]}
+    if not expected_ids.issubset(baseline_rows) or not expected_ids.issubset(candidate_rows):
+        raise ValueError("Scoped facts omit a declared criterion site")
+    if (baseline.get("artifactSha256") != scoped["baseline"]["artifactSha256"]
+            or baseline.get("sourceFingerprint") != scoped["baseline"]["sourceFingerprint"]
+            or candidate.get("artifactSha256") != bundle["artifactSha256"]
+            or candidate.get("sourceFingerprint") != bundle["sourceFingerprint"]):
+        raise ValueError("Scoped facts do not match bound baseline/candidate provenance")
+    if (baseline["seed"], baseline["scale"]) != (candidate["seed"], candidate["scale"]):
+        raise ValueError("Scoped candidate facts do not match baseline seed/scale")
+    if (candidate["seed"], candidate["scale"]) != (plan.get("seed"), plan.get("scale")):
+        raise ValueError("Scoped candidate facts do not match the review plan")
+    columns_path = capture.get("columnsPath")
+    if not isinstance(columns_path, str) or not Path(columns_path).is_file():
+        raise ValueError("Scoped review lacks the captured columns source")
+    if candidate.get("source", {}).get("columnsSha256") != digest(Path(columns_path)):
+        raise ValueError("Scoped candidate facts do not match captured columns")
+    for site_id in expected_ids:
+        left, right = baseline_rows[site_id], candidate_rows[site_id]
+        if (left["x"], left["z"], left["bounds"]) != (right["x"], right["z"], right["bounds"]):
+            raise ValueError("Scoped candidate facts do not measure frozen baseline coordinates")
+    bundle["scopeFacts"]["path"] = str(candidate_path)
+    bundle["scopedFactSiteIds"] = sorted(expected_ids)
+
+
 def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
     root = root.resolve()
     bundle = load(bundle_path)
@@ -253,6 +319,7 @@ def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
     launch = load(checked_file(bundle.get("launch"), root))
     receipt = load(checked_file(bundle.get("capture"), root))
     plan = load(checked_file(bundle.get("plan"), root))
+    scoped = budget.scope(plan)
     capture = receipt.get("biomeVisualReview", {})
     if not launch.get("passed") or launch.get("exit_code") != 0 or receipt.get("status") != "success":
         raise ValueError("Biome review requires a successful native process and capture receipt")
@@ -333,6 +400,8 @@ def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
         raise ValueError("Review lacks physical census evidence")
     for item in bundle["evidence"]:
         item["path"] = str(checked_file(item, root))
+    if scoped:
+        _validate_scope_facts(bundle, scoped, root, plan, capture)
     for overview in bundle.get("overviewImages", []):
         if not overview.get("id") or overview["id"] in seen:
             raise ValueError("Duplicate overview image ID")
@@ -358,7 +427,9 @@ def validate_review(path: Path | str, root: Path = ROOT, artifact: str | None = 
         raise ValueError("Independent review does not match the release artifact")
     if row.get("coverageGaps") or row.get("additionalCaptures"):
         raise ValueError("Independent review has unresolved evidence gaps")
-    if any(f.get("severity") in ("blocker", "major") for f in row.get("findings", [])):
+    scoped = budget.scope(load(Path(bundle["plan"]["path"])))
+    blocking = row.get("blockingFindings", row.get("findings", [])) if scoped else row.get("findings", [])
+    if any(f.get("severity") in ("blocker", "major") for f in blocking):
         raise ValueError("Independent review has unresolved realism defects")
     expected = {i["id"] for i in bundle["images"] + bundle.get("overviewImages", [])}
     if set(row.get("inspectedImageIds", [])) != expected:
@@ -379,7 +450,8 @@ def validate_review(path: Path | str, root: Path = ROOT, artifact: str | None = 
         raise ValueError("Independent reviewer attempt history differs")
     # Re-read actual individual model responses; an aggregate label alone is
     # not approval. A missing/failed batch can never disappear in summarization.
-    from biome_review.runner import read_report
+    from biome_review.runner import read_report, scoped_fact_pairs
+    fact_pairs = scoped_fact_pairs(bundle, scoped)
     batches = row.get("batches", [])
     if not batches:
         raise ValueError("Independent reviewer batch results absent")
@@ -414,7 +486,8 @@ def validate_review(path: Path | str, root: Path = ROOT, artifact: str | None = 
                 or command.get("overviewImageIds", []) != batch.get("overviewImageIds", [])
                 or result.get("index") != batch.get("index") or result.get("processExit") != 0):
             raise ValueError("Independent reviewer command/result record differs")
-        report, error = read_report(report_path, ids)
+        report, error = read_report(report_path, ids, scoped, fact_pairs,
+                                    {item["siteId"] for item in bundle["images"] if item["id"] in ids})
         if error or report["verdict"] != "pass":
             raise ValueError("Independent reviewer raw response did not pass")
         inspected.update(ids)

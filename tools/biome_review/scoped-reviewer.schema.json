@@ -1,0 +1,141 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "verdict",
+    "summary",
+    "inspectedImageIds",
+    "findings",
+    "additionalCaptures",
+    "coverageGaps"
+  ],
+  "properties": {
+    "verdict": {
+      "enum": [
+        "pass",
+        "revise",
+        "insufficient_evidence"
+      ]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inspectedImageIds": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "coverageGaps": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "additionalCaptures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reason",
+          "x",
+          "z",
+          "view"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "x": {
+            "type": "number"
+          },
+          "z": {
+            "type": "number"
+          },
+          "view": {
+            "enum": [
+              "aerial",
+              "ground",
+              "bank",
+              "underwater",
+              "root",
+              "boundary"
+            ]
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "category",
+          "siteId",
+          "imageIds",
+          "description",
+          "evidence",
+          "requestedChange",
+          "criterionId",
+          "disposition",
+          "baselineSiteId",
+          "metricName"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "blocker",
+              "major",
+              "minor"
+            ]
+          },
+          "category": {
+            "type": "string"
+          },
+          "siteId": {
+            "type": "string"
+          },
+          "imageIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "requestedChange": {
+            "type": "string"
+          },
+          "criterionId": {
+            "type": "string"
+          },
+          "disposition": {
+            "enum": [
+              "scoped",
+              "regression",
+              "advisory"
+            ]
+          },
+          "baselineSiteId": {
+            "type": "string"
+          },
+          "metricName": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

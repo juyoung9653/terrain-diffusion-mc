@@ -24,6 +24,7 @@
     "SeagrassFeatureMixin",
     "SeaPickleFeatureMixin",
     "CoralSeaPickleMixin",
+    "CoralMushroomFeatureMixin",
     "StreamsSeagrassFeatureMixin",
     "StreamsSeagrassFeature2162Mixin",
     "StreamsStartup2162Mixin",

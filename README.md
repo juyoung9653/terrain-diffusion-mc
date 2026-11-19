@@ -943,8 +943,13 @@ subset of the same beds and both halves are accepted or rejected together.
 Freshwater short seagrass retains its existing policy, independent of sea level.
 Generated sea pickles have a separate warm-marine policy: small reef colonies
 and very rare bare-sand placements. Both the standalone and coral feature writers
-are guarded; coral block/fan writes pass through. This does not remove saved or
-player-placed plants or change kelp or ordinary Greeneries grass.
+are guarded. Coral's primary anchor and every subsequent block/fan write must be
+in a water-containing or existing-coral warm-ocean cell, so a feature cannot
+report success or decorate across an ocean boundary. The target must also retain
+TD's native marine surface ownership (ocean ecology ID and negative elevation),
+which excludes inland water left near a zoomed ocean-biome boundary. This does
+not remove saved or player-placed plants or change kelp or ordinary Greeneries
+grass.
 Streams 2.17.1's direct seagrass writer is included in this policy.
 The retained exposure field survives ecology crop/eviction and diagnostic terrain
 replay; binary terrain snapshots are now v2 and old snapshots must be re-recorded.
@@ -2079,6 +2084,51 @@ all six scales; the nine-profile model atlas covered three seeds at scales
 
 ## Repeatable local validation
 
+### Biome fix iteration
+
+1. **Reproduce the report.** Record seed, scale, settings, X/Z, failing block
+   and a healthy control that must survive. Inspect saved columns first. Separate
+   the water writer, bed writer, vegetation feature and shader appearance. If the
+   evidence contradicts the proposed writer, trace generation before editing
+   another rule. Keep the original save read-only.
+2. **Change one rule, then inspect its diff.** State the expected change and
+   what should stay the same before tuning thresholds. Parallelize unrelated
+   rule owners; one owner integrates shared math and callers. Use physical
+   checks for the shape of the failure, not just total counts: a smaller silt
+   patch can still have a checkerboard edge. For coral, keep a living deep reef
+   as a positive control. Two disproved explanations are a reason to add
+   tracing, not try another threshold.
+3. **Get local feedback first.** Run the focused algorithm test, then use
+   [the iteration tools](tools/biome_iteration/README.md) to inspect the
+   affected and control patches. When new chunks are needed, generate only
+   those patches in a disposable fixture first. A saved map can reject a bad
+   candidate, but cannot establish scene quality, feature authorship or the
+   result of a new JAR that has not generated those chunks. Streams can be
+   omitted here for a demonstrated non-river rule; keep it for river mouths,
+   river bank/bed replacement and unknown writers. Record any ablation.
+4. **Freeze and review.** Integrate the small patches and their source reviews.
+   Run the real modpack, settings, fresh generation and mandatory checks on
+   the exact candidate. Prior screenshots are comparison material only. Send
+   the combined candidate to independent visual review; compare findings
+   against the baseline to distinguish a regression from an older unrelated
+   defect. For a reported bug, use a scoped review: before the first attempt,
+   pin the reported sites and positive controls, observable pass conditions,
+   reference artifact and measurements, and the authorized round limit. A
+   recheck uses the same criteria. Group repeated views of one problem while
+   preserving their site references. A material regression outside the report
+   needs evidence from the same location before and after the change; record
+   older unrelated aesthetic concerns separately. A missing measurement is an
+   evidence problem, not proof that terrain code needs another edit.
+   Honor the user's review budget and stop condition. Installation
+   still uses the [validated installer](#builds-and-installation).
+
+Reuse a passing **local** check only when its implementation, inputs and
+dependencies are unchanged. A changed generation rule or changed diagnostic
+does not inherit an earlier release receipt. Measure improvement by time to
+first useful feedback, number of full launches per accepted fix, and whether
+known failures and healthy controls are still distinguished. Faster wall time
+alone does not establish equivalent quality.
+
 ### Offline checks
 
 Run only the relevant independent checks, with one launcher owning their output
@@ -2491,12 +2541,29 @@ banks on their existing climate palette. Coastal sediment and lily suitability
 share the same immutable habitat field; local relief must use converted Minecraft
 heights with the active scale/profile, not raw pipeline metres.
 
+At a pale sea-level pool in riparian forest, the water and bed can have
+different writers: at `-1508,1651` the vanilla cave carver flooded a grass cap
+over dirt. Restrict marine sediment to the vicinity of pre-shaping ocean
+columns; on inland wetland soil a thin sand veneer does not prove a mineral
+shore. Inspect the settled bed as well as the water. Pass `generationTraceSites`
+(up to eight x/z pairs) in the review plan to record normal stage writes and
+wetland shaping without an extra provider query. Review windows must start at
+chunk minima and end at inclusive chunk maxima.
+
 Package and independently review the successful native run:
 
 ```powershell
 python -B tools/biome_review/bundle.py --fixture FIXTURE --output build/biome-bundle-NAME
 python -B tools/biome_review/runner.py --bundle build/biome-bundle-NAME/bundle.json --output build/biome-review-NAME
 ```
+
+For a saved shore report with a frozen `reviewScope`, measure the new native
+save against the original baseline bundle's fixed windows before packaging:
+`python -B tools/biome_iteration/shore_check.py FIXTURE BASELINE_BUNDLE CANDIDATE_FACTS`.
+Supply `--scope-facts CANDIDATE_FACTS` to `bundle.py`. Reuse the same baseline
+facts for both rounds. Report an out-of-scope regression only when the candidate
+image and a changed measurement at that same site support it. Keep other
+observations as advice; request missing evidence separately from a product fix.
 
 The bundle includes measured elevation/material/water maps, column data, camera
 positions, source changes and hashed capture/build evidence. The runner invokes
@@ -2508,8 +2575,11 @@ Valid negative reviews do not stop later image batches: collect all location
 findings in the same run. Process failures, malformed responses or missing image
 inspection stop the run and preserve the unreviewed image IDs. Only a complete
 review without unresolved major findings or capture requests can pass.
-A task gets **three independent review rounds total** (first review plus two
-rechecks). A complete set of parallel image batches is one round. An interrupted
+A scoped task freezes its acceptance criteria, comparison sites, baseline and
+round limit before capture. Count the first review in the limit: **at most two
+rounds total**, or fewer if requested. A revision does not reset this count.
+The historical unscoped ledger allows three rounds; always honor a lower user
+limit. A complete set of parallel image batches is one round. An interrupted
 or failed reviewer also consumes its round. The capture launcher checks the
 remaining budget before starting Minecraft; the runner claims a numbered slot
 before starting Codex. At the limit, stop and report what was fixed, remains

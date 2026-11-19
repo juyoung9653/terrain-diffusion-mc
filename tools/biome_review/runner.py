@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "tools"))
 from biome_review import budget
 HERE = Path(__file__).resolve().parent
 SCHEMA = HERE / "reviewer.schema.json"
+SCOPED_SCHEMA = HERE / "scoped-reviewer.schema.json"
 # Nine scene views fits three complete aerial/side/detail site groups. The
 # optional overview is attached separately to every call as cross-site context.
 MAX_IMAGES_PER_BATCH = 9
@@ -208,14 +209,45 @@ def batch_inspection_observations(bundle: dict[str, Any], batch: list[dict[str, 
     return rows
 
 
+def scoped_evidence(bundle: dict[str, Any], batch: list[dict[str, Any]], scope: dict | None) -> dict | None:
+    if scope is None:
+        return None
+    wanted = set(image["siteId"] for image in batch)
+    candidate = json.loads(Path(bundle["scopeFacts"]["path"]).read_text(encoding="utf-8"))
+    baseline = json.loads(Path(scope["baseline"]["facts"]["path"]).read_text(encoding="utf-8"))
+    rows = lambda value: {row["id"]: row for row in value["sites"]}
+    candidate_rows, baseline_rows = rows(candidate), rows(baseline)
+    criteria = [row for row in scope["criteria"] if wanted.intersection(row["siteIds"])]
+    # A noncriterion rendered site may only support a regression if both saved
+    # measurements exist at that exact coordinate; include its paired rows.
+    ids = (wanted.intersection(candidate_rows).intersection(baseline_rows)
+           | {site for criterion in criteria for site in criterion["siteIds"]})
+    return {"criteria": criteria,
+            "candidateFacts": [candidate_rows[site] for site in sorted(ids) if site in candidate_rows],
+            "baselineFacts": [baseline_rows[site] for site in sorted(ids) if site in baseline_rows]}
+
+
+def scoped_fact_pairs(bundle: dict[str, Any], scope: dict | None) -> dict[str, tuple[dict, dict]]:
+    if scope is None:
+        return {}
+    candidate = json.loads(Path(bundle["scopeFacts"]["path"]).read_text(encoding="utf-8"))
+    baseline = json.loads(Path(scope["baseline"]["facts"]["path"]).read_text(encoding="utf-8"))
+    current = {row["id"]: row for row in candidate["sites"]}
+    prior = {row["id"]: row for row in baseline["sites"]}
+    return {site: (prior[site], current[site]) for site in prior.keys() & current.keys()}
+
+
 def review_prompt(bundle_path: Path, batch: list[dict[str, Any]], overview: list[dict[str, Any]],
-                  observations: list[str], inspection_observations: list[str]) -> str:
+                  observations: list[str], inspection_observations: list[str], scope: dict | None = None,
+                  paired_facts: dict | None = None) -> str:
     evidence_manifest = json.dumps({
         "bundlePath": str(bundle_path),
         "sceneImageIds": [image["id"] for image in batch],
         "overviewImageIds": [image["id"] for image in overview],
         "settledColumnObservations": observations,
         "inspectionPointObservations": inspection_observations,
+        "frozenScope": scope,
+        "pairedScopeFacts": paired_facts,
     }, ensure_ascii=False)
     return f"""You are the independent final visual reviewer for procedural Minecraft terrain.
 
@@ -256,9 +288,7 @@ Inspect every supplied image. Look for abrupt artificial cuts or terraces;
 unmotivated water level or drainage; underwater terrestrial soil/grass; implausible
 soil, sediment, shoreline or vegetation relationships; trees rooted in unsuitable
 substrate; hard biome boundaries; repeated geometric material patterns; and any new
-visual anomaly. Treat missing views, obscured terrain, or uncertainty that blocks a
-realism decision as insufficient evidence and request a targeted capture with x/z
-and one of aerial, ground, bank, underwater, root, boundary.
+visual anomaly. {"Treat missing views, obscured terrain, or uncertainty that blocks a realism decision as insufficient evidence and request a targeted capture with x/z and one of aerial, ground, bank, underwater, root, boundary." if scope is None else "For scoped review, classify unrelated anomalies as advisory; only missing evidence for a frozen criterion is insufficient evidence."}
 
 Use any physical census and overview/map evidence named in the bundle only to
 corroborate a visible relationship at the matching location; do not infer an exact
@@ -266,13 +296,17 @@ block ID from a texture. Do not call images from another review batch a coverage
 gap. Instead use the supplied overview evidence to look for cross-site repetition
 and report only a concrete concern visible in this batch.
 
+{("" if scope is None else """SCOPED REVIEW: Judge only the frozen criteria and their declared sites. A finding is `scoped` only for a matching criterion/site. A `regression` must use a matching same-site baseline fact with a specifically changed metric and a visible current defect; set `metricName` to the exact shared changed metric key and repeat it in `evidence`; otherwise it is `advisory`. Unrelated or unmeasurable observations are advisory and must not request a capture. Advisory observations are non-blocking. Missing evidence for a declared criterion is `insufficient_evidence`, not a product defect.\n""")}
 Return only JSON following the supplied schema. `pass` is allowed only when every
-image ID above is in inspectedImageIds and there are no blocker/major findings,
+image ID above is in inspectedImageIds and there are no blocking scoped/regression
+blocker/major findings,
 coverageGaps, or additionalCaptures. Identify exact image IDs in every finding.
 """
 
 
-def read_report(path: Path, expected_ids: set[str]) -> tuple[dict[str, Any] | None, str | None]:
+def read_report(path: Path, expected_ids: set[str], scope: dict | None = None,
+                fact_sites: dict[str, tuple[dict, dict]] | None = None,
+                batch_sites: set[str] | None = None) -> tuple[dict[str, Any] | None, str | None]:
     try:
         report = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -292,23 +326,43 @@ def read_report(path: Path, expected_ids: set[str]) -> tuple[dict[str, Any] | No
         return None, "reviewer summary is empty"
     for finding in report["findings"]:
         needed = {"id", "severity", "category", "siteId", "imageIds", "description", "evidence", "requestedChange"}
+        if scope is not None:
+            needed |= {"criterionId", "disposition", "baselineSiteId", "metricName"}
         if not isinstance(finding, dict) or set(finding) != needed:
             return None, "reviewer finding has missing or unexpected fields"
         if finding["severity"] not in {"blocker", "major", "minor"}:
             return None, "reviewer finding has invalid severity"
         if not isinstance(finding["imageIds"], list) or not set(finding["imageIds"]).issubset(expected_ids):
             return None, "reviewer finding references an image outside its batch"
+        if scope is not None and batch_sites is not None and finding["siteId"] not in batch_sites:
+            return None, "reviewer finding site is not represented by a candidate image"
         if any(not isinstance(finding[key], str) or not finding[key].strip()
                for key in ("id", "category", "siteId", "description", "evidence", "requestedChange")):
             return None, "reviewer finding contains an empty required value"
+        if scope is not None:
+            criterion = next((row for row in scope["criteria"] if row["id"] == finding["criterionId"]), None)
+            if finding["disposition"] not in {"scoped", "regression", "advisory"}:
+                return None, "scoped reviewer finding has invalid disposition"
+            if finding["disposition"] == "scoped" and (criterion is None or finding["siteId"] not in criterion["siteIds"]):
+                return None, "scoped finding is outside frozen criterion/site"
+            pair = None if fact_sites is None else fact_sites.get(finding["siteId"])
+            metric = finding.get("metricName")
+            changed_metric = (pair is not None and isinstance(metric, str) and metric.strip()
+                              and metric in pair[0].get("metrics", {}) and metric in pair[1].get("metrics", {})
+                              and pair[0]["metrics"][metric] != pair[1]["metrics"][metric]
+                              and metric in finding["evidence"])
+            if finding["disposition"] == "regression" and (finding["baselineSiteId"] != finding["siteId"]
+                    or not changed_metric):
+                return None, "regression lacks matching same-site baseline evidence"
     for request in report["additionalCaptures"]:
         needed = {"reason", "x", "z", "view"}
         if not isinstance(request, dict) or set(request) != needed or request["view"] not in {"aerial", "ground", "bank", "underwater", "root", "boundary"}:
             return None, "reviewer capture request is invalid"
         if not isinstance(request["reason"], str) or not request["reason"].strip() or not all(isinstance(request[key], (int, float)) and not isinstance(request[key], bool) for key in ("x", "z")):
             return None, "reviewer capture request has invalid coordinates"
+    blocking = [f for f in report["findings"] if scope is None or f.get("disposition") != "advisory"]
     invalid_pass = (report["verdict"] == "pass" and (
-        any(f["severity"] in {"blocker", "major"} for f in report["findings"])
+        any(f["severity"] in {"blocker", "major"} for f in blocking)
         or report["coverageGaps"] or report["additionalCaptures"]
     ))
     if invalid_pass:
@@ -368,10 +422,13 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
     try:
         from contract import semantic_evidence_identity, validate_bundle, review_tool_fingerprint
         bundle = validate_bundle(bundle_path, root=ROOT)
+        plan = json.loads(Path(bundle["plan"]["path"]).read_text(encoding="utf-8"))
+        scope = budget.scope(plan)
+        fact_pairs = scoped_fact_pairs(bundle, scope)
         tool_fingerprint = review_tool_fingerprint(ROOT)
         semantic_identity = semantic_evidence_identity(bundle)
         executable = resolve_codex(codex)
-        schema = SCHEMA.resolve()
+        schema = (SCOPED_SCHEMA if scope else SCHEMA).resolve()
         if not schema.is_file():
             raise ValueError(f"missing reviewer schema: {schema}")
         images = bundle["images"]
@@ -397,7 +454,9 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
                 command.extend(("--image", str(image["path"])))
             observations = batch_site_observations(bundle, batch)
             inspection_observations = batch_inspection_observations(bundle, batch)
-            prompt = review_prompt(bundle_path.resolve(), batch, overview, observations, inspection_observations)
+            paired_facts = scoped_evidence(bundle, batch, scope)
+            prompt = review_prompt(bundle_path.resolve(), batch, overview, observations, inspection_observations,
+                                   scope, paired_facts)
             _json(target / "command.json", {"command": command, "imageIds": [item["id"] for item in batch],
                                                "overviewImageIds": [item["id"] for item in overview]})
             _json(target / "started.json", {"schema": 1, "kind": "independent-biome-review-attempt",
@@ -412,7 +471,9 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
                 _write(target / "stdout.txt", completed.stdout)
                 _write(target / "stderr.txt", completed.stderr)
                 expected = {item["id"] for item in [*batch, *overview]}
-                report, error = read_report(response, expected) if completed.returncode == 0 else (None, f"codex exited {completed.returncode}")
+                report, error = (read_report(response, expected, scope, fact_pairs,
+                                             {item["siteId"] for item in batch})
+                                 if completed.returncode == 0 else (None, f"codex exited {completed.returncode}"))
                 if error:
                     row = _failed_batch(index, sorted(expected), error, completed.returncode)
                 else:
@@ -478,13 +539,16 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
             all_requests.extend(row["additionalCaptures"])
         all_ids = {image["id"] for image in [*images, *overview]}
         unreviewed = sorted(all_ids - inspected_ids)
+        blocking_findings = [item for item in all_findings if scope is None or item.get("disposition") != "advisory"]
         if unreviewed or interrupted:
+            verdict = "insufficient_evidence"
+        elif scope is not None and (all_gaps or all_requests or any(row["verdict"] == "insufficient_evidence" for row in batch_rows)):
             verdict = "insufficient_evidence"
         elif any(row["verdict"] == "revise" for row in batch_rows):
             verdict = "revise"
         elif any(row["verdict"] == "insufficient_evidence" for row in batch_rows):
             verdict = "insufficient_evidence"
-        elif any(item["severity"] in {"blocker", "major"} for item in all_findings) or all_gaps or all_requests:
+        elif any(item["severity"] in {"blocker", "major"} for item in blocking_findings) or all_gaps or all_requests:
             verdict = "revise"
         else:
             verdict = "pass"
@@ -493,7 +557,7 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
                   "bundlePath": str(bundle_path.resolve()), "bundleSha256": sha256(bundle_path),
                   "semanticEvidenceIdentity": semantic_identity, "toolFingerprint": tool_fingerprint,
                   "historyPath": str(history), "historySha256": sha256(history),
-                  "reviewTask": task, "reviewRound": review_round, "reviewRoundLimit": budget.LIMIT,
+                  "reviewTask": task, "reviewRound": review_round, "reviewRoundLimit": budget.limit(plan),
                   "processExit": 0 if exits and all(exit_code == 0 for exit_code in exits) else 1,
                   "batchProcessExit": exits,
                   "reviewer": {"executable": str(executable), "mode": "fresh-read-only-codex-exec",
@@ -501,7 +565,9 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
                   "completion": "complete" if not unreviewed and not interrupted else "incomplete",
                   "interrupted": interrupted, "plannedBatchCount": len(planned_batches),
                   "inspectedImageIds": sorted(inspected_ids), "unreviewedImageIds": unreviewed,
-                  "batches": batch_rows, "findings": all_findings, "coverageGaps": all_gaps,
+                  "batches": batch_rows, "findings": all_findings, "blockingFindings": blocking_findings,
+                  "advisoryFindings": [item for item in all_findings if scope is not None and item.get("disposition") == "advisory"],
+                  "reviewScope": scope, "coverageGaps": all_gaps,
                   "additionalCaptures": all_requests,
                   "evidence": [{"path": str(path.resolve()), "sha256": sha256(path)}
                                for path in sorted(output.rglob("*")) if path.is_file() and path.name != "review.json"]

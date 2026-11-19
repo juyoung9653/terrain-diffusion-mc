@@ -79,6 +79,8 @@ public final class ChunkProfileClient {
         if (INSTANCE != null) return;
         INSTANCE = new ChunkProfileClient();
         NeoForge.EVENT_BUS.addListener((ClientTickEvent.Post event) -> INSTANCE.tick());
+        if (INSTANCE.biomeVisualReview)
+            NeoForge.EVENT_BUS.addListener((net.neoforged.neoforge.client.event.RenderFrameEvent.Post event) -> CaptureFrameWait.afterFrame());
     }
 
     private static int integer(String key, int fallback, int min, int max) {

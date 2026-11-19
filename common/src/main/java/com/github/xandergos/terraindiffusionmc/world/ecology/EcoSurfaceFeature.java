@@ -68,6 +68,7 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         int chunkX = Math.floorDiv(startX, 16);
         int chunkZ = Math.floorDiv(startZ, 16);
         ChunkAccess owner = level.getChunk(chunkX, chunkZ);
+        DryShoreSurfaceSnapshot dryShoreSurfaces = new DryShoreSurfaceSnapshot();
         // A structure reference covers the whole chunk in its bookkeeping, but
         // its pieces do not.  Protect only actual template cells: an underground
         // reference must not leave a 16-by-16 natural wetland bed unpainted.
@@ -110,9 +111,20 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         && level.getBiome(top).is(net.minecraft.tags.BiomeTags.IS_RIVER);
                 if (surfaceY > topY && !wetlandBiome && !modeledWetlandWater) continue;
                 if (surfaceY > topY && !waterCover) continue;
+                BlockState surface = level.getBlockState(top);
+                // Retained vanilla beach quart cells normally bypass the ecology
+                // palette. Repair only an exposed grass pad already enclosed by
+                // dry beach sand, then leave every other vanilla-beach material
+                // to its original surface rule.
+                boolean ordinaryBeachTurf = net.minecraft.world.level.biome.Biomes.BEACH.location().equals(currentBiome)
+                        && surface.is(Blocks.GRASS_BLOCK);
+                if (ordinaryBeachTurf && !dryShore && !dryOriginalLandBeach) {
+                    if (narrowDryTurfProjection(level, top, true, dryShoreSurfaces))
+                        changed |= placeSupportedSand(level, top, false);
+                    continue;
+                }
                 if (!dryShore && !dryGravelShore && !dryOriginalLandBeach && !riverOverlay
                         && (currentBiome == null || !isEcologyBiomeId(currentBiome))) continue;
-                BlockState surface = level.getBlockState(top);
                 if (!isExposedSoil(surface, true)) continue;
                 // Water in a labelled wetland is part of its shaped habitat.
                 // Repaint every natural submerged bed, including a three-block
@@ -131,6 +143,16 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
                         : FeatureEcologyMath.surfaceMaterial(
                         sample.temperature(), sample.moisture(), sample.slope(), sample.treeCover(), surfaceSample.elevation(),
                         level.getSeed(), x, z, WorldScaleManager.getCurrentScale());
+                // The base terrain owns the coast shape.  Only remove a dry, one-cell
+                // turf finger when its already-painted horizontal contact says it is
+                // surrounded by the mineral apron.  This deliberately excludes water,
+                // wetlands, broad grass banks, and non-marine terrain.
+                if (material == FeatureEcologyMath.SurfaceMaterial.GRASS
+                        && surfaceSample.terrainBiomeId() == 0
+                        && !wetlandBiome
+                        && sample.marineInfluence() >= .45F
+                        && narrowDryTurfProjection(level, top, false, dryShoreSurfaces))
+                    material = FeatureEcologyMath.SurfaceMaterial.SAND;
                 // IW raw soil can occur on either side of the beach quart
                 // boundary. Only admit it where the existing ecology policy
                 // itself selects the mineral sandy surface.
@@ -394,6 +416,53 @@ public final class EcoSurfaceFeature extends Feature<NoneFeatureConfiguration> {
         ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
         return IW_SANDY_DIRT.equals(id) || IW_GRASSY_SANDY_DIRT.equals(id);
     }
+
+    private static boolean narrowDryTurfProjection(WorldGenLevel level, BlockPos top,
+                                                    boolean ordinaryBeachTurf,
+                                                    DryShoreSurfaceSnapshot surfaces) {
+        if (!level.getFluidState(top).isEmpty() || !level.getFluidState(top.above()).isEmpty())
+            return false;
+        int mineral = 0, organic = 0;
+        surfaces.capture(level, top);
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            SurfaceCell neighbour = surfaces.get(level, top.getX() + direction.getStepX(),
+                    top.getZ() + direction.getStepZ());
+            if (Math.abs(neighbour.y() - top.getY()) > 1 || neighbour.wet()) continue;
+            if (neighbour.state().is(Blocks.SAND)) mineral++;
+            else if (isDryOrganicSoil(neighbour.state())) organic++;
+        }
+        return ordinaryBeachTurf
+                ? ShoreTurfPolicy.replaceVanillaBeachTurf(true, false, mineral, organic)
+                : ShoreTurfPolicy.replaceNarrowDryTurfProjection(true, mineral, organic);
+    }
+
+    private static boolean isDryOrganicSoil(BlockState state) {
+        return state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT)
+                || state.is(Blocks.COARSE_DIRT) || state.is(Blocks.PODZOL);
+    }
+
+    /** Captures a surface cell before this feature can repaint it during this pass. */
+    private static final class DryShoreSurfaceSnapshot {
+        private final Map<Long, SurfaceCell> cells = new HashMap<>();
+
+        void capture(WorldGenLevel level, BlockPos pos) {
+            get(level, pos.getX(), pos.getZ());
+        }
+
+        SurfaceCell get(WorldGenLevel level, int x, int z) {
+            long key = ((long) x << 32) ^ (z & 0xffffffffL);
+            SurfaceCell cached = cells.get(key);
+            if (cached != null) return cached;
+            int y = level.getHeight(Heightmap.Types.OCEAN_FLOOR_WG, x, z) - 1;
+            BlockPos pos = new BlockPos(x, y, z);
+            SurfaceCell sampled = new SurfaceCell(y, level.getBlockState(pos),
+                    !level.getFluidState(pos).isEmpty() || !level.getFluidState(pos.above()).isEmpty());
+            cells.put(key, sampled);
+            return sampled;
+        }
+    }
+
+    private record SurfaceCell(int y, BlockState state, boolean wet) { }
 
     private static boolean replace(WorldGenLevel level, BlockPos pos, BlockState state) {
         if (level.getBlockState(pos).equals(state)) return false;

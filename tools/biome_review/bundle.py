@@ -132,7 +132,7 @@ def make_map(columns: list[dict], plan: dict, sites: list[dict], output: Path) -
     return path
 
 
-def build(fixture: Path, output: Path, *, restart: bool = False) -> Path:
+def build(fixture: Path, output: Path, *, restart: bool = False, scope_facts: Path | None = None) -> Path:
     fixture, output = fixture.resolve(), output.resolve()
     if not fixture.is_relative_to(ROOT) or not output.is_relative_to(ROOT):
         raise ValueError("Use workspace fixture and output paths")
@@ -147,6 +147,14 @@ def build(fixture: Path, output: Path, *, restart: bool = False) -> Path:
         raise ValueError("Native biome capture is incomplete")
     plan_path = Path(capture["planPath"])
     plan = load(plan_path)
+    from biome_review import budget
+    scoped = budget.scope(plan)
+    if scoped and scope_facts is None:
+        raise ValueError("Scoped review requires --scope-facts candidate measurements")
+    if scope_facts is not None:
+        scope_facts = scope_facts.resolve()
+        if not scope_facts.is_relative_to(ROOT) or not scope_facts.is_file():
+            raise ValueError("--scope-facts must name a workspace measurement file")
     if capture.get("sourceFingerprint") != source_fingerprint(ROOT):
         raise ValueError("Native biome capture belongs to earlier sources")
     columns_path = Path(capture["columnsPath"])
@@ -191,6 +199,8 @@ def build(fixture: Path, output: Path, *, restart: bool = False) -> Path:
               "overviewImages": [dict(file_ref(overview), id="measured-overview")],
               "evidence": [file_ref(p) for p in [columns_path, Path(capture["selectionPath"]), summary_path,
                                                  diff_path, untracked_path]]}
+    if scope_facts is not None:
+        bundle["scopeFacts"] = file_ref(scope_facts)
     path = output / "bundle.json"
     save(path, bundle)
     validate_bundle(path, ROOT)
@@ -202,5 +212,6 @@ if __name__ == "__main__":
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--restart", action="store_true")
+    parser.add_argument("--scope-facts", type=Path)
     args = parser.parse_args()
-    print(build(args.fixture, args.output, restart=args.restart))
+    print(build(args.fixture, args.output, restart=args.restart, scope_facts=args.scope_facts))

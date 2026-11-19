@@ -22,6 +22,7 @@ import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConf
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.level.material.Fluids;
 import net.minecraft.core.Direction;
+import net.minecraft.tags.BlockTags;
 
 /** Places a continuous ecological mix of direct tree configured features. */
 public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
@@ -54,10 +55,15 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
         WorldGenLevel level = context.level();
         Registry<ConfiguredFeature<?, ?>> registry = level.registryAccess().registryOrThrow(Registries.CONFIGURED_FEATURE);
         WetlandEcology.Weights habitat = WetlandEcology.weights(sample);
+        boolean coastalCanopy = FeatureEcologyMath.coastalTropicalCanopy(
+                sample.temperature(), sample.moisture(), sample.slope(), sample.marineInfluence());
+        // Do not trade an exposed sand-tip acacia for another perched tree. The
+        // connected-land condition applies only to the humid coastal canopy.
+        if (coastalCanopy && !hasCoastalLandFootprint(level, origin)) return false;
         boolean saturatedWetland = FeatureEcologyMath.wetlandSedimentCore(
                 habitat.freshwaterSwamp(), habitat.mangrove(),
                 sample.wetness(), sample.slope());
-        TreeChoice choice = choose(sample, context.random(), saturatedWetland);
+        TreeChoice choice = choose(sample, context.random(), saturatedWetland, coastalCanopy);
         if (choice == null) return false;
         BlockPos wetlandRoot = choice.wetland() ? shallowWetlandRoot(level, origin) : null;
         if (choice.mangrove() && wetlandRoot == null && !mangroveSite(level, origin, sample)) {
@@ -65,7 +71,7 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
             // dry woodland site.  Leave it empty rather than planting a normal
             // tree in the wet core.
             if (saturatedWetland) return false;
-            choice = new TreeChoice(chooseDry(sample, context.random()), false, false);
+            choice = new TreeChoice(chooseDry(sample, context.random(), coastalCanopy), false, false);
         }
         // Every dry route, including a rejected mangrove, keeps the configured
         // feature's original air placement. Only a verified shallow basin moves
@@ -115,7 +121,7 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
     private record TreeChoice(ResourceKey<ConfiguredFeature<?, ?>> key, boolean mangrove, boolean wetland) { }
 
     private static TreeChoice choose(EcologyClassifier.Sample sample, RandomSource random,
-                                     boolean saturatedWetland) {
+                                     boolean saturatedWetland, boolean coastalCanopy) {
         WetlandEcology.Weights wetland = WetlandEcology.weights(sample);
         float mangrove = FeatureEcologyMath.clamp01(.88F * wetland.mangrove());
         float swampOak = FeatureEcologyMath.clamp01(.68F * wetland.freshwaterSwamp()
@@ -125,17 +131,18 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
         if (roll < Math.min(1.0F, mangrove + (1.0F - mangrove) * swampOak))
             return new TreeChoice(SWAMP_OAK, false, true);
         if (saturatedWetland) return null;
-        return new TreeChoice(chooseDry(sample, random), false, false);
+        return new TreeChoice(chooseDry(sample, random, coastalCanopy), false, false);
     }
 
-    private static ResourceKey<ConfiguredFeature<?, ?>> chooseDry(EcologyClassifier.Sample sample, RandomSource random) {
+    private static ResourceKey<ConfiguredFeature<?, ?>> chooseDry(EcologyClassifier.Sample sample, RandomSource random,
+                                                                    boolean coastalCanopy) {
         FeatureEcologyMath.SpeciesWeights weights = FeatureEcologyMath.speciesWeights(sample.temperature(), sample.moisture());
         float roll = random.nextFloat() * weights.total();
         if ((roll -= weights.spruce()) < 0.0F) return SPRUCE;
         if ((roll -= weights.pine()) < 0.0F) return PINE;
         if ((roll -= weights.oak()) < 0.0F) return OAK;
         if ((roll -= weights.birch()) < 0.0F) return BIRCH;
-        return roll < weights.acacia() ? ACACIA : JUNGLE;
+        return roll < weights.acacia() ? (coastalCanopy ? JUNGLE : ACACIA) : JUNGLE;
     }
 
     private static ResourceKey<ConfiguredFeature<?, ?>> terralithVariant(ResourceKey<ConfiguredFeature<?, ?>> vanilla) {
@@ -196,6 +203,24 @@ public final class EcoTreesFeature extends Feature<NoneFeatureConfiguration> {
             if (eastWest && northSouth) return true;
         }
         return false;
+    }
+
+    /** A coastal canopy needs an actual bank, not one grass column on a beach. */
+    private static boolean hasCoastalLandFootprint(WorldGenLevel level, BlockPos origin) {
+        BlockPos base = origin.below();
+        if (!dryLandSoil(level, base)) return false;
+        boolean eastWest = false, northSouth = false;
+        for (Direction direction : Direction.Plane.HORIZONTAL) {
+            if (!dryLandSoil(level, base.relative(direction))) continue;
+            if (direction.getAxis() == Direction.Axis.X) eastWest = true;
+            else northSouth = true;
+        }
+        return eastWest && northSouth;
+    }
+
+    private static boolean dryLandSoil(WorldGenLevel level, BlockPos pos) {
+        return level.getBlockState(pos).is(BlockTags.DIRT)
+                && level.getFluidState(pos.above()).isEmpty();
     }
 
     private static BlockPos dryGroundNear(WorldGenLevel level, BlockPos column) {

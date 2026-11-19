@@ -62,6 +62,28 @@ public final class SubmergedPlantPolicy {
         return tall ? shortProbability * tallFraction(patch, waterDepth) : shortProbability;
     }
 
+    /**
+     * Coral itself is limited to a water-containing or existing-coral warm-ocean
+     * cell. A feature can extend away from its origin, so every target needs
+     * this strict gate.
+     */
+    public static boolean allowsCoral(boolean naturalTerrain, boolean coralCell,
+                                      boolean warmOcean) {
+        return allowsCoral(naturalTerrain, coralCell, warmOcean, true);
+    }
+
+    /** A zoomed registry biome alone cannot turn a shaped land pool into reef. */
+    public static boolean allowsCoral(boolean naturalTerrain, boolean coralCell,
+                                      boolean warmOcean, boolean marineSurface) {
+        return !naturalTerrain || (coralCell && warmOcean && marineSurface);
+    }
+
+    /** A warm reef is declared by its feature set, not by base temperature. */
+    public static boolean isWarmOceanHabitat(boolean nativeWarmOcean,
+                                             boolean warmOceanVegetation) {
+        return nativeWarmOcean || warmOceanVegetation;
+    }
+
     /** Separate warm-marine policy for sea pickles, including coral feature writes. */
     public static boolean allowsSeaPickle(boolean naturalTerrain, boolean submerged,
                                           boolean marine, boolean freshwater, boolean warm,

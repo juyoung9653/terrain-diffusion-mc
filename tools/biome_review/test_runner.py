@@ -325,6 +325,26 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(1, len(calls))
         self.assertTrue((self.root / "out" / "interrupted-run.json").is_file())
 
+    def test_scoped_advisory_can_pass_but_regression_needs_changed_same_site_fact(self):
+        scope = {"criteria": [{"id": "shore", "siteIds": ["site-0"], "description": "x", "acceptance": "y"}]}
+        pairs = {"site-0": ({"metrics": {"sand": 1}}, {"metrics": {"sand": 1}})}
+        path = self.root / "scoped.json"
+        advisory = {"id": "a", "severity": "major", "category": "other", "siteId": "site-0",
+                    "imageIds": ["image-0"], "description": "x", "evidence": "x", "requestedChange": "x",
+                    "criterionId": "advisory", "disposition": "advisory", "baselineSiteId": "site-0", "metricName": "none"}
+        path.write_text(json.dumps(report(["image-0"], findings=[advisory])), encoding="utf-8")
+        parsed, error = runner.read_report(path, {"image-0"}, scope, pairs, {"site-0"})
+        self.assertIsNone(error)
+        self.assertEqual("pass", parsed["verdict"])
+        regression = dict(advisory, disposition="regression", criterionId="regression", metricName="sand", evidence="sand changed")
+        path.write_text(json.dumps(report(["image-0"], verdict="revise", findings=[regression])), encoding="utf-8")
+        _, error = runner.read_report(path, {"image-0"}, scope, pairs, {"site-0"})
+        self.assertIn("same-site baseline", error)
+        pairs["site-0"] = ({"metrics": {"sand": 1}}, {"metrics": {"sand": 2}})
+        parsed, error = runner.read_report(path, {"image-0"}, scope, pairs, {"site-0"})
+        self.assertIsNone(error)
+        self.assertEqual("revise", parsed["verdict"])
+
 
 if __name__ == "__main__":
     unittest.main()

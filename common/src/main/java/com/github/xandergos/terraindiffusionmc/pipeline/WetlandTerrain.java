@@ -15,6 +15,11 @@ public final class WetlandTerrain {
     private static final int PLANE_RADIUS = 128;
     private static final int OUTER_RADIUS = 160;
     private static final int BANK_RADIUS = 5;
+    // A coastal dry shoulder extends two cells beyond the five-block lowering cap.
+    // Otherwise a high shore goes 65,65,66,67,68,70 and reads as a shelf with a
+    // final two-block wall.  The two outer cells retain the same bounded
+    // sea-level profile (69,70) without admitting additional water.
+    private static final int COASTAL_BANK_RADIUS = 7;
     private static final int BOUNDARY_WARP = 8;
     private static final int BOUNDARY_WARP_CELL = 48;
     private static final int MARGIN_RADIUS_MIN = 8, MARGIN_RADIUS_MAX = 16;
@@ -300,7 +305,7 @@ public final class WetlandTerrain {
         float compatible = smooth(.45f, .65f, marine)
                 * smooth(.45f, .60f, ecology.moisture())
                 * (1 - smooth(.18f, .35f, ecology.slope()));
-        if (distance < 1 || distance > BANK_RADIUS || compatible <= 0)
+        if (distance < 1 || distance > COASTAL_BANK_RADIUS || compatible <= 0)
             return new Column(originalMeters, 0, false);
         // The padded terrain field supplies a seam-safe distance from a low
         // shore basin.  This stays dry: the first ledge is above sea level.

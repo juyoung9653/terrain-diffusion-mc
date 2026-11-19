@@ -51,6 +51,21 @@ public final class SubmergedPlantPolicyTest {
                 true, false, 5, 0, 4, 9, 10) == 0, "freshwater pickle admitted");
         check(SubmergedPlantPolicy.seaPickleProbability(true, true, true, false, false,
                 true, false, 5, 0, 4, 9, 10) == 0, "cold pickle admitted");
+        check(SubmergedPlantPolicy.allowsCoral(true, true, true), "warm-ocean coral rejected");
+        check(!SubmergedPlantPolicy.allowsCoral(true, true, false),
+                "terrestrial or freshwater coral admitted");
+        check(!SubmergedPlantPolicy.allowsCoral(true, false, true), "dry coral admitted");
+        check(SubmergedPlantPolicy.allowsCoral(false, false, false), "non-TD coral changed");
+        check(SubmergedPlantPolicy.allowsCoral(true, true, true, true),
+                "marine warm-ocean coral rejected");
+        check(!SubmergedPlantPolicy.allowsCoral(true, true, true, false),
+                "flooded ecology cell admitted as coral reef");
+        check(SubmergedPlantPolicy.isWarmOceanHabitat(true, false),
+                "native warm ocean lost reef habitat");
+        check(SubmergedPlantPolicy.isWarmOceanHabitat(false, true),
+                "deep warm ocean vegetation lost reef habitat");
+        check(!SubmergedPlantPolicy.isWarmOceanHabitat(false, false),
+                "unmarked ocean gained reef habitat");
         double before = SubmergedPlantPolicy.probability(true, true, true, false,
                 true, 11, true, .8, false, 99, 13, -17);
         double after = SubmergedPlantPolicy.probability(true, true, true, false,

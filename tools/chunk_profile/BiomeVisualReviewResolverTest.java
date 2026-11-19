@@ -52,6 +52,9 @@ public final class BiomeVisualReviewResolverTest {
         equal(0, value(edge, "candidateCount"), "outside-window grounded log is not selected");
         check(BiomeVisualReview.underwaterEyes(40, 60, 0).contains(41.2), "deep water includes a near-bed eye");
         check(BiomeVisualReview.underwaterEyes(40, 41, 0).stream().allMatch(y -> y > 41 && y < 42), "shallow candidates remain in water");
+        List<Double> bedFirst = BiomeVisualReview.underwaterEyes(40, 60, 0);
+        List<Double> waterlineFirst = BiomeVisualReview.waterlineEyes(40, 60, 0);
+        equal(bedFirst.get(bedFirst.size() - 1), waterlineFirst.get(0), "waterline camera starts at upper water eye");
 
         BlockPos rootStart = new BlockPos(0, 5, 0), trunk = new BlockPos(0, 7, 0);
         Set<BlockPos> connected = Set.of(rootStart, new BlockPos(0, 6, 0), trunk);
@@ -85,7 +88,8 @@ public final class BiomeVisualReviewResolverTest {
         method.setAccessible(true); return method.invoke(null, request, windows, columns);
     }
     private static Object request(String id, String kind, int x, int z) throws Exception {
-        return constructor(REQUEST, String.class, int.class, int.class, String.class).newInstance(id, x, z, kind);
+        return constructor(REQUEST, String.class, int.class, int.class, String.class, String.class)
+                .newInstance(id, x, z, kind, "bed");
     }
     private static Object window(String id, int minX, int maxX, int minZ, int maxZ) throws Exception {
         return constructor(WINDOW, String.class, int.class, int.class, int.class, int.class).newInstance(id, minX, maxX, minZ, maxZ);

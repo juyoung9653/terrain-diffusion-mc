@@ -35,6 +35,13 @@ def expect_error(callable_):
 
 
 def main():
+    # FULL futures must be requested off the server thread in bounded batches;
+    # this is the scheduling rule shared with ChunkProfileClient's probe phase.
+    review_source = (ROOT / 'tools/chunk_profile/java/com/terrain/chunkprofile/BiomeVisualReview.java').read_text(encoding='utf-8')
+    assert 'private static final int PREFETCH = 8;' in review_source
+    assert 'loadFullBatches(server, level, chunks' in review_source
+    assert 'server.submit(() -> chunks.stream().map(pos -> level.getChunkSource().getChunkFuture' not in review_source
+    assert 'future.get(remainingSeconds(deadline), TimeUnit.SECONDS)' in review_source
     manifest = {'seed': 42, 'scale': 1,
                 'terrain_diffusion_artifact': {'sha256': 'a' * 64, 'source_filename': 'td.jar'}}
     scratch = ROOT / '.tmp'

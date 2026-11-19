@@ -1,0 +1,32 @@
+[
+  {
+    "id": "silt-contact",
+    "siteIds": ["silt-anchor", "silt-sand-boundary", "silt-boundary-detail", "inspect-silt-sand"],
+    "description": "The reported Immersive Weathering silt contact on the sandy shallows.",
+    "acceptance": "Retain a sheltered muddy deposit and some local silt. The transition into open sand should not read as a repeated comb, an unbroken contrasting outline, or a field of isolated checks. Ordinary Minecraft block steps or an occasional isolated grain do not fail the criterion."
+  },
+  {
+    "id": "mangrove-margin",
+    "siteIds": ["mud-anchor", "inspect-mud-bed"],
+    "description": "The reported mangrove mud margin and the adjacent sandy shallows visible from this clearing.",
+    "acceptance": "Preserve the wet muddy core. No conspicuous repeated one-cell grid or repeated abrupt material bands along this margin at the scale of the original aerial and bank view. The absence of uniform per-block random dithering is not by itself a failure."
+  },
+  {
+    "id": "reef-habitat",
+    "siteIds": ["shallow-coral-a", "shallow-coral-b", "coral-support-detail", "inspect-coral-depth", "deep-coral-control", "inspect-deep-coral-control"],
+    "description": "Living coral belongs in the deep warm reef but not at either reported tropical woodland site.",
+    "acceptance": "Settled saved blocks: zero living coral in each reported 10x10 woodland box at Y44..63 and living coral remains in the 16x16 deep warm reference box. Water and valid submerged reef habitat remain. Colony outline, absolute coral count, and unrelated shelf shape are not failures under this criterion."
+  },
+  {
+    "id": "tip-contact",
+    "siteIds": ["mixed-shore-layout", "grassy-shore-tip", "inspect-mixed-shore", "inspect-grassy-shore-tip"],
+    "description": "The wooded shore projection in screenshot 6 is a supported landform; inspect its local turf/sand transition.",
+    "acceptance": "Keep the connected, supported point and the adjacent sandy shore. Do not leave a conspicuous run of detached square grass pads or a uniform toothed strip of turf and plants along the point. A natural, block-stepped projection or the neighboring boat alone is not a failure."
+  },
+  {
+    "id": "pond-substrate",
+    "siteIds": ["riparian-sand-pond", "inspect-pond-edge"],
+    "description": "The reported inland riparian pool is an aquifer; distinguish the origin of its water from its floor material.",
+    "acceptance": "Preserve the pool at the reported position; its exposed wet floor should predominantly be wetland soil (mud/clay) rather than a marine sand sheet. Bank steepness alone is not grounds for rejection."
+  }
+]
