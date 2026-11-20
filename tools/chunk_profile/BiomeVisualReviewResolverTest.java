@@ -1,9 +1,15 @@
 package com.terrain.chunkprofile;
 
+import com.google.gson.Gson;
+import com.google.gson.JsonParser;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.List;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -14,7 +20,7 @@ import net.minecraft.world.phys.Vec3;
 public final class BiomeVisualReviewResolverTest {
     private static final Class<?> REVIEW = BiomeVisualReview.class;
     private static final Class<?> COLUMN = nested("Column"), SUPPORT = nested("LogSupport");
-    private static final Class<?> WINDOW = nested("Window"), REQUEST = nested("InspectionRequest");
+    private static final Class<?> WINDOW = nested("Window"), REQUEST = nested("InspectionRequest"), PLAN = nested("Plan");
 
     public static void main(String[] args) throws Exception {
         List<Object> windows = List.of(window("w", 0, 31, 0, 31));
@@ -80,12 +86,59 @@ public final class BiomeVisualReviewResolverTest {
         Set<net.minecraft.world.level.ChunkPos> requestTickets = new HashSet<>(BiomeVisualReview.rootRequestTickets(15, -1));
         for (net.minecraft.world.level.ChunkPos chunk : List.of(new net.minecraft.world.level.ChunkPos(3 >> 4, -13 >> 4), new net.minecraft.world.level.ChunkPos((3 >> 4) - 1, (-13 >> 4) - 1), new net.minecraft.world.level.ChunkPos((3 >> 4) + 1, (-13 >> 4) + 1)))
             check(requestTickets.contains(chunk), "5x5 request tickets cover shifted root anchor camera neighborhood");
+        Object unscopedPlan = parsePlan(false);
+        equal(2, ((List<?>) value(unscopedPlan, "explicit")).size(), "unscoped plan retains all fixed sites");
+        equal(2, ((List<?>) value(unscopedPlan, "inspectionRequests")).size(), "unscoped plan retains all inspections");
+        Object scopedPlan = parsePlan(true);
+        equal(1, ((List<?>) value(scopedPlan, "explicit")).size(), "scoped plan filters uncited fixed site");
+        equal(1, ((List<?>) value(scopedPlan, "inspectionRequests")).size(), "scoped plan filters uncited inspection");
+        Method choose = REVIEW.getDeclaredMethod("choose", PLAN, List.class);
+        choose.setAccessible(true);
+        List<Object> interior = List.of(column(1, 1, 4, 0, false, false, null),
+                                        column(2, 2, 4, 0, false, false, null));
+        Object scopedSelection = choose.invoke(null, scopedPlan, interior);
+        equal(1, ((List<?>) value(scopedSelection, "sites")).size(), "only the fixed report needs a standard scene");
+        equal(List.of(), value(scopedSelection, "gaps"), "a scoped site need not be near a biome boundary");
+        Object survey = choose.invoke(null, unscopedPlan, interior);
+        check(!((List<?>) value(survey, "gaps")).isEmpty(), "the full survey still requires a boundary");
+        Method skipCapture = REVIEW.getDeclaredMethod("skipCapture", nested("Selection"));
+        skipCapture.setAccessible(true);
+        check((Boolean) skipCapture.invoke(null, survey), "a census coverage gap skips camera capture");
+        check(!(Boolean) skipCapture.invoke(null, scopedSelection),
+                "a complete scoped census still captures its required site");
+        for (String argument : args) verifyArchivedPlan(argument);
         System.out.println("biome visual resolver: PASS");
     }
 
     private static Object resolve(Object request, List<Object> windows, List<Object> columns) throws Exception {
         Method method = REVIEW.getDeclaredMethod("resolveInspection", REQUEST, List.class, List.class);
         method.setAccessible(true); return method.invoke(null, request, windows, columns);
+    }
+    private static Object parsePlan(boolean scoped) throws Exception {
+        Map<String, Object> raw = new HashMap<>();
+        raw.put("schema", 1); raw.put("seed", 7L); raw.put("scale", 1);
+        raw.put("sourceFingerprint", "source"); raw.put("artifactSha256", "artifact");
+        raw.put("requiredBiomes", List.of("test:biome"));
+        raw.put("windows", List.of(Map.of("id", "w", "minX", 0, "maxX", 15, "minZ", 0, "maxZ", 15)));
+        raw.put("regressionSites", List.of(Map.of("id", "pinned", "x", 1, "z", 1)));
+        raw.put("explicitSites", List.of(Map.of("id", "uncited", "x", 2, "z", 2)));
+        raw.put("inspectionRequests", List.of(Map.of("id", "inspection-pinned", "x", 3, "z", 3, "kind", "root"),
+                                               Map.of("id", "inspection-uncited", "x", 4, "z", 4, "kind", "root")));
+        if (scoped) raw.put("reviewScope", Map.of("criteria", List.of(Map.of("siteIds", List.of("pinned", "inspection-pinned")))));
+        Method parse = PLAN.getDeclaredMethod("parse", Map.class, long.class);
+        parse.setAccessible(true); return parse.invoke(null, raw, 7L);
+    }
+    @SuppressWarnings("unchecked")
+    private static void verifyArchivedPlan(String argument) throws Exception {
+        String[] pieces = argument.split("=", 2);
+        if (pieces.length != 2) throw new IllegalArgumentException("archived plan argument must be PATH=COUNT");
+        Map<String, Object> raw = new Gson().fromJson(JsonParser.parseString(Files.readString(Path.of(pieces[0]))), Map.class);
+        Method parse = PLAN.getDeclaredMethod("parse", Map.class, long.class);
+        parse.setAccessible(true);
+        Object plan = parse.invoke(null, raw, ((Number) raw.get("seed")).longValue());
+        int expected = Integer.parseInt(pieces[1]);
+        int selected = ((List<?>) value(plan, "explicit")).size() + ((List<?>) value(plan, "inspectionRequests")).size();
+        equal(expected, selected, "archived scoped plan filters to frozen site IDs: " + pieces[0]);
     }
     private static Object request(String id, String kind, int x, int z) throws Exception {
         return constructor(REQUEST, String.class, int.class, int.class, String.class, String.class)

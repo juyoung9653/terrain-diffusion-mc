@@ -10,7 +10,6 @@ import argparse
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -41,6 +40,123 @@ def _write(path: Path, value: str) -> None:
 
 def _json(path: Path, value: Any) -> None:
     _write(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+
+
+def _technical_failure(row: dict[str, Any]) -> bool:
+    """Only launcher/model failures may be retried; reviewer verdicts are final."""
+    error = row.get("error")
+    return (isinstance(error, str) and bool(error)
+            and row.get("verdict") == "insufficient_evidence"
+            and row.get("findings") == [] and row.get("coverageGaps") == [error]
+            and row.get("additionalCaptures") == [] and row.get("inspectedImageIds") == []
+            and "report" not in row)
+
+
+def _archive_batch(output: Path, index: int) -> None:
+    target = output / f"batch-{index:02d}"
+    if not target.exists():
+        return
+    target.rename(output / f"batch-{index:02d}-technical-1")
+
+
+def _verify_previous_evidence(previous: dict[str, Any], output: Path, history: Path,
+                              rows: list[dict[str, Any]]) -> None:
+    evidence = previous.get("evidence")
+    if not isinstance(evidence, list):
+        raise ValueError("resume requires hash-verified original evidence")
+    verified: set[str] = set()
+    for item in evidence:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str) or not isinstance(item.get("sha256"), str):
+            raise ValueError("resume evidence record is malformed")
+        path = Path(item["path"]).resolve()
+        if not (path.is_relative_to(output.resolve()) or path == history.resolve()):
+            raise ValueError("resume evidence path is outside the original attempt")
+        if not path.is_file() or sha256(path) != item["sha256"]:
+            raise ValueError("resume original evidence changed or is missing")
+        verified.add(str(path))
+    for row in rows:
+        target = output / f"batch-{row['index']:02d}"
+        required = [target / name for name in ("command.json", "started.json", "result.json")]
+        if not _technical_failure(row):
+            required.extend(target / name for name in ("stdout.txt", "stderr.txt", "response.json"))
+        if any(str(path.resolve()) not in verified for path in required):
+            raise ValueError("resume batch evidence is incomplete")
+        result = json.loads((target / "result.json").read_text(encoding="utf-8"))
+        if result != row:
+            raise ValueError("resume aggregate receipt differs from raw batch result")
+
+
+def _claim_technical_resume(output: Path, bundle_path: Path, semantic_identity: str,
+                            tool_fingerprint: str, review_round: int, retry: set[int],
+                            preserved: dict[int, dict[str, Any]]) -> None:
+    claim = output / "technical-resume-claim.json"
+    value = {"schema": 1, "kind": "independent-biome-review-technical-resume-claim",
+             "bundleSha256": sha256(bundle_path), "semanticEvidenceIdentity": semantic_identity,
+             "toolFingerprint": tool_fingerprint, "reviewRound": review_round,
+             "retriedBatchIndexes": sorted(retry), "preservedBatchIndexes": sorted(preserved)}
+    try:
+        with claim.open("x", encoding="utf-8") as stream:
+            json.dump(value, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+    except FileExistsError as error:
+        raise ValueError("technical resume was already claimed for this output") from error
+
+
+def resume_rows(previous: dict[str, Any], bundle_path: Path, bundle: dict[str, Any],
+                output: Path, semantic_identity: str, tool_fingerprint: str,
+                planned_batches: list[list[dict[str, Any]]]) -> tuple[Path, int, str, dict[int, dict[str, Any]], set[int]]:
+    """Verify an interrupted technical attempt and select only its missing work."""
+    if (previous.get("schema") != 1 or previous.get("kind") != "independent-biome-review"
+            or previous.get("bundlePath") != str(bundle_path.resolve())
+            or previous.get("bundleSha256") != sha256(bundle_path)
+            or previous.get("semanticEvidenceIdentity") != semantic_identity
+            or previous.get("toolFingerprint") != tool_fingerprint
+            or previous.get("sourceFingerprint") != bundle["sourceFingerprint"]
+            or previous.get("artifactSha256") != bundle["artifactSha256"]):
+        raise ValueError("resume requires the identical validated bundle and review tools")
+    history = Path(previous.get("historyPath", ""))
+    if (not history.is_file() or previous.get("historySha256") != sha256(history)):
+        raise ValueError("resume requires the original immutable review history")
+    marker = json.loads(history.read_text(encoding="utf-8"))
+    if (marker.get("kind") != "independent-biome-review-history"
+            or marker.get("bundleSha256") != sha256(bundle_path)
+            or marker.get("semanticEvidenceIdentity") != semantic_identity
+            or marker.get("toolFingerprint") != tool_fingerprint
+            or Path(marker.get("outputPath", "")).resolve() != output.resolve()):
+        raise ValueError("resume history does not belong to this output")
+    rows = previous.get("batches")
+    if not isinstance(rows, list) or previous.get("completion") != "incomplete":
+        raise ValueError("only an incomplete technical review may resume")
+    kept: dict[int, dict[str, Any]] = {}
+    retry: set[int] = set()
+    for row in rows:
+        if not isinstance(row, dict) or type(row.get("index")) is not int:
+            raise ValueError("resume batch record is malformed")
+        index = row["index"]
+        if index < 0 or index >= len(planned_batches) or index in kept or index in retry:
+            raise ValueError("resume batch index differs from current plan")
+        if _technical_failure(row):
+            expected = [item["id"] for item in [*planned_batches[index], *bundle.get("overviewImages", [])]]
+            ids = row.get("imageIds")
+            if not isinstance(ids, list) or sorted(ids) != sorted(expected):
+                raise ValueError("resume failed-batch images differ from current plan")
+            retry.add(index)
+        elif row.get("processExit") == 0 and "error" not in row:
+            if row.get("imageIds") != [item["id"] for item in planned_batches[index]]:
+                raise ValueError("resume batch images differ from current plan")
+            kept[index] = row
+        else:
+            raise ValueError("resume only permits technical batch failures")
+    _verify_previous_evidence(previous, output, history, rows)
+    interrupted = previous.get("interrupted") is True
+    if not retry and not interrupted:
+        raise ValueError("review has no technical batch failure to resume")
+    unstarted = set(range(len(planned_batches))) - set(kept) - retry
+    for index in unstarted:
+        if (output / f"batch-{index:02d}").exists():
+            raise ValueError("resume receipt omitted an existing completed batch")
+    retry.update(unstarted)
+    return history, marker["reviewRound"], marker["reviewTask"], kept, retry
 
 
 def output_text(value: str | bytes | None) -> str:
@@ -376,6 +492,26 @@ def _failed_batch(index: int, ids: list[str], error: str, returncode: int | None
             "coverageGaps": [error], "additionalCaptures": [], "inspectedImageIds": []}
 
 
+def judgement_marker(semantic_identity: str, tool_fingerprint: str) -> str:
+    """One immutable decision per evidence identity and reviewer-rule version."""
+    return hashlib.sha256(
+        (semantic_identity + "\0" + tool_fingerprint).encode("utf-8")
+    ).hexdigest()
+
+
+def _read_judgement(marker: Path) -> dict[str, Any] | None:
+    """Read a known history marker without inspecting unrelated task files."""
+    if not marker.exists():
+        return None
+    try:
+        value = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"review history marker is malformed: {marker}") from error
+    if not isinstance(value, dict) or value.get("kind") != "independent-biome-review-history":
+        raise ValueError(f"review history marker is malformed: {marker}")
+    return value
+
+
 def reserve_history(bundle_path: Path, bundle: dict[str, Any], output: Path, tool_fingerprint: str,
                     semantic_identity: str) -> tuple[Path, int, str]:
     """Create an immutable local attempt marker before the reviewer starts.
@@ -385,40 +521,57 @@ def reserve_history(bundle_path: Path, bundle: dict[str, Any], output: Path, too
     same evidence bundle.
     """
     HISTORY_ROOT.mkdir(parents=True, exist_ok=True)
-    bundle_hash = sha256(bundle_path)
-    marker = HISTORY_ROOT / f"{semantic_identity}.json"
-    if marker.exists():
-        raise ValueError(f"this exact evidence bundle was already reviewed: {marker}")
     plan = json.loads(Path(bundle["plan"]["path"]).read_text(encoding="utf-8"))
     task = budget.task_id(plan)
-    number, slot = budget.claim_round(plan, HISTORY_ROOT, semantic_identity)
+    epoch = judgement_marker(semantic_identity, tool_fingerprint)
+    # Older versions used the semantic identity as the filename. New versions
+    # bind that identity to the reviewer-rule generation. Both names are known
+    # directly, so a damaged unrelated history file cannot block a review.
+    for old_marker in {HISTORY_ROOT / f"{semantic_identity}.json", HISTORY_ROOT / f"{epoch}.json"}:
+        old = _read_judgement(old_marker)
+        if old is not None and old.get("toolFingerprint") == tool_fingerprint:
+            raise ValueError(
+                f"this evidence was already reviewed under the current reviewer rules: {old_marker}"
+            )
+    # A changed rule set produces a new independent verdict. It may reuse the
+    # immutable capture, but it still consumes this frozen task's next review
+    # slot; only --resume stays within the original round.
+    number, slot = budget.claim_round(
+        plan, HISTORY_ROOT, semantic_identity
+    )
+    bundle_hash = sha256(bundle_path)
+    marker = HISTORY_ROOT / f"{epoch}.json"
     value = {"schema": 1, "kind": "independent-biome-review-history", "bundleSha256": bundle_hash,
              "reviewTask": task, "reviewRound": number,
              "semanticEvidenceIdentity": semantic_identity,
              "bundlePath": str(bundle_path.resolve()), "outputPath": str(output.resolve()),
              "sourceFingerprint": bundle["sourceFingerprint"], "artifactSha256": bundle["artifactSha256"],
-             "toolFingerprint": tool_fingerprint}
+             "toolFingerprint": tool_fingerprint,
+             "reviewRuleEpoch": epoch}
     try:
         with marker.open("x", encoding="utf-8") as stream:
             json.dump(value, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
     except FileExistsError:
-        # Another process reserved this identical capture first; our reviewer
-        # never started. Release only the exclusive slot created by this call.
+        # Another process reserved this exact decision first; release the
+        # newly claimed review slot before reporting the duplicate.
         slot.unlink()
-        raise ValueError(f"this exact evidence bundle was already reviewed; change evidence before another attempt: {marker}")
+        raise ValueError(f"this evidence was already reviewed under the current reviewer rules: {marker}")
     return marker, number, task
 
 
 def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: int = 600,
-        jobs: int = 1) -> dict[str, Any]:
-    if output.exists():
+        jobs: int = 1, resume: bool = False) -> dict[str, Any]:
+    if output.exists() and not resume:
         raise ValueError(f"review output already exists; retain it and choose a new directory: {output}")
+    if resume and not output.is_dir():
+        raise ValueError("resume requires the original review output directory")
     if timeout < 1:
         raise ValueError("--timeout must be positive")
     if not 1 <= jobs <= 3:
         raise ValueError("--jobs must be between 1 and 3")
-    output.mkdir(parents=True)
+    if not resume:
+        output.mkdir(parents=True)
     try:
         from contract import semantic_evidence_identity, validate_bundle, review_tool_fingerprint
         bundle = validate_bundle(bundle_path, root=ROOT)
@@ -443,7 +596,25 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
         inspected_ids: set[str] = set()
         interrupted = False
         planned_batches = site_batches(images)
-        history, review_round, task = reserve_history(bundle_path, bundle, output, tool_fingerprint, semantic_identity)
+        kept_rows: dict[int, dict[str, Any]] = {}
+        retry_indexes: set[int] = set(range(len(planned_batches)))
+        if resume:
+            review_path = output / "review.json"
+            if not review_path.is_file():
+                raise ValueError("resume requires the original review receipt")
+            previous = json.loads(review_path.read_text(encoding="utf-8"))
+            history, review_round, task, kept_rows, retry_indexes = resume_rows(
+                previous, bundle_path, bundle, output, semantic_identity, tool_fingerprint, planned_batches)
+            backup = output / "review-before-technical-resume.json"
+            if backup.exists():
+                raise ValueError("only one technical resume is allowed for an output")
+            _claim_technical_resume(output, bundle_path, semantic_identity, tool_fingerprint,
+                                    review_round, retry_indexes, kept_rows)
+            shutil.copy2(review_path, backup)
+            for index in retry_indexes:
+                _archive_batch(output, index)
+        else:
+            history, review_round, task = reserve_history(bundle_path, bundle, output, tool_fingerprint, semantic_identity)
         def execute_batch(index: int, batch: list[dict[str, Any]]) -> tuple[int, dict[str, Any], int | None, bool]:
             target = output / f"batch-{index:02d}"
             target.mkdir()
@@ -487,6 +658,11 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
                 _write(target / "stdout.txt", output_text(error.stdout))
                 _write(target / "stderr.txt", output_text(error.stderr))
                 row = _failed_batch(index, [item["id"] for item in [*batch, *overview]], f"codex timed out after {timeout}s")
+            except OSError as error:
+                _write(target / "stdout.txt", "")
+                _write(target / "stderr.txt", str(error))
+                row = _failed_batch(index, [item["id"] for item in [*batch, *overview]],
+                                    f"codex failed to start: {error}")
             except KeyboardInterrupt:
                 row = _failed_batch(index, [item["id"] for item in [*batch, *overview]], "review interrupted")
             _json(target / "result.json", row)
@@ -496,16 +672,28 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
         # while already-running independent batches still finish and are kept as
         # evidence. Valid revise/insufficient reports remain useful coverage.
         completed_rows: dict[int, tuple[dict[str, Any], int | None, bool]] = {}
+        completed_rows.update({index: (row, row["processExit"], False) for index, row in kept_rows.items()})
+        pending_indexes = sorted(retry_indexes)
         next_index = 0
         stop_scheduling = False
+        main_interrupted = False
         with ThreadPoolExecutor(max_workers=jobs, thread_name_prefix="biome-review") as pool:
             inflight: dict[Any, int] = {}
-            while next_index < len(planned_batches) and len(inflight) < jobs:
-                future = pool.submit(execute_batch, next_index, planned_batches[next_index])
-                inflight[future] = next_index
+            while next_index < len(pending_indexes) and len(inflight) < jobs:
+                index = pending_indexes[next_index]
+                future = pool.submit(execute_batch, index, planned_batches[index])
+                inflight[future] = index
                 next_index += 1
             while inflight:
-                done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+                try:
+                    done, _ = wait(inflight, return_when=FIRST_COMPLETED)
+                except KeyboardInterrupt:
+                    # Ctrl+C reaches this coordinator, not normally the worker.
+                    # Do not discard a completed model response; drain only the
+                    # work that was already launched and mark this receipt incomplete.
+                    main_interrupted = True
+                    stop_scheduling = True
+                    continue
                 for future in done:
                     index = inflight.pop(future)
                     try:
@@ -518,11 +706,18 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
                     completed_rows[returned_index] = row, exit_code, batch_interrupted
                     if "error" in row or batch_interrupted:
                         stop_scheduling = True
-                while not stop_scheduling and next_index < len(planned_batches) and len(inflight) < jobs:
-                    future = pool.submit(execute_batch, next_index, planned_batches[next_index])
-                    inflight[future] = next_index
+                while not stop_scheduling and next_index < len(pending_indexes) and len(inflight) < jobs:
+                    index = pending_indexes[next_index]
+                    future = pool.submit(execute_batch, index, planned_batches[index])
+                    inflight[future] = index
                     next_index += 1
 
+        interrupted = interrupted or main_interrupted
+        if main_interrupted:
+            _json(output / "interrupted-run.json", {"schema": 1, "kind": "independent-biome-review-interruption",
+                                                      "bundleSha256": sha256(bundle_path),
+                                                      "semanticEvidenceIdentity": semantic_identity,
+                                                      "completedBatchCount": len(completed_rows)})
         for index in sorted(completed_rows):
             row, exit_code, batch_interrupted = completed_rows[index]
             batch_rows.append(row)
@@ -570,12 +765,16 @@ def run(bundle_path: Path, output: Path, *, codex: Path | None = None, timeout: 
                   "reviewScope": scope, "coverageGaps": all_gaps,
                   "additionalCaptures": all_requests,
                   "evidence": [{"path": str(path.resolve()), "sha256": sha256(path)}
-                               for path in sorted(output.rglob("*")) if path.is_file() and path.name != "review.json"]
+                               for path in sorted(output.rglob("*"))
+                               if path.is_file() and path.name != "review.json"]
                   + [{"path": str(history), "sha256": sha256(history)}]}
         _json(output / "review.json", result)
         return result
     except Exception as error:
-        _json(output / "review.json", {"schema": 1, "kind": "independent-biome-review", "verdict": "insufficient_evidence", "error": str(error)})
+        # A failed resume must not replace the original receipt; otherwise it
+        # could erase the technical-failure evidence it was meant to preserve.
+        if not resume:
+            _json(output / "review.json", {"schema": 1, "kind": "independent-biome-review", "verdict": "insufficient_evidence", "error": str(error)})
         raise
 
 
@@ -586,9 +785,10 @@ def main() -> int:
     parser.add_argument("--codex", type=Path)
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--jobs", type=int, default=1, help="concurrent isolated Codex batches (1-3)")
+    parser.add_argument("--resume", action="store_true", help="retry one interrupted technical attempt in its original output")
     args = parser.parse_args()
     try:
-        result = run(args.bundle, args.output, codex=args.codex, timeout=args.timeout, jobs=args.jobs)
+        result = run(args.bundle, args.output, codex=args.codex, timeout=args.timeout, jobs=args.jobs, resume=args.resume)
     except Exception as error:
         print(f"independent biome review failed closed: {error}", file=sys.stderr)
         return 2

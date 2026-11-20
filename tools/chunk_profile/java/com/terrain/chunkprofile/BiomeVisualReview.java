@@ -70,8 +70,8 @@ public final class BiomeVisualReview {
         JsonObject document = JsonParser.parseString(Files.readString(planPath)).getAsJsonObject();
         Map<String, Object> raw = JSON.fromJson(document, Map.class);
         Plan plan = Plan.parse(raw, document.get("seed").getAsLong());
-        String reviewToolFingerprint = System.getProperty("chunkprofile.biomeReviewToolFingerprint", "");
-        if (reviewToolFingerprint.isBlank()) throw new IllegalStateException("biome review tool fingerprint is missing");
+        String captureToolFingerprint = System.getProperty("chunkprofile.biomeCaptureToolFingerprint", "");
+        if (captureToolFingerprint.isBlank()) throw new IllegalStateException("biome capture tool fingerprint is missing");
         String diagnosticJarSha256 = System.getProperty("chunkprofile.biomeReviewDiagnosticJarSha256", "");
         if (!diagnosticJarSha256.matches("[0-9a-f]{64}")) throw new IllegalStateException("biome review diagnostic JAR hash is missing");
         String runId = Long.toUnsignedString(System.nanoTime(), 36);
@@ -81,10 +81,13 @@ public final class BiomeVisualReview {
         if (level.getSeed() != plan.seed) throw new IllegalStateException("biome review seed differs from plan");
         CaptureLighting lighting = server.submit(() -> CaptureLighting.freeze(level)).get(30, TimeUnit.SECONDS);
         try {
+        long reviewStarted = System.nanoTime();
         List<TracePoint> tracePoints = tracePositions();
         List<Map<String, Object>> wetlandTerrainTrace = tracePoints.isEmpty() ? List.of()
                 : server.submit(() -> traceWetlandTerrain(tracePoints)).get(120, TimeUnit.SECONDS);
+        long censusStarted = System.nanoTime();
         List<Column> columns = scanPlanWindows(server, level, plan);
+        long censusFinished = System.nanoTime();
         for (Explicit explicit : plan.explicit) {
             boolean present = columns.stream().anyMatch(column -> column.x == explicit.x && column.z == explicit.z);
             if (!present) columns.add(server.submit(() -> observe(level, explicit.x, explicit.z)).get(30, TimeUnit.SECONDS));
@@ -93,35 +96,60 @@ public final class BiomeVisualReview {
         atomic(columnsPath, Map.of("schema", 1, "seed", plan.seed, "scale", plan.scale,
                 "columns", columns.stream().map(Column::toMap).toList()));
         Selection selection = choose(plan, columns);
-        List<Map<String, Object>> inspectionReceipts = new ArrayList<>();
+        int requiredSites = selection.sites.size() + plan.inspectionRequests.size();
+        if (requiredSites > plan.maxSites)
+            selection.gaps.add("maxSites " + plan.maxSites + " is below required evidence sites " + requiredSites);
+        Path selectionPath = reviewRoot.resolve("selection.json");
+        // A missing required biome or an undersized evidence budget is already
+        // decisive after the census. Preserve that diagnosis without spending
+        // time on per-site tickets, settlement, cameras, or screenshots.
+        if (skipCapture(selection)) {
+            atomic(selectionPath, selection.toMap());
+            return result(plan, captureToolFingerprint, diagnosticJarSha256, lighting, reviewRoot,
+                    wetlandTerrainTrace, planPath, columnsPath, selectionPath, selection,
+                    List.of(), List.of(), true, censusFinished - censusStarted,
+                    System.nanoTime() - reviewStarted);
+        }
         for (InspectionRequest request : plan.inspectionRequests) {
             InspectionResolution resolution = resolveInspection(request, plan.windows, columns);
-            inspectionReceipts.add(resolution.toMap());
             // Inspection evidence is additive: preserve original regression coordinates.
             selection.sites.add(new Selected(request.id, resolution.resolved.x, resolution.resolved.z,
                     resolution.resolved.biome, new ArrayList<>(List.of("inspection-" + request.kind)),
                     resolution.resolved, resolution));
         }
-        if (selection.sites.size() > plan.maxSites) {
-            selection.gaps.add("maxSites " + plan.maxSites + " is below required evidence sites " + selection.sites.size());
-            selection.sites.subList(plan.maxSites, selection.sites.size()).clear();
-        }
-        Path selectionPath = reviewRoot.resolve("selection.json");
+        long captureStarted = System.nanoTime();
         List<Map<String, Object>> sites = new ArrayList<>();
         for (Selected selected : selection.sites) sites.add(captureSite(server, level, selected, runId, plan.windows));
         // Root inspections resolve against settled blocks after their tickets have ticked.
         // Persist the mutable capture anchor, rather than the provisional census anchor.
         atomic(selectionPath, selection.toMap());
-        inspectionReceipts = selection.sites.stream().filter(site -> site.inspection != null)
+        List<Map<String, Object>> inspectionReceipts = selection.sites.stream().filter(site -> site.inspection != null)
                 .map(site -> site.inspection.toMap()).toList();
-        boolean captured = selection.gaps.isEmpty()
+        return result(plan, captureToolFingerprint, diagnosticJarSha256, lighting, reviewRoot,
+                wetlandTerrainTrace, planPath, columnsPath, selectionPath, selection,
+                inspectionReceipts, sites, false, censusFinished - censusStarted,
+                System.nanoTime() - captureStarted);
+        } finally {
+            server.submit(() -> lighting.restore(level)).get(30, TimeUnit.SECONDS);
+        }
+    }
+
+    private static Map<String, Object> result(Plan plan, String captureToolFingerprint,
+                                               String diagnosticJarSha256, CaptureLighting lighting,
+                                               Path reviewRoot, List<Map<String, Object>> wetlandTerrainTrace,
+                                               Path planPath, Path columnsPath, Path selectionPath,
+                                               Selection selection,
+                                               List<Map<String, Object>> inspectionReceipts,
+                                               List<Map<String, Object>> sites, boolean captureSkipped,
+                                               long censusNanos, long captureOrTotalNanos) {
+        boolean captured = !captureSkipped && selection.gaps.isEmpty()
                 && sites.stream().allMatch(site -> "captured".equals(site.get("status")));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", captured ? "captured" : "failed");
         result.put("seed", plan.seed); result.put("scale", plan.scale);
         result.put("sourceFingerprint", plan.sourceFingerprint);
         result.put("artifactSha256", plan.artifactSha256);
-        result.put("reviewToolFingerprint", reviewToolFingerprint);
+        result.put("captureToolFingerprint", captureToolFingerprint);
         result.put("diagnosticJarSha256", diagnosticJarSha256);
         result.put("captureLighting", lighting.captureMap());
         result.put("reviewRoot", reviewRoot.toAbsolutePath().toString());
@@ -132,11 +160,12 @@ public final class BiomeVisualReview {
         result.put("requiredBiomes", plan.requiredBiomes); result.put("coverageGaps", selection.gaps);
         result.put("inspectionRequests", inspectionReceipts);
         result.put("sites", sites); result.put("requiredServerTicks", TICKS);
+        result.put("captureSkipped", captureSkipped);
+        result.put("timing", Map.of("censusSeconds", censusNanos / 1_000_000_000D,
+                captureSkipped ? "reviewSecondsBeforeSkip" : "captureSeconds",
+                captureOrTotalNanos / 1_000_000_000D));
         result.put("scope", "Native screenshots and settled saved-block observations for independent review; captured is not a realism acceptance decision.");
         return result;
-        } finally {
-            server.submit(() -> lighting.restore(level)).get(30, TimeUnit.SECONDS);
-        }
     }
 
     /** Optional, bounded provider trace for comparing shaped pipeline output with saved blocks. */
@@ -384,6 +413,12 @@ public final class BiomeVisualReview {
                     .orElseThrow(() -> new IllegalStateException("regression point was not observed"));
             add(selected, observed, site.id, "regression");
         }
+        if (plan.scoped()) {
+            for (String biome : plan.requiredBiomes)
+                if (columns.stream().noneMatch(column -> biome.equals(column.biome)))
+                    gaps.add("required biome absent: " + biome);
+            return new Selection(selected, gaps);
+        }
         for (String biome : plan.requiredBiomes) {
             List<Column> candidates = columns.stream().filter(c -> biome.equals(c.biome)).toList();
             if (candidates.isEmpty()) { gaps.add("required biome absent: " + biome); continue; }
@@ -393,10 +428,14 @@ public final class BiomeVisualReview {
             List<Column> anomalies = candidates.stream().filter(c -> c.anomaly).toList();
             if (!anomalies.isEmpty()) pick(selected, anomalies, biome, "anomaly", plan.seed, gaps);
         }
-        // A site can carry several reasons. Keep deterministic order and fail coverage rather than silently truncating it.
-        if (selected.size() > plan.maxSites) gaps.add("maxSites " + plan.maxSites + " is below required evidence sites " + selected.size());
-        if (selected.size() > plan.maxSites) selected = new ArrayList<>(selected.subList(0, plan.maxSites));
+        // Keep all selected sites for the diagnosis: the caller checks the
+        // combined site and inspection count before starting any capture.
         return new Selection(selected, gaps);
+    }
+
+    /** A census-proven coverage failure cannot be repaired by a camera view. */
+    static boolean skipCapture(Selection selection) {
+        return !selection.gaps.isEmpty();
     }
 
     /** Resolve review requests from the generated census only; a later 100-tick reread verifies every resolved feature. */
@@ -1070,7 +1109,8 @@ public final class BiomeVisualReview {
         Map<String,Object> toMap(){ Map<String,Object> out=new LinkedHashMap<>(); out.put("schema",1);out.put("coverageGaps",gaps);out.put("sites",sites.stream().map(Selection::siteMap).toList());return out; }
         private static Map<String,Object> siteMap(Selected site){ Map<String,Object> out=new LinkedHashMap<>();out.put("id",site.id);out.put("x",site.x);out.put("z",site.z);out.put("biome",site.biome);out.put("reasons",site.reasons);out.put("column",site.column.toMap());if(site.inspection!=null)out.put("inspectionRequest",site.inspection.toMap());return out; }
     }
-    private record Plan(long seed, int scale, String sourceFingerprint, String artifactSha256, List<String> requiredBiomes, List<Window> windows, List<Explicit> explicit, List<InspectionRequest> inspectionRequests, int maxSites) {
+    private record Plan(long seed, int scale, String sourceFingerprint, String artifactSha256, List<String> requiredBiomes, List<Window> windows, List<Explicit> explicit, List<InspectionRequest> inspectionRequests, int maxSites, Set<String> scopedSiteIds) {
+        boolean scoped() { return !scopedSiteIds.isEmpty(); }
         static Plan parse(Map<String,Object> raw, long exactSeed) {
             if (!(raw.get("schema") instanceof Number schema) || schema.intValue()!=1) throw new IllegalArgumentException("biome review plan schema must be 1");
             if (!(raw.get("seed") instanceof Number seed) || !(raw.get("scale") instanceof Number scale)) throw new IllegalArgumentException("biome review plan requires numeric seed and scale");
@@ -1078,15 +1118,35 @@ public final class BiomeVisualReview {
             String artifact = text(raw.get("artifactSha256"), "artifactSha256");
             List<String> biomes = strings(raw.get("requiredBiomes"), "requiredBiomes"); if (biomes.isEmpty()) throw new IllegalArgumentException("requiredBiomes is empty");
             List<Window> windows = windows(raw.get("windows")); if (windows.isEmpty()) throw new IllegalArgumentException("windows is empty");
+            Set<String> scopedSiteIds = scopeSiteIds(raw.get("reviewScope"));
             List<Explicit> explicit = explicit(raw.get("regressionSites"), "regressionSites"); explicit.addAll(explicit(raw.get("explicitSites"), "explicitSites"));
             List<InspectionRequest> inspectionRequests = inspectionRequests(raw.get("inspectionRequests"), windows);
+            if (!scopedSiteIds.isEmpty()) {
+                explicit = explicit.stream().filter(site -> scopedSiteIds.contains(site.id)).toList();
+                inspectionRequests = inspectionRequests.stream()
+                        .filter(request -> scopedSiteIds.contains(request.id)).toList();
+            }
             int max = raw.get("maxSites") instanceof Number n ? n.intValue() : 16; if (max < 1 || max > 64) throw new IllegalArgumentException("maxSites must be 1..64");
-            return new Plan(exactSeed, scale.intValue(), fingerprint, artifact, biomes, windows, explicit, inspectionRequests, max);
+            return new Plan(exactSeed, scale.intValue(), fingerprint, artifact, biomes, windows, explicit, inspectionRequests, max, scopedSiteIds);
         }
         @SuppressWarnings("unchecked") static List<String> strings(Object raw,String name){ if (!(raw instanceof List<?> rows)) throw new IllegalArgumentException(name+" must be an array"); List<String> out=new ArrayList<>(); for(Object v:rows){if(!(v instanceof String s)||s.isBlank())throw new IllegalArgumentException(name+" contains invalid id");out.add(s);} return out; }
         @SuppressWarnings("unchecked") static List<Window> windows(Object raw){ if (!(raw instanceof List<?> rows)) throw new IllegalArgumentException("windows must be an array"); List<Window> out=new ArrayList<>(); Set<String> ids=new LinkedHashSet<>(); for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException("window must be an object");String id=text(map.get("id"),"window id");int minX=num(map.get("minX"),"minX"),maxX=num(map.get("maxX"),"maxX"),minZ=num(map.get("minZ"),"minZ"),maxZ=num(map.get("maxZ"),"maxZ");if(!ids.add(id)||minX>maxX||minZ>maxZ||Math.floorMod(minX,16)!=0||Math.floorMod(minZ,16)!=0||Math.floorMod(maxX+1,16)!=0||Math.floorMod(maxZ+1,16)!=0)throw new IllegalArgumentException("window bounds must be unique inclusive whole chunks");out.add(new Window(id,minX,maxX,minZ,maxZ));}return out; }
         @SuppressWarnings("unchecked") static List<Explicit> explicit(Object raw,String name){if(raw==null)return new ArrayList<>();if(!(raw instanceof List<?> rows))throw new IllegalArgumentException(name+" must be an array");List<Explicit> out=new ArrayList<>();for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException(name+" entry must object");out.add(new Explicit(text(map.get("id"),name+" id"),num(map.get("x"),"x"),num(map.get("z"),"z")));}return out;}
         @SuppressWarnings("unchecked") static List<InspectionRequest> inspectionRequests(Object raw, List<Window> windows){if(raw==null)return List.of();if(!(raw instanceof List<?> rows))throw new IllegalArgumentException("inspectionRequests must be an array");List<InspectionRequest> out=new ArrayList<>();Set<String> ids=new LinkedHashSet<>();for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException("inspection request must object");String id=text(map.get("id"),"inspection request id"),kind=text(map.get("kind"),"inspection request kind"),detail=map.get("detailView")==null?"bed":text(map.get("detailView"),"inspection detailView");if(!Set.of("root","bank","underwater","boundary").contains(kind))throw new IllegalArgumentException("unsupported inspection request kind "+kind);if(!Set.of("bed","waterline").contains(detail)||("waterline".equals(detail)&&!"underwater".equals(kind)))throw new IllegalArgumentException("waterline detailView requires underwater inspection");int x=num(map.get("x"),"inspection request x"),z=num(map.get("z"),"inspection request z");if(!ids.add(id)||!windows.stream().anyMatch(w->x>=w.minX&&x<=w.maxX&&z>=w.minZ&&z<=w.maxZ))throw new IllegalArgumentException("inspection request id must be unique and inside a window");out.add(new InspectionRequest(id,x,z,kind,detail));}return out;}
+        @SuppressWarnings("unchecked")
+        static Set<String> scopeSiteIds(Object raw) {
+            if (raw == null) return Set.of();
+            if (!(raw instanceof Map<?, ?> scope) || !(scope.get("criteria") instanceof List<?> criteria))
+                throw new IllegalArgumentException("reviewScope criteria must be an array");
+            Set<String> ids = new LinkedHashSet<>();
+            for (Object row : criteria) {
+                if (!(row instanceof Map<?, ?> criterion) || !(criterion.get("siteIds") instanceof List<?> sites))
+                    throw new IllegalArgumentException("reviewScope criterion siteIds must be an array");
+                for (Object site : sites) ids.add(text(site, "reviewScope site id"));
+            }
+            if (ids.isEmpty()) throw new IllegalArgumentException("reviewScope has no site IDs");
+            return ids;
+        }
         static String text(Object raw,String name){if(!(raw instanceof String value)||value.isBlank())throw new IllegalArgumentException(name+" must be nonblank");return value;} static int num(Object raw,String name){if(!(raw instanceof Number value))throw new IllegalArgumentException(name+" must be number");return value.intValue();}
     }
 }

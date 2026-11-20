@@ -68,9 +68,13 @@ At candidate freeze, return to the [full integration and visual release
 checks](../../README.md#independent-biome-realism-review).
 
 To measure a completed run, use `python -B tools/biome_iteration/timing.py FIXTURE`
-against its original directory. It measures launch-to-first-frame, capture
-span, and finalization separately using the actual frame files. It does not
-attribute startup time to individual mods. The optional diagnostic JVM flag
+against its original directory. The report separates world opening, settling,
+chunk generation, time to the first screenshot, and the remaining photos.
+Missing log markers leave the corresponding duration unknown. For a fixture
+made outside Korea, pass its log offset (for example `--log-timezone=+00:00`).
+New fixtures also record preparation and verified copy times by directory,
+separately from the game process, and report native census and capture times.
+The optional diagnostic JVM flag
 `-Dchunkprofile.adaptiveCaptureWait=true` can shorten same-site side/detail
 waits after 24 clean frames and a full second in the requested camera pose.
 The first view and the fallback still wait three seconds. Leave this off for

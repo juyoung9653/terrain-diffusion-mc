@@ -22,8 +22,8 @@ sys.path.insert(0, str(ROOT / 'tools'))
 from probe_suite import exclusive_lock, atomic_json
 import launch
 from build_evidence import source_fingerprint
-from biome_review.contract import changed_biome_resource_ids, review_tool_fingerprint
-from biome_review.budget import check_budget
+from biome_review.contract import changed_biome_resource_ids, capture_tool_fingerprint
+from biome_review.budget import check_budget, scope as review_scope
 import psutil
 
 WORK = ROOT / 'build/chunk-profile'
@@ -171,8 +171,11 @@ def active_java_workload():
 
 def prepare(args):
     global manifest_root
+    prepare_started = time.monotonic()
     if plan_path := getattr(args, 'biome_review_plan', None):
-        check_budget(json.loads(Path(plan_path).read_text(encoding='utf-8')))
+        plan = json.loads(Path(plan_path).read_text(encoding='utf-8'))
+        check_budget(plan)
+        _validate_native_biome_plan(plan)
     source = launch.DEFAULT_INSTANCE
     if args.decoder_fp16 and args.decoder_precision:
         raise RuntimeError('--decoder-fp16 cannot be combined with --decoder-precision')
@@ -197,8 +200,10 @@ def prepare(args):
     if len(streams_sources) != 1:
         raise RuntimeError(f'Expected exactly one StreamsReflowing JAR filename, found: {[p.name for p in streams_sources]}')
     source_streams = streams_identity(streams_sources[0])
+    copy_started = time.monotonic()
     for jar in source_jars:
         copy_checked(jar, target / 'mods' / jar.name, files)
+    copy_seconds = {'mods': time.monotonic() - copy_started}
     source_files = json.loads(json.dumps(files))
     streams_ablation = {'enabled': bool(args.without_streams), 'removed_artifact': None}
     if args.without_streams:
@@ -229,7 +234,9 @@ def prepare(args):
         selected_td = {'kind': 'replacement', 'source_filename': td_sources[0].name, **candidate}
     for folder in ('config', 'defaultconfigs', 'terrain-diffusion-models'):
         if (source / folder).exists():
+            copy_started = time.monotonic()
             copy_checked(source / folder, target / folder, files)
+            copy_seconds[folder] = time.monotonic() - copy_started
     copy_checked(source / 'options.txt', target / 'options.txt', files)
     options = dict(line.split(':', 1) for line in (source / 'options.txt').read_text(encoding='utf-8').splitlines() if ':' in line)
     missing_packs = []
@@ -374,6 +381,8 @@ def prepare(args):
         'missing_selected_resourcepacks_in_source': missing_packs,
         'complete': True,
     })
+    save(target / 'prepare-timing.json', {'throughManifestSeconds': time.monotonic() - prepare_started,
+                                          'verifiedCopySecondsByGroup': copy_seconds})
     print(json.dumps({'prepared': str(target), 'mods': active_mod_jars, 'seed': seed,
                       'scale': saved_scale}, ensure_ascii=True), flush=True)
 
@@ -770,7 +779,7 @@ def _biome_review_plan(args, manifest, target, restart):
     if launch.sha256(source) != launch.sha256(staged):
         raise RuntimeError('Biome review plan changed during staging')
     return {'path': staged, 'sha256': launch.sha256(staged), 'source_fingerprint': fingerprint,
-            'artifact_sha256': artifact, 'review_tool_fingerprint': review_tool_fingerprint(ROOT), 'data': plan}
+            'artifact_sha256': artifact, 'capture_tool_fingerprint': capture_tool_fingerprint(ROOT), 'data': plan}
 
 
 def _validate_native_biome_plan(plan):
@@ -828,9 +837,52 @@ def _validate_native_biome_plan(plan):
             raise RuntimeError('Biome review inspection request must be unique and inside a window')
         request_ids.add(request['id'])
 
+    # A scoped report is a bounded bug review.  Its frozen criteria name the
+    # only rendered sites; broad biome sampling remains the unscoped workflow.
+    try:
+        scoped = review_scope(plan)
+    except ValueError as failure:
+        raise RuntimeError(str(failure)) from failure
+    if scoped is not None:
+        scoped_ids = {site_id for criterion in scoped['criteria'] for site_id in criterion['siteIds']}
+        selected_ids = site_ids | request_ids
+        if len(selected_ids) != len(site_ids) + len(request_ids):
+            raise RuntimeError('Scoped biome review site and inspection IDs must be globally unique')
+        unknown = scoped_ids - selected_ids
+        if unknown:
+            raise RuntimeError(f'Scoped biome review criteria name undefined sites: {sorted(unknown)}')
+        missing = {row['id'] for row in plan.get('regressionSites', [])} - scoped_ids
+        if missing:
+            raise RuntimeError(f'Scoped criteria omit reported regression sites: {sorted(missing)}')
+        planned = {row['id']: (row['x'], row['z'])
+                   for field in ('regressionSites', 'explicitSites') for row in plan.get(field, [])}
+        fixed = [point for site_id, point in planned.items() if site_id in scoped_ids]
+        if len(fixed) != len(set(fixed)):
+            raise RuntimeError('Give each frozen fixed coordinate one ID; use that ID in every applicable criterion')
+        planned.update({row['id']: (row['x'], row['z']) for row in requests})
+        facts_ref = scoped['baseline']['facts']
+        facts_path = Path(facts_ref['path'])
+        if not facts_path.is_absolute():
+            facts_path = ROOT / facts_path
+        if not facts_path.is_file():
+            raise RuntimeError('Scoped biome review baseline facts are unavailable')
+        if launch.sha256(facts_path) != facts_ref['sha256']:
+            raise RuntimeError('Scoped biome review baseline facts changed')
+        try:
+            facts = json.loads(facts_path.read_text(encoding='utf-8-sig'))
+            fact_sites = {row['id']: (row['x'], row['z']) for row in facts['sites']}
+        except (KeyError, TypeError, ValueError, OSError) as failure:
+            raise RuntimeError('Scoped biome review baseline facts are malformed') from failure
+        mismatched = sorted(site_id for site_id in scoped_ids
+                            if fact_sites.get(site_id) != planned[site_id])
+        if mismatched:
+            raise RuntimeError('Scoped baseline facts differ from frozen requested sites: ' + ', '.join(mismatched))
+
     maximum = plan.get('maxSites', 16)
     if not integer(maximum) or not 1 <= maximum <= 64:
         raise RuntimeError('Biome review maxSites must be 1..64')
+    if scoped is not None and maximum < len(scoped_ids):
+        raise RuntimeError('Scoped biome review maxSites is below its frozen evidence sites')
     for field in ('terrainTraceSites', 'generationTraceSites'):
         rows = plan.get(field, [])
         if not isinstance(rows, list) or len(rows) > 8 or any(not isinstance(row, dict)
@@ -856,9 +908,9 @@ def _biome_visual_review_captured(receipt, target, plan):
         return False
     if review.get('sourceFingerprint') != plan['source_fingerprint'] or review.get('artifactSha256') != plan['artifact_sha256']:
         return False
-    if review.get('reviewToolFingerprint') != plan.get('review_tool_fingerprint'):
+    if review.get('captureToolFingerprint') != plan.get('capture_tool_fingerprint'):
         return False
-    if review.get('reviewToolFingerprint') != review_tool_fingerprint(ROOT):
+    if review.get('captureToolFingerprint') != capture_tool_fingerprint(ROOT):
         return False
     if review.get('diagnosticJarSha256') != plan.get('diagnostic_jar_sha256'):
         return False
@@ -951,6 +1003,10 @@ def run(args, restart=False):
         if biome_review is not None and (not prior.get('biome_review_plan_sha256')
                                         or prior_receipt.get('biomeVisualReview', {}).get('status') != 'captured'):
             raise RuntimeError('Biome visual review restart requires a prior successful capture')
+        if biome_review is not None and (not prior_result.get('passed')
+                or prior.get('biome_capture_tool_fingerprint') != biome_review['capture_tool_fingerprint']
+                or prior_receipt['biomeVisualReview'].get('captureToolFingerprint') != biome_review['capture_tool_fingerprint']):
+            raise RuntimeError('Biome capture tools or provenance changed; use a fresh fixture')
         if wetland_spatial_audit != bool(prior.get('wetland_spatial_audit')):
             raise RuntimeError('Restart wetland spatial audit flag must match the prior run')
         if wetland_spatial_audit and not _wetland_spatial_audit_passed(prior_receipt, target):
@@ -1006,12 +1062,12 @@ def run(args, restart=False):
         runtime.property.extend(('chunkprofile.wetlandTerrainReview=true',
                                  'chunkprofile.wetlandTerrainReviewScale=1'))
     if biome_review is not None:
-        if biome_review['review_tool_fingerprint'] != review_tool_fingerprint(ROOT):
+        if biome_review['capture_tool_fingerprint'] != capture_tool_fingerprint(ROOT):
             raise RuntimeError('Biome review tool changed after plan staging')
         biome_review['diagnostic_jar_sha256'] = launch.sha256(jar)
         runtime.property.extend(('chunkprofile.biomeVisualReview=true',
                                  f'chunkprofile.biomeReviewPlan={biome_review["path"]}',
-                                 f'chunkprofile.biomeReviewToolFingerprint={biome_review["review_tool_fingerprint"]}',
+                                 f'chunkprofile.biomeCaptureToolFingerprint={biome_review["capture_tool_fingerprint"]}',
                                  f'chunkprofile.biomeReviewDiagnosticJarSha256={biome_review["diagnostic_jar_sha256"]}'))
         runtime.width, runtime.height = 1600, 900
         trace_sites = biome_review['data'].get('terrainTraceSites', [])
@@ -1075,7 +1131,7 @@ def run(args, restart=False):
         'wetland_baseline': wetland_baseline,
         'biome_review_plan': None if biome_review is None else str(biome_review['path']),
         'biome_review_plan_sha256': None if biome_review is None else biome_review['sha256'],
-        'biome_review_tool_fingerprint': None if biome_review is None else biome_review['review_tool_fingerprint'],
+        'biome_capture_tool_fingerprint': None if biome_review is None else biome_review['capture_tool_fingerprint'],
         'biome_review_diagnostic_jar_sha256': None if biome_review is None else biome_review['diagnostic_jar_sha256'],
         'restart': restart,
         'streams_ablation': streams_ablation,

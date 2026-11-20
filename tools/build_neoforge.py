@@ -48,18 +48,23 @@ def build_plan(root: Path, *, java_home: Path | None = None,
 
 def run(root: Path, *, java_home: Path | None = None,
         gradle_user_home: Path | None = None, check_only: bool = False,
-        validations: list[Path] | None = None, biome_review: Path | None = None) -> int:
+        validations: list[Path] | None = None, biome_review: Path | None = None,
+        biome_review_baseline: Path | None = None, biome_review_baseline_jar: Path | None = None) -> int:
     command, env = build_plan(root, java_home=java_home, gradle_user_home=gradle_user_home)
     if check_only:
         check_validations(validations or [], source_fingerprint(root), root)
-        check_biome_review(root, biome_review, releasing=bool(validations))
+        check_biome_review(root, biome_review, releasing=bool(validations),
+                           baseline_review=biome_review_baseline,
+                           baseline_jar=biome_review_baseline_jar)
         print(json.dumps({"command": command, "JAVA_HOME": env["JAVA_HOME"],
                           "GRADLE_USER_HOME": env["GRADLE_USER_HOME"]}))
         return 0
     with exclusive_lock(root.resolve()):
         fingerprint = source_fingerprint(root)
         evidence = check_validations(validations or [], fingerprint, root)
-        check_biome_review(root, biome_review, releasing=bool(evidence))
+        check_biome_review(root, biome_review, releasing=bool(evidence),
+                           baseline_review=biome_review_baseline,
+                           baseline_jar=biome_review_baseline_jar)
         completed = subprocess.run(command, cwd=root, env=env, shell=False,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if completed.returncode == 0:
@@ -70,7 +75,9 @@ def run(root: Path, *, java_home: Path | None = None,
             mod = root / "neoforge/build/libs" / receipt["modFile"]
             if sha256(mod) != receipt["modSha256"]:
                 raise ValueError("built JAR does not match ONNX receipt")
-            write_release(root, mod, fingerprint, evidence, command, biome_review=biome_review)
+            write_release(root, mod, fingerprint, evidence, command, biome_review=biome_review,
+                          biome_review_baseline=biome_review_baseline,
+                          biome_review_baseline_jar=biome_review_baseline_jar)
     return completed.returncode
 
 
@@ -83,9 +90,15 @@ def main() -> int:
                         help="successful probe validation-evidence.json; repeat for each required run")
     parser.add_argument("--biome-review", type=Path,
                         help="passing independent biome review.json for this exact candidate JAR")
+    parser.add_argument("--biome-review-baseline", type=Path,
+                        help="passing direct review.json for the exact baseline JAR; permits translation-only JAR changes")
+    parser.add_argument("--biome-review-baseline-jar", type=Path,
+                        help="baseline JAR directly reviewed by --biome-review-baseline")
     args = parser.parse_args()
     return run(ROOT, java_home=args.java_home, gradle_user_home=args.gradle_user_home,
-               check_only=args.check_only, validations=args.validation, biome_review=args.biome_review)
+               check_only=args.check_only, validations=args.validation, biome_review=args.biome_review,
+               biome_review_baseline=args.biome_review_baseline,
+               biome_review_baseline_jar=args.biome_review_baseline_jar)
 
 
 if __name__ == "__main__":

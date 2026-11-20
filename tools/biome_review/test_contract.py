@@ -43,7 +43,9 @@ class ReviewContractTest(unittest.TestCase):
         for i, reason in enumerate(("interior", "boundary", "random")):
             site = {"id": str(i), "x": i * 32, "z": 0, "biome": biome,
                     "reasons": [reason], "reachedServerTicks": 100,
-                    "tickEligible": True, "images": []}
+                    "tickEligible": True,
+                    "settledColumn": {"groundY": 63, "waterDepth": 0, "bedBlock": "minecraft:dirt"},
+                    "images": []}
             for view in sorted(contract.VIEWS):
                 path = self.root / f"{i}-{view}.png"
                 path.write_bytes(b"image" * 300)
@@ -55,7 +57,7 @@ class ReviewContractTest(unittest.TestCase):
                                       "requiredBiomes": [biome], "regressionSites": [{"x": 0, "z": 0}]})
         capture = self.write("receipt.json", {"status": "success", "biomeVisualReview": {
             "status": "captured", "sourceFingerprint": self.fp, "artifactSha256": self.sha,
-            "reviewToolFingerprint": self.tool,
+            "captureToolFingerprint": contract.capture_tool_fingerprint(self.root),
             "requiredBiomes": [biome], "coverageGaps": [], "seed": 5, "scale": 1, "sites": sites}})
         manifest = self.write("input-manifest.json", {"seed": 5, "scale": 1,
                  "terrain_diffusion_artifact": {"sha256": self.sha}})
@@ -64,8 +66,9 @@ class ReviewContractTest(unittest.TestCase):
         census = self.write("columns.json", {"columns": [{"bedBlock": "minecraft:dirt"}]})
         candidate = self.write("candidate-build.json", {"kind": "validated-neoforge-build",
                               "modSha256": self.sha, "sourceFingerprint": self.fp})
-        bundle = self.write("bundle.json", {"schema": 1, "kind": "biome-review-bundle",
-            "sourceFingerprint": self.fp, "artifactSha256": self.sha, "toolFingerprint": self.tool,
+        bundle = self.write("bundle.json", {"schema": 2, "kind": "biome-review-bundle",
+            "sourceFingerprint": self.fp, "artifactSha256": self.sha,
+            "bundleToolFingerprint": contract.bundle_tool_fingerprint(self.root),
             "fixture": contract.file_ref(manifest), "launch": contract.file_ref(launch),
             "capture": contract.file_ref(capture), "plan": contract.file_ref(plan),
             "candidateBuild": contract.file_ref(candidate),
@@ -129,6 +132,70 @@ class ReviewContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "evidence changed"):
             contract.validate_review(review, self.root)
 
+    def test_release_guard_accepts_resume_and_rejudges_the_same_bundle_after_rule_change(self):
+        from biome_review import runner
+
+        self.evidence()
+        bundle_path = self.root / "bundle.json"
+        bundle = contract.load(bundle_path)
+        plan = self.root / "plan.json"
+        self.write("plan.json", dict(contract.load(plan), reviewTask="site-repair", seed=5))
+        bundle["plan"] = contract.file_ref(plan)
+        self.write("bundle.json", bundle)
+        reviewer = self.root / "codex.exe"
+        reviewer.touch()
+        output = self.root / "independent-review"
+
+        def complete_batch(argv, **kwargs):
+            ids = [row["id"] for row in bundle["images"]]
+            response = Path(argv[argv.index("--output-last-message") + 1])
+            response.write_text(json.dumps({"verdict": "pass", "summary": "Inspected all views",
+                                "inspectedImageIds": ids, "findings": [], "coverageGaps": [],
+                                "additionalCaptures": []}), encoding="utf-8")
+            return subprocess.CompletedProcess(argv, 0, "ok", "")
+
+        with patch.dict(sys.modules, {"contract": contract}), patch.object(runner, "ROOT", self.root), \
+                patch.object(runner, "HISTORY_ROOT", self.root / "history"):
+            with patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "offline")):
+                first = runner.run(bundle_path, output, codex=reviewer)
+            self.assertNotEqual(first["verdict"], "pass")
+            with patch.object(runner.subprocess, "run", side_effect=complete_batch):
+                final = runner.run(bundle_path, output, codex=reviewer, resume=True)
+                contract.validate_review(output / "review.json", self.root, self.sha)
+                self.write("tools/biome_review/reviewer.schema.json", {"description": "updated rules"})
+                with self.assertRaisesRegex(ValueError, "review tools changed"):
+                    contract.validate_review(output / "review.json", self.root, self.sha)
+                second_output = self.root / "second-review"
+                second = runner.run(bundle_path, second_output, codex=reviewer)
+        self.assertEqual((first["reviewRound"], final["reviewRound"], second["reviewRound"]), (1, 1, 2))
+        self.assertEqual(first["bundleSha256"], second["bundleSha256"])
+        accepted = contract.validate_review(second_output / "review.json", self.root, self.sha)
+        self.assertEqual(accepted["artifactSha256"], self.sha)
+
+    def test_translation_carry_forward_still_checks_original_reviewer_response(self):
+        review = self.evidence()
+        rel = "assets/example/lang/ko_kr.json"
+        self.write("common/src/main/resources/" + rel, {"key": "translation"})
+        candidate = self.root / "translated.jar"
+        with zipfile.ZipFile(candidate, "w") as archive:
+            archive.writestr("example.class", "candidate")
+            archive.writestr(rel, '{"key":"translation"}')
+        with self.assertRaisesRegex(ValueError, "sources changed"):
+            contract.validate_review(review, self.root, self.sha)
+        def check():
+            return build_evidence.check_biome_review(
+                self.root, None, releasing=True, artifact=contract.digest(candidate),
+                candidate_jar=candidate, baseline_review=review, baseline_jar=self.jar)
+        self.assertEqual(check()["exemption"]["changedJarEntries"], [rel])
+        raw = self.root / "batch-00/response.json"
+        self.write("batch-00/response.json", dict(contract.load(raw), verdict="revise"))
+        row = contract.load(review)
+        row["evidence"] = [contract.file_ref(raw) if ref["path"] == str(raw) else ref
+                           for ref in row["evidence"]]
+        self.write("review.json", row)
+        with self.assertRaisesRegex(ValueError, "raw response did not pass"):
+            check()
+
     def test_exit_zero_does_not_override_findings_or_missing_views(self):
         review = self.evidence()
         row = contract.load(review)
@@ -145,9 +212,32 @@ class ReviewContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sources changed"):
             contract.validate_review(review, self.root)
         (self.ecology / "NewBiome.java").unlink()
-        self.write("tools/biome_review/changed.json", {})
+        self.write("tools/biome_review/reviewer.schema.json", {})
+        contract.validate_bundle(self.root / "bundle.json", self.root)
         with self.assertRaisesRegex(ValueError, "tools changed"):
             contract.validate_review(review, self.root)
+
+    def test_changes_invalidate_only_the_stage_that_produced_the_evidence(self):
+        review = self.evidence()
+        bundle = self.root / "bundle.json"
+        self.write("tools/biome_review/test_runner.py", {"new": "test"})
+        contract.validate_review(review, self.root, self.sha)
+        packaging = self.write("tools/biome_review/bundle.py", {"new": "overview"})
+        with self.assertRaisesRegex(ValueError, "rebuild the bundle"):
+            contract.validate_bundle(bundle, self.root)
+        packaging.unlink()
+        self.write("tools/chunk_profile/resources/td-chunk-profile.mixins.json", {"new": "capture"})
+        with self.assertRaisesRegex(ValueError, "recapture"):
+            contract.validate_bundle(bundle, self.root)
+
+    def test_legacy_capture_cannot_be_relabelled_by_repackaging(self):
+        self.evidence()
+        bundle, capture = contract.load(self.root / "bundle.json"), contract.load(self.root / "receipt.json")
+        native = capture["biomeVisualReview"]
+        native["reviewToolFingerprint"] = native.pop("captureToolFingerprint")
+        bundle["capture"] = contract.file_ref(self.write("receipt.json", capture))
+        with self.assertRaisesRegex(ValueError, "separate provenance"):
+            contract.validate_bundle(self.write("bundle.json", bundle), self.root)
 
     def test_semantic_identity_does_not_depend_on_bundle_output_paths(self):
         review = self.evidence()
@@ -201,7 +291,7 @@ class ReviewContractTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "omits changed biome resources: example:new_wetland"):
                 contract.validate_bundle(bundle_path, self.root)
 
-    def test_bundle_cannot_repeat_a_native_view_or_omit_one(self):
+    def test_bundle_cannot_repeat_a_native_view(self):
         review = self.evidence()
         bundle_path = Path(contract.load(review)["bundlePath"])
         bundle = contract.load(bundle_path)
@@ -211,6 +301,49 @@ class ReviewContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duplicated a native"):
             contract.validate_bundle(bundle_path, self.root)
 
+    def scoped_bundle(self):
+        review = self.evidence()
+        bundle_path = Path(contract.load(review)["bundlePath"])
+        bundle = contract.load(bundle_path)
+        plan_path, capture_path = Path(bundle["plan"]["path"]), Path(bundle["capture"]["path"])
+        plan, capture = contract.load(plan_path), contract.load(capture_path)
+        plan["seed"], plan["scale"] = 5, 1
+        plan["regressionSites"] = [{"id": "0", "x": 0, "z": 0}]
+        baseline = {"schema": 1, "kind": "scoped-biome-baseline-facts", "seed": 5, "scale": 1,
+                    "artifactSha256": "b" * 64, "sourceFingerprint": "c" * 64,
+                    "sites": [{"id": "0", "x": 0, "z": 0, "bounds": [0, 0, 0, 0], "metrics": {"bed": "minecraft:dirt"}}]}
+        baseline_path = self.write("baseline-facts.json", baseline)
+        plan["reviewScope"] = {"schema": 1, "id": "scoped-test", "roundLimit": 1,
+            "criteria": [{"id": "reported", "siteIds": ["0"], "description": "reported site", "acceptance": "is repaired"}],
+            "baseline": {"bundleSha256": "d" * 64, "artifactSha256": "b" * 64,
+                         "sourceFingerprint": "c" * 64, "facts": contract.file_ref(baseline_path)}}
+        census_path = Path(bundle["evidence"][0]["path"])
+        candidate = dict(baseline, artifactSha256=self.sha, sourceFingerprint=self.fp,
+                         source={"columnsSha256": contract.digest(census_path)})
+        candidate_path = self.write("candidate-facts.json", candidate)
+        capture["biomeVisualReview"]["sites"] = [capture["biomeVisualReview"]["sites"][0]]
+        capture["biomeVisualReview"]["columnsPath"] = str(census_path)
+        bundle["images"] = [image for image in bundle["images"] if image["siteId"] == "0"]
+        self.write("plan.json", plan); self.write("receipt.json", capture)
+        bundle["plan"], bundle["capture"] = contract.file_ref(plan_path), contract.file_ref(capture_path)
+        bundle["scopeFacts"] = contract.file_ref(candidate_path)
+        self.write("bundle.json", bundle)
+        return bundle_path
+
+    def test_scoped_bundle_accepts_only_frozen_site_and_rejects_missing_site(self):
+        bundle_path = self.scoped_bundle()
+        contract.validate_bundle(bundle_path, self.root)
+        bundle = contract.load(bundle_path)
+        capture_path = Path(bundle["capture"]["path"])
+        capture = contract.load(capture_path)
+        capture["biomeVisualReview"]["sites"] = []
+        self.write("receipt.json", capture)
+        bundle["capture"] = contract.file_ref(capture_path)
+        self.write("bundle.json", bundle)
+        with self.assertRaisesRegex(ValueError, "Scoped native capture differs"):
+            contract.validate_bundle(bundle_path, self.root)
+
+    def test_bundle_cannot_omit_a_native_view(self):
         review = self.evidence()
         bundle_path = Path(contract.load(review)["bundlePath"])
         bundle = contract.load(bundle_path)

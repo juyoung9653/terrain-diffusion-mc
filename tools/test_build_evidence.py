@@ -113,6 +113,78 @@ class EvidenceTest(unittest.TestCase):
             copy.assert_not_called()
         self.assertFalse(destination.exists())
 
+    @patch("biome_review.contract.validate_reviewed_baseline")
+    def test_translation_only_review_baseline_is_bound_to_exact_jars(self, validated):
+        from biome_review import contract
+        ecology = self.root / "common/src/main/java/com/github/xandergos/terraindiffusionmc/world/ecology"
+        ecology.mkdir(parents=True)
+        ecology.joinpath("Biome.java").write_text("reviewed", encoding="utf-8")
+        self.fingerprint = evidence.source_fingerprint(self.root)
+        row = json.loads(self.proof.read_text(encoding="utf-8"))
+        row["sourceFingerprint"] = self.fingerprint
+        self.proof.write_text(json.dumps(row), encoding="utf-8")
+        baseline = self.root / "baseline.jar"
+        candidate = self.root / "candidate.jar"
+        validated.return_value = {"sourceFingerprint": "baseline-source"}
+        def write_jar(path, language, body=b"same"):
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("example/Main.class", body)
+                archive.writestr("assets/example/lang/en_us.json", language)
+        write_jar(baseline, b'{"key":"old"}')
+        write_jar(candidate, b'{"key":"new"}')
+        source = "baseline-source"
+        candidate_build = self.root / "baseline-candidate-build.json"
+        candidate_build.write_text(json.dumps({"kind": "validated-neoforge-build",
+            "modSha256": evidence.sha256(baseline), "sourceFingerprint": source}), encoding="utf-8")
+        bundle = self.root / "baseline-bundle.json"
+        bundle.write_text(json.dumps({"sourceFingerprint": source, "artifactSha256": evidence.sha256(baseline),
+            "candidateBuild": {"path": str(candidate_build), "sha256": evidence.sha256(candidate_build)}}),
+            encoding="utf-8")
+        review = self.root / "baseline-review.json"
+        review.write_text(json.dumps({"schema": 1, "kind": "independent-biome-review",
+            "verdict": "pass", "processExit": 0, "sourceFingerprint": source,
+            "artifactSha256": evidence.sha256(baseline),
+            "toolFingerprint": contract.review_tool_fingerprint(self.root),
+            "bundlePath": str(bundle), "bundleSha256": contract.digest(bundle)}), encoding="utf-8")
+
+        approval = evidence.check_biome_review(self.root, None, releasing=True,
+            artifact=evidence.sha256(candidate), baseline_review=review, baseline_jar=baseline,
+            candidate_jar=candidate)
+        self.assertEqual(approval["exemption"]["changedJarEntries"], ["assets/example/lang/en_us.json"])
+        evidence.write_release(self.root, candidate, self.fingerprint,
+            evidence.check_validations([self.proof], self.fingerprint), ["build"],
+            biome_review_baseline=review, biome_review_baseline_jar=baseline)
+        self.assertEqual(evidence.verify_release(candidate, self.root)["biomeReview"], approval)
+        write_jar(candidate, b'{"key":"new"}', b"changed")
+        with self.assertRaisesRegex(ValueError, "translation JSON"):
+            evidence.check_biome_review(self.root, None, releasing=True,
+                artifact=evidence.sha256(candidate), baseline_review=review, baseline_jar=baseline,
+            candidate_jar=candidate)
+
+
+    def test_translation_exemption_rejects_duplicate_unsafe_and_nested_entries(self):
+        baseline = self.root / "baseline.jar"
+        candidate = self.root / "candidate.jar"
+        def archive(path, language=b'{"key":"old"}', extra=None):
+            with zipfile.ZipFile(path, "w") as value:
+                value.writestr("example/Main.class", b"same")
+                value.writestr("assets/example/lang/en_us.json", language)
+                if extra:
+                    for name, contents in extra:
+                        value.writestr(name, contents)
+        archive(baseline)
+        baseline_info = {"jarPath": str(baseline)}
+        archive(candidate, extra=[("assets/example/lang/en_us.json", b'{"key":"new"}')])
+        with self.assertRaisesRegex(ValueError, "duplicate"):
+            evidence._translation_only_jar_change(baseline_info, candidate)
+        archive(candidate, b'{"key":"new"}', [("../assets/example/lang/en_us.json", b'{"key":"new"}')])
+        with self.assertRaisesRegex(ValueError, "unsafe"):
+            evidence._translation_only_jar_change(baseline_info, candidate)
+        archive(candidate, b'{"nested":{"key":"new"}}')
+        with self.assertRaisesRegex(ValueError, "flat"):
+            evidence._translation_only_jar_change(baseline_info, candidate)
+
+
     def test_unvalidated_build_is_not_installable(self):
         evidence.write_release(self.root, self.mod, self.fingerprint, [], [])
         with self.assertRaisesRegex(ValueError, "requires a build"):

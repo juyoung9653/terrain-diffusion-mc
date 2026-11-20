@@ -2113,8 +2113,12 @@ all six scales; the nine-profile model atlas covered three seeds at scales
    against the baseline to distinguish a regression from an older unrelated
    defect. For a reported bug, use a scoped review: before the first attempt,
    pin the reported sites and positive controls, observable pass conditions,
-   reference artifact and measurements, and the authorized round limit. A
-   recheck uses the same criteria. Group repeated views of one problem while
+   reference artifact and measurements, and the authorized round limit. Name
+   every required report, control and detail view in the criteria's `siteIds`.
+   The scoped capture photographs those sites; it does not add a survey of each
+   biome. Use an unscoped plan for changes to overall biome distribution or
+   shared generation rules that need that survey. A recheck uses the same
+   criteria. Group repeated views of one problem while
    preserving their site references. A material regression outside the report
    needs evidence from the same location before and after the change; record
    older unrelated aesthetic concerns separately. A missing measurement is an
@@ -2454,12 +2458,23 @@ for development, but has no validated-install permission.
 
 ### Independent biome realism review
 
-Ecology-enabled releases require an independent Codex visual review of the exact
-candidate JAR. Both the build and installer enforce this in Python; an instruction
+Ecology-enabled releases normally require an independent Codex visual review of
+the exact candidate JAR. For a translation-only release, keep a separate copy of
+the directly reviewed baseline JAR and its original review evidence. In place of
+`--biome-review`, pass `--biome-review-baseline BASELINE_REVIEW.json` and
+`--biome-review-baseline-jar BASELINE.jar` along with the candidate's normal
+`--validation` evidence. Build and install both verify the original review and
+compare JAR contents. A code, terrain, or other non-translation change still
+needs a new review. The baseline JAR must remain available after the build;
+do not point to the candidate's output filename. Other release checks still
+apply. Keep the baseline copy with the review evidence, outside the live mods
+and rotating backup directories.
+
+Both the build and installer enforce the review in Python; an instruction
 in Markdown, a successful screenshot capture, or the implementing agent's own
 approval is insufficient. Development builds remain available to generate review
 worlds. A missing review, major defect, uninspected image, requested extra capture,
-changed source/tool, or changed evidence blocks release. This local guard detects
+stale capture or judgement, or changed evidence blocks release. This local guard detects
 omissions and stale evidence; it cannot prevent someone deliberately modifying
 the guard or manually copying a JAR outside the installer.
 
@@ -2473,13 +2488,17 @@ Keep it across fixes, follow-up photos, seeds, and rebuilt JARs. Only use a new
 ID for a new task. For plans that predate this field, the ID is
 `legacy-seed-<seed>`; their existing reviews count. Pass the plan to
 `prepare --biome-review-plan PLAN.json` to check the budget before copying inputs.
-Include `requiredBiomes`, rectangular `windows` (`id,minX,maxX,minZ,maxZ`), all
-reported `regressionSites` (`id,x,z`), and `maxSites` large enough for the coverage.
-Optional `explicitSites` add requested inspection positions. Choose windows that
-include interiors and transitions to adjacent biomes, shorelines and water;
-expand them if coverage is missing. For broad generator changes include unaffected
-control biomes and more than one seed in the validation plan; one swamp fixture
-does not establish correctness of the whole world.
+Include `requiredBiomes`, rectangular `windows` (`id,minX,maxX,minZ,maxZ`),
+reported `regressionSites` (`id,x,z`), and `maxSites` large enough for the
+planned coverage. For a scoped report, keep the windows large enough to measure
+the frozen patches, photograph the controls, and resolve requested details.
+Use `explicitSites` for fixed controls and `inspectionRequests` for detail views;
+refer to each required ID in a criterion. For example, a bank repair can name
+`bank-west`, `bank-gradual-control` and `inspect-bank-west` in one criterion:
+three sites, nine scene images. The full physical window is still measured.
+For a broad generator change, omit `reviewScope`, include interior and transition
+areas and unaffected control biomes, and cover more than one seed in the
+validation plan.
 
 Use `inspectionRequests` (`id,x,z,kind`, with `kind` one of `root`, `bank`,
 `underwater`, `boundary`) for follow-up views that need a particular relationship.
@@ -2496,9 +2515,13 @@ connections after settlement; a bounded search that cannot reach a trunk is
 reported as incomplete evidence, not silently replaced by a nearby healthy tree.
 
 Run the normal chunk profiler with `--biome-review-plan PLAN.json`. Its client
-diagnostic scans actual generated columns, selects regression/interior/boundary/
-random/anomalous sites and captures aerial, side and detail views. Selection uses
-the measured world rather than a few manually chosen attractive screenshots.
+diagnostic scans actual generated columns and captures aerial, side and detail
+views of each selected site. In a scoped review the sites come from the frozen
+criteria; an unscoped survey also selects interior, boundary, random and, when
+present, anomalous sites from the measured world.
+If the measured windows already prove the required coverage is impossible, the
+client saves `columns.json`, `selection.json` and the failure reasons in the
+receipt. It skips site settlement and all photos. That run cannot be packaged.
 Water settlement, actual support blocks and measured ground heights matter;
 fixed-time screenshots while flying do not establish spatial coverage.
 The diagnostic temporarily fixes its copied world to clear noon while scanning
@@ -2596,14 +2619,27 @@ A scoped task freezes its acceptance criteria, comparison sites, baseline and
 round limit before capture. Count the first review in the limit: **at most two
 rounds total**, or fewer if requested. A revision does not reset this count.
 The historical unscoped ledger allows three rounds; always honor a lower user
-limit. A complete set of parallel image batches is one round. An interrupted
-or failed reviewer also consumes its round. The capture launcher checks the
+limit. All image batches for one bundle share a round. If a reviewer process
+fails and leaves an incomplete receipt, repeat the original runner command
+with `--resume` once. The runner uses the original bundle
+and output directory, keeps completed responses (including negative ones), and
+only runs failed or unstarted batches. This uses the original round and does
+not require another Minecraft launch. A completed request for more evidence
+requires new evidence; it is not a process failure. The capture launcher checks the
 remaining budget before starting Minecraft; the runner claims a numbered slot
 before starting Codex. At the limit, stop and report what was fixed, remains
 unresolved, or lacks evidence. Exhausting the budget never turns a rejection
 into a pass. Preserve the local ledger under `build/biome-review-history/`.
-An exact bundle gets one recorded attempt, so rerunning the same images until a
-model happens to pass is rejected. Address findings or collect the requested
+The same evidence gets one recorded review under the same reviewer rules, with
+at most one technical resume. Changing only tests does not invalidate a capture
+or verdict. If the reviewer or its output schema changes, run `runner.py` on
+the same bundle with a new output directory. This is a new verdict and consumes
+a remaining round; it never resets the task budget. Changes to offline evidence
+tools require rebuilding the affected measurements and bundle from the same
+capture. Changes to the capture tools or generated terrain require a new capture.
+Legacy receipts with a single combined tool hash cannot prove which capture
+tools ran; keep them for comparison and make a fresh capture for release.
+Address findings or collect the requested
 evidence, preserve prior attempts, and create a new bundle. Source changes require
 a fresh generation fixture. Follow-up captures without source changes can use
 the profiler's restart path and bundle `--restart`; retain the original evidence.

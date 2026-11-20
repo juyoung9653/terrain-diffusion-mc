@@ -11,8 +11,10 @@ of duplicating them here.
   name a failing site, a healthy control, a suspected writer and a result that
   would disprove it. Check the smallest affected rule and review its diff before
   commissioning full native captures. For a reported defect, freeze the
-  acceptance criteria, sites, reference observations and round limit before the
-  first review. Use them again for rechecks. Keep unrelated pre-existing
+  acceptance criteria, sites (including controls and required detail views),
+  reference observations and round limit before the first review. Use scoped
+  capture for this case; reserve the full biome survey for broad changes.
+  Use the same criteria for rechecks. Keep unrelated pre-existing
   observations advisory; a new regression needs comparable baseline evidence.
   Only a frozen candidate gets release review.
 - Inspect affected callers and existing evidence first. Start with focused pure

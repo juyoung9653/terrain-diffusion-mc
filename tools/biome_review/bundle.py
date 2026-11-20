@@ -11,7 +11,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
-from biome_review.contract import (digest, file_ref, load, review_tool_fingerprint,
+from biome_review.contract import (bundle_tool_fingerprint, capture_tool_fingerprint, digest, file_ref, load,
                                    source_fingerprint, validate_bundle)
 
 
@@ -145,6 +145,9 @@ def build(fixture: Path, output: Path, *, restart: bool = False, scope_facts: Pa
     capture = receipt.get("biomeVisualReview", {})
     if capture.get("status") != "captured":
         raise ValueError("Native biome capture is incomplete")
+    if capture.get("captureToolFingerprint") != capture_tool_fingerprint(ROOT):
+        raise ValueError("Biome capture tools changed or lack separate provenance; recapture this candidate")
+    packaging = bundle_tool_fingerprint(ROOT)
     plan_path = Path(capture["planPath"])
     plan = load(plan_path)
     from biome_review import budget
@@ -188,10 +191,13 @@ def build(fixture: Path, output: Path, *, restart: bool = False, scope_facts: Pa
                    siteId=site["id"], biome=site["biome"], view=image["view"],
                    x=site["x"], z=site["z"], camera=image.get("camera"))
               for site in capture["sites"] for image in site["images"]]
-    bundle = {"schema": 1, "kind": "biome-review-bundle",
-              "goal": "Realistic coherent terrain, hydrology, substrate and vegetation; unexpected defects also block acceptance.",
+    bundle = {"schema": 2, "kind": "biome-review-bundle",
+              "goal": ("Verify the frozen criteria and controls. Unrelated observations are advisory unless "
+                       "a visible regression is supported by a changed measurement at the same site."
+                       if scoped else "Realistic coherent terrain, hydrology, substrate and vegetation; "
+                       "unexpected defects also block acceptance."),
               "sourceFingerprint": capture["sourceFingerprint"], "artifactSha256": capture["artifactSha256"],
-              "toolFingerprint": review_tool_fingerprint(ROOT),
+              "bundleToolFingerprint": packaging,
               "requiredBiomes": capture["requiredBiomes"], "coverage": capture["sites"],
               "fixture": file_ref(fixture / "input-manifest.json"), "launch": file_ref(launch_path),
               "capture": file_ref(receipt_path), "plan": file_ref(plan_path), "images": images,

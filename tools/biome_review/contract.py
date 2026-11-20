@@ -20,17 +20,34 @@ from biome_review import budget
 VIEWS = {"aerial", "side", "detail"}
 REASONS = {"interior", "boundary", "random"}
 INSPECTION_KINDS = {"root", "bank", "underwater", "boundary"}
-REVIEW_INPUTS = (
-    Path("tools/biome_review"), Path("tools/chunk_profile/java"),
-    Path("tools/chunk_profile/run.py"), Path("tools/build_evidence.py"),
-    Path("tools/build_neoforge.py"), Path("tools/biome_iteration/shore_check.py"),
+# Hash the producers of each artifact. Tests and offline verdict rules never
+# run inside the capture client. Acceptance checks still run on every use.
+CAPTURE_INPUTS = (
+    Path("tools/chunk_profile/java"), Path("tools/chunk_profile/resources"),
+    Path("tools/chunk_profile/run.py"), Path("tools/optimization_bench/launch.py"),
+    Path("tools/river_planner/prepare-playtest.py"),
+)
+BUNDLE_INPUTS = (
+    Path("tools/biome_review/bundle.py"), Path("tools/biome_iteration/shore_check.py"),
     Path("tools/biome_iteration/measure.py"),
+)
+REVIEW_INPUTS = (
+    Path("tools/biome_review/runner.py"), Path("tools/biome_review/reviewer.schema.json"),
+    Path("tools/biome_review/scoped-reviewer.schema.json"),
 )
 
 
 def digest(path: Path | str) -> str:
     with Path(path).open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def capture_tool_fingerprint(root: Path = ROOT) -> str:
+    return input_fingerprint(root, CAPTURE_INPUTS)
+
+
+def bundle_tool_fingerprint(root: Path = ROOT) -> str:
+    return input_fingerprint(root, BUNDLE_INPUTS)
 
 
 def review_tool_fingerprint(root: Path = ROOT) -> str:
@@ -137,9 +154,9 @@ def semantic_evidence_identity(bundle: dict) -> str:
                       if isinstance(item, dict))
     value = {"schema": 1, "artifactSha256": bundle.get("artifactSha256"),
              "sourceFingerprint": bundle.get("sourceFingerprint"),
-             "toolFingerprint": bundle.get("toolFingerprint"),
+             "bundleToolFingerprint": bundle.get("bundleToolFingerprint"),
              "fixture": ref("fixture"), "launch": ref("launch"), "capture": ref("capture"),
-             "plan": ref("plan"), "candidateBuild": ref("candidateBuild"),
+             "plan": ref("plan"), "candidateBuild": ref("candidateBuild"), "scopeFacts": ref("scopeFacts"),
              "images": sorted(images, key=lambda row: json.dumps(row, sort_keys=True)),
              "overviewImages": sorted(overview, key=lambda row: json.dumps(row, sort_keys=True)),
              "evidence": evidence}
@@ -172,7 +189,8 @@ def _within_windows(point: tuple[int, int], windows: list[dict]) -> bool:
                for window in windows)
 
 
-def validate_inspection_requests(plan: dict, capture: dict, native_sites: dict[str, dict]) -> None:
+def validate_inspection_requests(plan: dict, capture: dict, native_sites: dict[str, dict],
+                                 selected_ids: set[str] | None = None) -> None:
     """Bind optional capture requests to exact, bounded, rendered native sites."""
     requested = plan.get("inspectionRequests", [])
     if requested is None:
@@ -202,6 +220,9 @@ def validate_inspection_requests(plan: dict, capture: dict, native_sites: dict[s
         if not _within_windows(point, windows):
             raise ValueError("Inspection request lies outside plan windows")
         plan_by_id[row["id"]] = row
+    if selected_ids is not None:
+        plan_by_id = {request_id: row for request_id, row in plan_by_id.items()
+                      if request_id in selected_ids}
     if not isinstance(resolved, list):
         raise ValueError("Native capture omitted inspection requests")
     resolved_by_id: dict[str, dict] = {}
@@ -302,19 +323,30 @@ def _validate_scope_facts(bundle: dict, scoped: dict, root: Path, plan: dict, ca
         left, right = baseline_rows[site_id], candidate_rows[site_id]
         if (left["x"], left["z"], left["bounds"]) != (right["x"], right["z"], right["bounds"]):
             raise ValueError("Scoped candidate facts do not measure frozen baseline coordinates")
+    for field in ("regressionSites", "explicitSites", "inspectionRequests"):
+        for site in plan.get(field, []):
+            if site["id"] in expected_ids:
+                fact = baseline_rows[site["id"]]
+                if (fact["x"], fact["z"]) != (site["x"], site["z"]):
+                    raise ValueError("Scoped capture plan moved a frozen baseline site")
     bundle["scopeFacts"]["path"] = str(candidate_path)
     bundle["scopedFactSiteIds"] = sorted(expected_ids)
 
 
 def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
+    return _validate_bundle(bundle_path, root, historical_source=None)
+
+
+def _validate_bundle(bundle_path: Path | str, root: Path, *, historical_source: str | None) -> dict:
     root = root.resolve()
     bundle = load(bundle_path)
-    if bundle.get("schema") != 1 or bundle.get("kind") != "biome-review-bundle":
-        raise ValueError("Unsupported biome review bundle")
-    if bundle.get("sourceFingerprint") != source_fingerprint(root):
+    if bundle.get("schema") != 2 or bundle.get("kind") != "biome-review-bundle":
+        raise ValueError("A bundle with separate capture provenance is required; recapture legacy evidence")
+    expected_source = historical_source if historical_source is not None else source_fingerprint(root)
+    if bundle.get("sourceFingerprint") != expected_source:
         raise ValueError("Biome review sources changed")
-    if bundle.get("toolFingerprint") != review_tool_fingerprint(root):
-        raise ValueError("Biome review tools changed")
+    if bundle.get("bundleToolFingerprint") != bundle_tool_fingerprint(root):
+        raise ValueError("Biome evidence packaging changed; rebuild the bundle from the capture")
     manifest = load(checked_file(bundle.get("fixture"), root))
     launch = load(checked_file(bundle.get("launch"), root))
     receipt = load(checked_file(bundle.get("capture"), root))
@@ -325,9 +357,10 @@ def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
         raise ValueError("Biome review requires a successful native process and capture receipt")
     if launch.get("source_world_metadata_unchanged") is not True:
         raise ValueError("Source world preservation was not verified")
+    if capture.get("captureToolFingerprint") != capture_tool_fingerprint(root):
+        raise ValueError("Biome capture tools changed or lack separate provenance; recapture this candidate")
     if (capture.get("status") != "captured" or capture.get("coverageGaps")
-            or capture.get("sourceFingerprint") != bundle["sourceFingerprint"]
-            or capture.get("reviewToolFingerprint") != bundle["toolFingerprint"]):
+            or capture.get("sourceFingerprint") != bundle["sourceFingerprint"]):
         raise ValueError("Incomplete or stale native biome capture")
     artifact = bundle.get("artifactSha256")
     candidate = load(checked_file(bundle.get("candidateBuild"), root))
@@ -344,7 +377,9 @@ def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
             or set(required_biomes) != set(plan.get("requiredBiomes", []))
             or set(required_biomes) != set(capture.get("requiredBiomes", []))):
         raise ValueError("Missing required biome coverage")
-    changed_biomes = changed_biome_resource_ids(root)
+    # A historical review describes its own frozen plan and artifact. The
+    # current working diff is only meaningful for a review of the current JAR.
+    changed_biomes = changed_biome_resource_ids(root) if historical_source is None else set()
     omitted_changed_biomes = changed_biomes - set(required_biomes)
     if omitted_changed_biomes:
         raise ValueError("Required biome coverage omits changed biome resources: "
@@ -354,12 +389,36 @@ def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
     images = bundle.get("images")
     if not isinstance(images, list) or not images:
         raise ValueError("Review requires rendered images")
-    native_sites = {site["id"]: site for site in capture.get("sites", [])}
+    captured_sites = capture.get("sites", [])
+    if (not isinstance(captured_sites, list) or any(not isinstance(site, dict) or not isinstance(site.get("id"), str)
+                                                    for site in captured_sites)):
+        raise ValueError("Native capture sites are malformed")
+    native_sites = {site["id"]: site for site in captured_sites}
+    if len(native_sites) != len(captured_sites):
+        raise ValueError("Native capture has duplicate site IDs")
+    scoped_ids = ({site_id for criterion in scoped["criteria"] for site_id in criterion["siteIds"]}
+                  if scoped else None)
+    # A reduced scoped capture must contain precisely the frozen review sites.
+    # Older scoped bundles had broad sampling; accept them only if they retain
+    # the former complete biome coverage contract below.
+    reduced = scoped_ids is not None and set(native_sites) == scoped_ids
+    if scoped_ids is not None:
+        if not scoped_ids.issubset(native_sites):
+            raise ValueError("Scoped native capture differs from frozen criterion sites")
+        fixed = {row["id"]: (row["x"], row["z"]) for field in ("regressionSites", "explicitSites")
+                 for row in plan.get(field, [])}
+        inspections = {row["id"] for row in plan.get("inspectionRequests", [])}
+        if (not scoped_ids.issubset(fixed.keys() | inspections)
+                or any(row["id"] not in scoped_ids for row in plan.get("regressionSites", []))):
+            raise ValueError("Scoped criteria must bind every reported site and use declared IDs")
+        if any((native_sites[key]["x"], native_sites[key]["z"]) != fixed[key]
+               for key in scoped_ids.intersection(fixed)):
+            raise ValueError("Scoped capture moved a fixed report or control")
     native_images = {
         (site["id"], image["view"]): str(Path(image["path"]).resolve())
         for site in native_sites.values() for image in site.get("images", [])
     }
-    validate_inspection_requests(plan, capture, native_sites)
+    validate_inspection_requests(plan, capture, native_sites, scoped_ids if reduced else None)
     seen = set()
     seen_native_pairs = set()
     for image in images:
@@ -386,11 +445,12 @@ def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
             raise ValueError("Review site did not settle under ticking tickets")
         if {i["view"] for i in site.get("images", [])} != VIEWS:
             raise ValueError("Review site lacks required viewpoints")
-    for biome in required_biomes:
-        reasons = {reason for site in native_sites.values() if site.get("biome") == biome
-                   for reason in site.get("reasons", [])}
-        if not REASONS.issubset(reasons):
-            raise ValueError(f"Biome lacks interior/boundary/random coverage: {biome}")
+    if not reduced:
+        for biome in required_biomes:
+            reasons = {reason for site in native_sites.values() if site.get("biome") == biome
+                       for reason in site.get("reasons", [])}
+            if not REASONS.issubset(reasons):
+                raise ValueError(f"Biome lacks interior/boundary/random coverage: {biome}")
     # Every reported regression position must survive selection, not just a
     # favourable replacement bearing the same label.
     coordinates = {(s.get("x"), s.get("z")) for s in native_sites.values()}
@@ -412,6 +472,17 @@ def validate_bundle(bundle_path: Path | str, root: Path = ROOT) -> dict:
 
 
 def validate_review(path: Path | str, root: Path = ROOT, artifact: str | None = None) -> dict:
+    return _validate_review(path, root, artifact, historical=False)
+
+
+def validate_reviewed_baseline(path: Path | str, root: Path, artifact: str) -> dict:
+    """Verify a prior direct review for this exact baseline JAR, not the candidate."""
+    if not isinstance(artifact, str) or len(artifact) != 64:
+        raise ValueError("Historical review requires the baseline artifact digest")
+    return _validate_review(path, root, artifact, historical=True)
+
+
+def _validate_review(path: Path | str, root: Path, artifact: str | None, *, historical: bool) -> dict:
     path = Path(path).resolve()
     row = load(path)
     if (row.get("schema") != 1 or row.get("kind") != "independent-biome-review"
@@ -420,7 +491,10 @@ def validate_review(path: Path | str, root: Path = ROOT, artifact: str | None = 
     if row.get("toolFingerprint") != review_tool_fingerprint(root):
         raise ValueError("Independent review tools changed")
     bundle_path = checked_file({"path": row.get("bundlePath"), "sha256": row.get("bundleSha256")}, root)
-    bundle = validate_bundle(bundle_path, root)
+    historical_source = row.get("sourceFingerprint") if historical else None
+    if historical and (not isinstance(historical_source, str) or len(historical_source) != 64):
+        raise ValueError("Historical review lacks its source fingerprint")
+    bundle = _validate_bundle(bundle_path, root, historical_source=historical_source)
     if (row.get("sourceFingerprint") != bundle["sourceFingerprint"]
             or row.get("artifactSha256") != bundle["artifactSha256"]
             or artifact is not None and artifact != row["artifactSha256"]):

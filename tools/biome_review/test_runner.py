@@ -59,7 +59,8 @@ class RunnerTest(unittest.TestCase):
         self.exe.write_bytes(b"placeholder")
         self.contract = types.ModuleType("contract")
         self.contract.validate_bundle = lambda path, root: self.bundle
-        self.contract.review_tool_fingerprint = lambda root: "tool-fingerprint"
+        self.review_rule = "tool-fingerprint"
+        self.contract.review_tool_fingerprint = lambda root: self.review_rule
         self.contract.semantic_evidence_identity = lambda bundle: "semantic-identity"
         self.checked_capture_refs = []
         def checked_file(item, root):
@@ -98,6 +99,20 @@ class RunnerTest(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0, "stdout", "stderr")
         with patch.object(runner.subprocess, "run", side_effect=fake_run):
             result = runner.run(self.bundle_path, self.root / "out", codex=self.exe, timeout=30)
+        return result, calls
+
+    def invoke_resume(self, responses):
+        calls = []
+        pending = iter(responses)
+        def fake_run(command, **kwargs):
+            calls.append(Path(command[command.index("--output-last-message") + 1]).parent.name)
+            response = Path(command[command.index("--output-last-message") + 1])
+            value = next(pending)
+            response.write_text(json.dumps(value), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, "stdout", "stderr")
+        with patch.object(runner.subprocess, "run", side_effect=fake_run):
+            result = runner.run(self.bundle_path, self.root / "out", codex=self.exe,
+                                timeout=30, resume=True)
         return result, calls
 
     def test_pass_requires_every_batch_to_acknowledge_its_images(self):
@@ -145,6 +160,80 @@ class RunnerTest(unittest.TestCase):
                      report([self.images[-1]["id"]])])
         with self.assertRaisesRegex(ValueError, "already reviewed"):
             runner.run(self.bundle_path, self.root / "out-second", codex=self.exe, timeout=30)
+
+    def test_changed_review_rules_rejudge_same_capture_consumes_new_round(self):
+        first, _ = self.invoke([
+            report([item["id"] for item in self.images[:runner.MAX_IMAGES_PER_BATCH]]),
+            report([self.images[-1]["id"]], verdict="revise"),
+        ])
+        self.assertEqual((1, "revise"), (first["reviewRound"], first["verdict"]))
+        self.review_rule = "tool-fingerprint-v2"
+        responses = [
+            report([item["id"] for item in self.images[:runner.MAX_IMAGES_PER_BATCH]]),
+            report([self.images[-1]["id"]]),
+        ]
+        calls = []
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            response = Path(command[command.index("--output-last-message") + 1])
+            response.write_text(json.dumps(responses.pop(0)), encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, "stdout", "stderr")
+        with patch.object(runner.subprocess, "run", side_effect=fake_run):
+            revised = runner.run(self.bundle_path, self.root / "out-rules-v2",
+                                 codex=self.exe, timeout=30)
+        self.assertEqual((2, "pass"), (revised["reviewRound"], revised["verdict"]))
+        self.assertEqual("tool-fingerprint-v2", revised["toolFingerprint"])
+        self.assertEqual(2, len(calls))
+        with self.assertRaisesRegex(ValueError, "current reviewer rules"):
+            runner.run(self.bundle_path, self.root / "out-rules-v2-reroll",
+                       codex=self.exe, timeout=30)
+
+    def test_legacy_history_remains_a_same_rule_reroll_guard(self):
+        history = runner.HISTORY_ROOT
+        history.mkdir()
+        legacy = history / "semantic-identity.json"
+        legacy.write_text(json.dumps({
+            "schema": 1, "kind": "independent-biome-review-history",
+            "bundleSha256": digest(self.bundle_path), "reviewTask": "shore-fix",
+            "reviewRound": 1, "semanticEvidenceIdentity": "semantic-identity",
+            "bundlePath": str(self.bundle_path.resolve()), "outputPath": "old-output",
+            "sourceFingerprint": "source", "artifactSha256": "artifact",
+            "toolFingerprint": "tool-fingerprint",
+        }), encoding="utf-8")
+        (history / "task-shore-fix").mkdir()
+        (history / "task-shore-fix" / "round-1.json").write_text(
+            json.dumps({"round": 1, "semanticEvidenceIdentity": "semantic-identity"}),
+            encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "current reviewer rules"):
+            runner.run(self.bundle_path, self.root / "same-rule", codex=self.exe)
+        self.review_rule = "tool-fingerprint-v2"
+        with patch.object(runner.subprocess, "run",
+                          return_value=subprocess.CompletedProcess([], 1, "", "offline")):
+            row = runner.run(self.bundle_path, self.root / "new-rules", codex=self.exe)
+        self.assertEqual(2, row["reviewRound"])
+
+    def test_changed_rules_still_respect_frozen_one_round_limit(self):
+        facts = self.root / "facts.json"
+        facts.write_text(json.dumps({"sites": [{"id": "site-0"}]}), encoding="utf-8")
+        scope = {
+            "schema": 1, "id": "one-round", "roundLimit": 1,
+            "criteria": [{"id": "site", "siteIds": ["site-0"],
+                           "description": "one scene", "acceptance": "visible"}],
+            "baseline": {"bundleSha256": "a" * 64, "artifactSha256": "b" * 64,
+                         "sourceFingerprint": "c" * 64,
+                         "facts": {"path": str(facts), "sha256": "d" * 64}},
+        }
+        self.plan_path.write_text(json.dumps({"reviewTask": "shore-fix", "seed": 1,
+                                              "reviewScope": scope}), encoding="utf-8")
+        self.bundle["plan"]["sha256"] = digest(self.plan_path)
+        self.bundle["scopeFacts"] = {"path": str(facts), "sha256": digest(facts)}
+        self.invoke([
+            report([item["id"] for item in self.images[:runner.MAX_IMAGES_PER_BATCH]]),
+            report([self.images[-1]["id"]]),
+        ])
+        self.review_rule = "tool-fingerprint-v2"
+        with self.assertRaisesRegex(ValueError, "1 total rounds"):
+            runner.run(self.bundle_path, self.root / "rule-v2", codex=self.exe)
 
     def test_repackaged_bundle_with_same_semantic_capture_cannot_reroll(self):
         self.invoke([report([item["id"] for item in self.images[:runner.MAX_IMAGES_PER_BATCH]]),
@@ -324,6 +413,71 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual([], result["inspectedImageIds"])
         self.assertEqual(1, len(calls))
         self.assertTrue((self.root / "out" / "interrupted-run.json").is_file())
+
+    def test_resume_retries_only_technical_failure_and_preserves_first_evidence(self):
+        # A malformed model response is a launcher/reviewer technical failure,
+        # not a terrain verdict. The second batch was never launched.
+        first, _ = self.invoke([{"verdict": "pass"}])
+        self.assertEqual("insufficient_evidence", first["verdict"])
+        resumed, calls = self.invoke_resume([
+            report([item["id"] for item in self.images[:runner.MAX_IMAGES_PER_BATCH]]),
+            report([self.images[-1]["id"]]),
+        ])
+        self.assertEqual("pass", resumed["verdict"])
+        self.assertEqual(["batch-00", "batch-01"], calls)
+        self.assertTrue((self.root / "out" / "batch-00-technical-1" / "result.json").is_file())
+        self.assertTrue((self.root / "out" / "review-before-technical-resume.json").is_file())
+        self.assertEqual(1, resumed["reviewRound"])
+        self.assertEqual([], resumed["unreviewedImageIds"])
+
+    def test_resume_rejects_a_valid_revise_without_replacing_receipt(self):
+        finding = {"id": "bank", "severity": "major", "category": "terrain", "siteId": "site-0",
+                   "imageIds": ["image-0"], "description": "wall", "evidence": "wall",
+                   "requestedChange": "smooth"}
+        result, _ = self.invoke([
+            report([item["id"] for item in self.images[:runner.MAX_IMAGES_PER_BATCH]], verdict="revise", findings=[finding]),
+            report([self.images[-1]["id"]]),
+        ])
+        receipt = (self.root / "out" / "review.json").read_bytes()
+        with self.assertRaisesRegex(ValueError, "incomplete technical"):
+            runner.run(self.bundle_path, self.root / "out", codex=self.exe, timeout=30, resume=True)
+        self.assertEqual(receipt, (self.root / "out" / "review.json").read_bytes())
+
+    def test_timeout_with_overview_does_not_rerun_completed_negative_batch(self):
+        overview = dict(self.images[0], id="all-sites-map")
+        self.bundle["overviewImages"] = [overview]
+        self.bundle_path.write_text(json.dumps(self.bundle), encoding="utf-8")
+        first_ids = [item["id"] for item in self.images[:runner.MAX_IMAGES_PER_BATCH]]
+        second_ids = [self.images[-1]["id"], overview["id"]]
+        first, _ = self.invoke([report(first_ids + [overview["id"]], verdict="revise"),
+                                subprocess.TimeoutExpired("codex", 30)])
+        self.assertEqual("incomplete", first["completion"])
+        resumed, calls = self.invoke_resume([report(second_ids)])
+        self.assertEqual(["batch-01"], calls)
+        self.assertEqual("revise", resumed["verdict"])
+
+    def test_resume_after_coordinator_interrupt_keeps_completed_batch(self):
+        original_wait = runner.wait
+        interrupted = False
+        def interrupt_once(*args, **kwargs):
+            nonlocal interrupted
+            if not interrupted:
+                interrupted = True
+                raise KeyboardInterrupt
+            return original_wait(*args, **kwargs)
+        with patch.object(runner, "wait", side_effect=interrupt_once):
+            first, calls = self.invoke([report([item["id"] for item in self.images[:runner.MAX_IMAGES_PER_BATCH]])])
+        self.assertTrue(first["interrupted"])
+        self.assertEqual(1, len(calls))
+        resumed, calls = self.invoke_resume([report([self.images[-1]["id"]])])
+        self.assertEqual("pass", resumed["verdict"])
+        self.assertEqual(["batch-01"], calls)
+
+    def test_resume_rejects_a_receipt_that_omits_existing_batch(self):
+        self.invoke([{"verdict": "pass"}])
+        (self.root / "out" / "batch-01").mkdir()
+        with self.assertRaisesRegex(ValueError, "omitted an existing"):
+            runner.run(self.bundle_path, self.root / "out", codex=self.exe, timeout=30, resume=True)
 
     def test_scoped_advisory_can_pass_but_regression_needs_changed_same_site_fact(self):
         scope = {"criteria": [{"id": "shore", "siteIds": ["site-0"], "description": "x", "acceptance": "y"}]}

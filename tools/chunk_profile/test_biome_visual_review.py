@@ -56,6 +56,27 @@ def main():
         # A stale plan cannot silently bind an old source checkout to this fixture.
         bad = root / 'bad.json'; bad.write_text(json.dumps(plan(manifest, fingerprint='stale')), encoding='utf-8')
         expect_error(lambda: RUN._biome_review_plan(argparse.Namespace(biome_review_plan=bad), manifest, root / 'other', False))
+        # Scoped reviews capture declared report/control sites and only the
+        # inspections named by the frozen criteria; malformed aliases or facts
+        # fail before a client clone is launched.
+        scoped = plan(manifest)
+        facts = root / 'baseline-facts.json'
+        facts.write_text(json.dumps({'sites': [{'id': 'reported', 'x': 1, 'z': 1}]}), encoding='utf-8')
+        scoped['reviewScope'] = {
+            'schema': 1, 'id': 'test-scope', 'roundLimit': 1,
+            'criteria': [{'id': 'reported-fix', 'siteIds': ['reported'],
+                          'description': 'reported coordinate', 'acceptance': 'repair it'}],
+            'baseline': {'bundleSha256': 'b' * 64, 'artifactSha256': 'c' * 64,
+                         'sourceFingerprint': 'd' * 64,
+                         'facts': {'path': str(facts),
+                                   'sha256': RUN.launch.sha256(facts)}}}
+        scoped_path = root / 'scoped.json'; scoped_path.write_text(json.dumps(scoped), encoding='utf-8')
+        scoped_target = root / 'scoped-fixture'; scoped_target.mkdir()
+        RUN._biome_review_plan(argparse.Namespace(biome_review_plan=scoped_path), manifest, scoped_target, False)
+        scoped['reviewScope']['criteria'][0]['siteIds'] = ['missing']
+        scoped_path.write_text(json.dumps(scoped), encoding='utf-8')
+        missing_target = root / 'missing-fixture'; missing_target.mkdir()
+        expect_error(lambda: RUN._biome_review_plan(argparse.Namespace(biome_review_plan=scoped_path), manifest, missing_target, False))
         # Captured evidence requires all three distinct native viewpoints inside the fixture.
         images = []
         for view in ('aerial', 'side', 'detail'):
@@ -63,7 +84,7 @@ def main():
             images.append({'view': view, 'path': str(path)})
         receipt = {'biomeVisualReview': {'status': 'captured', 'sourceFingerprint': staged['source_fingerprint'],
                    'artifactSha256': staged['artifact_sha256'], 'coverageGaps': [],
-                   'reviewToolFingerprint': staged['review_tool_fingerprint'],
+                   'captureToolFingerprint': staged['capture_tool_fingerprint'],
                    'diagnosticJarSha256': staged['diagnostic_jar_sha256'],
                    'sites': [{'status': 'captured', 'reachedServerTicks': 100, 'tickEligible': True, 'images': images}]}}
         assert RUN._biome_visual_review_captured(receipt, target, staged)
