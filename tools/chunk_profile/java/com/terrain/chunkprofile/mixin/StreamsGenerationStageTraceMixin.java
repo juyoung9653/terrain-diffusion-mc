@@ -27,5 +27,7 @@ public final class StreamsGenerationStageTraceMixin {
                                      CallbackInfoReturnable<Boolean> cir) {
         GenerationStageTrace.capture("streams-native-complete", context.level(),
                 context.origin().getX() & ~15, context.origin().getZ() & ~15);
+        GenerationStageTrace.captureStreamsPlan(context.level(), context.origin().getX() & ~15,
+                context.origin().getZ() & ~15);
     }
 }

@@ -23,6 +23,7 @@ from probe_suite import exclusive_lock, atomic_json
 import launch
 from build_evidence import source_fingerprint
 from biome_review.contract import changed_biome_resource_ids, capture_tool_fingerprint
+from biome_review.contract import fixed_camera_poses, matches_site_views
 from biome_review.budget import check_budget, scope as review_scope
 import psutil
 
@@ -169,6 +170,54 @@ def active_java_workload():
     return False
 
 
+def _generation_trace_sites(value):
+    """Parse a small, normal-generation trace selector without a review plan."""
+    if value is None:
+        return []
+    if not re.fullmatch(r'-?\d+,-?\d+(;-?\d+,-?\d+){0,7}', value):
+        raise RuntimeError('--generation-trace-sites requires 1..8 x,z pairs separated by semicolons')
+    return [tuple(map(int, pair.split(','))) for pair in value.split(';')]
+
+
+def _copy_streams_cache(source_world, output_world, files):
+    """Copy saved Streams routing inputs to a fresh clone and prove every byte."""
+    source_cache = source_world / 'streamsreflowing'
+    if not source_cache.is_dir():
+        raise RuntimeError('--copy-streams-cache requires source world streamsreflowing cache')
+    staged_cache = output_world / 'streamsreflowing'
+    copy_checked(source_cache, staged_cache, files)
+    source_entries = {}
+    for source_file in sorted(path for path in source_cache.rglob('*') if path.is_file()):
+        relative = source_file.relative_to(source_cache).as_posix()
+        staged = staged_cache / relative
+        source_hash = launch.sha256(source_file)
+        if not staged.is_file() or launch.sha256(staged) != source_hash:
+            raise RuntimeError(f'Streams cache staging verification failed: {relative}')
+        source_entries[relative] = source_hash
+    if not source_entries:
+        raise RuntimeError('--copy-streams-cache refuses an empty Streams cache')
+    staged_entries = {path.relative_to(staged_cache).as_posix()
+                      for path in staged_cache.rglob('*') if path.is_file()}
+    if staged_entries != set(source_entries):
+        raise RuntimeError('Streams cache staging file set differs from source')
+    return {'enabled': True, 'source_files': source_entries,
+            'staged_root': 'saves/chunk-profile/streamsreflowing'}
+
+
+def _verify_staged_streams_cache(target, manifest):
+    cache = manifest.get('streams_cache', {'enabled': False})
+    if not cache.get('enabled'):
+        return
+    files, root = cache.get('source_files'), cache.get('staged_root')
+    if not isinstance(files, dict) or not files or root != 'saves/chunk-profile/streamsreflowing':
+        raise RuntimeError('Copied Streams cache provenance is incomplete')
+    staged = target / root
+    actual = {path.relative_to(staged).as_posix(): launch.sha256(path)
+              for path in staged.rglob('*') if path.is_file()} if staged.is_dir() else {}
+    if actual != files:
+        raise RuntimeError('Prepared copied Streams cache changed')
+
+
 def prepare(args):
     global manifest_root
     prepare_started = time.monotonic()
@@ -179,6 +228,8 @@ def prepare(args):
     source = launch.DEFAULT_INSTANCE
     if args.decoder_fp16 and args.decoder_precision:
         raise RuntimeError('--decoder-fp16 cannot be combined with --decoder-precision')
+    if getattr(args, 'copy_streams_cache', False) and args.without_streams:
+        raise RuntimeError('--copy-streams-cache is incompatible with --without-streams')
     target = WORK / launch.safe_name(args.name)
     if target.exists():
         raise RuntimeError('Fixture already exists; choose a fresh name')
@@ -270,6 +321,9 @@ def prepare(args):
             continue
         if (world / name).exists():
             copy_checked(world / name, output_world / name, files)
+    streams_cache = {'enabled': False}
+    if getattr(args, 'copy_streams_cache', False):
+        streams_cache = _copy_streams_cache(world, output_world, files)
     raw = gzip.decompress((output_world / 'level.dat').read_bytes())
     nbt = helper()
     fields = nbt.nbt_fields(raw)
@@ -372,7 +426,9 @@ def prepare(args):
         'terrain_diffusion_artifact': selected_td,
         'source_world_metadata_sha256': source_metadata,
         'fresh_level_dat_sha256': launch.sha256(output_world / 'level.dat'),
-        'excluded_world_data': ['regions', 'entities', 'poi', 'playerdata', 'Streams graphs', 'structure index'],
+        'excluded_world_data': ['regions', 'entities', 'poi', 'playerdata', 'structure index']
+            + ([] if getattr(args, 'copy_streams_cache', False) else ['Streams graphs']),
+        'streams_cache': streams_cache,
         'world_edits': ['remove copied Data.Player', 'initialized=0']
             + (['natural-river data.enabled=0 for Streams removal ablation',
                 'exclude Streams exact-terrain marker'] if args.without_streams else []),
@@ -820,6 +876,10 @@ def _validate_native_biome_plan(plan):
                 raise RuntimeError(f'Biome review {field} site must be unique and inside a window')
             site_ids.add(site['id'])
 
+    try:
+        fixed_camera_poses(plan)
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
     requests = plan.get('inspectionRequests', [])
     if not isinstance(requests, list):
         raise RuntimeError('Biome review inspectionRequests must be an array')
@@ -921,7 +981,7 @@ def _biome_visual_review_captured(receipt, target, plan):
         if site.get('status') != 'captured' or site.get('reachedServerTicks', 0) < 100 or site.get('tickEligible') is not True:
             return False
         images = site.get('images')
-        if not isinstance(images, list) or {row.get('view') for row in images if isinstance(row, dict)} != {'aerial', 'side', 'detail'}:
+        if not matches_site_views(site, fixed_camera_poses(plan.get('data', {}))):
             return False
         for image in images:
             try:
@@ -969,6 +1029,11 @@ def run(args, restart=False):
             raise RuntimeError('Streams ablation provenance is incomplete')
         if (target / 'mods' / removed.get('source_filename', '')).exists():
             raise RuntimeError('StreamsReflowing artifact unexpectedly present in ablation clone')
+    # Streams writes newly discovered routing plates while generation runs.  The
+    # copied manifest proves the starting cache only; a review restart instead
+    # verifies the post-generation cache through restart-input-manifest.json.
+    if not restart:
+        _verify_staged_streams_cache(target, manifest)
     precision = manifest.get('decoder_precision', {'mode': 'fp32', 'decoder_candidate': None,
                                                    'selection': 'legacy-default'})
     if precision.get('mode') == 'fp16':
@@ -1088,6 +1153,13 @@ def run(args, restart=False):
                                     + ';'.join(f"{s['x']},{s['z']}" for s in generation_trace_sites))
             runtime.property.append('td.wetland.shapeTracePositions='
                                     + ';'.join(f"{s['x']},{s['z']}" for s in generation_trace_sites))
+    standalone_trace_sites = _generation_trace_sites(getattr(args, 'generation_trace_sites', None))
+    if standalone_trace_sites and biome_review is not None and biome_review['data'].get('generationTraceSites'):
+        raise RuntimeError('--generation-trace-sites conflicts with biome review generationTraceSites')
+    if standalone_trace_sites:
+        positions = ';'.join(f'{x},{z}' for x, z in standalone_trace_sites)
+        runtime.property.extend(('td.generation.tracePositions=' + positions,
+                                 'td.wetland.shapeTracePositions=' + positions))
     if wetland_sites is not None and not restart:
         runtime.property.append(f'chunkprofile.wetlandSites={wetland_sites}')
     if restart:
@@ -1135,6 +1207,8 @@ def run(args, restart=False):
         'biome_review_diagnostic_jar_sha256': None if biome_review is None else biome_review['diagnostic_jar_sha256'],
         'restart': restart,
         'streams_ablation': streams_ablation,
+        'copied_streams_cache': manifest.get('streams_cache', {'enabled': False}),
+        'generation_trace_sites': standalone_trace_sites,
         'heap_min_mib':runtime.heap_min_mib, 'heap_max_mib':runtime.heap_max_mib})
     print(f'Launched isolated chunk profile PID {process.pid}', flush=True)
     gpu = None
@@ -1256,6 +1330,10 @@ def main():
                    help='successful fixture directory to inherit wetland sites and check comparison inputs')
     p.add_argument('--without-streams', action='store_true',
                    help='prepare a clone-only StreamsReflowing removal ablation; source instance is unchanged')
+    p.add_argument('--copy-streams-cache', action='store_true',
+                   help='copy and hash-verify source world Streams cache into this fresh clone; incompatible with --without-streams')
+    p.add_argument('--generation-trace-sites',
+                   help='fixture-only normal-generation trace: 1..8 x,z pairs separated by semicolons')
     p.add_argument('--streams-ground-marine', choices=('true', 'false'),
                    help='clone-launch-only td.streams.groundMarine setting')
     p.add_argument('--streams-batch-sampling', choices=('true', 'false'),
@@ -1273,6 +1351,10 @@ def main():
     p.add_argument('--settle',type=int,choices=range(0,301),default=45)
     p.add_argument('--timeout',type=int,default=1500)
     args=p.parse_args()
+    if args.action != 'run' and args.generation_trace_sites is not None:
+        p.error('--generation-trace-sites is only valid with run')
+    if args.action != 'prepare' and args.copy_streams_cache:
+        p.error('--copy-streams-cache is only valid with prepare')
     if not 0 <= args.streams_settle_seconds <= 900:
         p.error('--streams-settle-seconds must be from 0 through 900')
     if not 30 <= args.phase_timeout <= 1800:

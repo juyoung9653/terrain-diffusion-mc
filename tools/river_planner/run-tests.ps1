@@ -14,6 +14,7 @@ New-Item -ItemType Directory -Force -Path $out | Out-Null
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\river\NaturalRiverBankSurface.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\world\ecology\FeatureEcologyMath.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\pipeline\EcologyClassifier.java') `
+  (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\pipeline\WetlandEcology.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\pipeline\EcologyShowcaseProfile.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\pipeline\ShoreClassifier.java') `
   (Join-Path $root 'common\src\main\java\com\github\xandergos\terraindiffusionmc\pipeline\TerralithBiomeClassifier.java') `

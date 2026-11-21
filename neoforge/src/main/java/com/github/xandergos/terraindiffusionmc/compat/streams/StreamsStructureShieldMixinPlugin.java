@@ -54,8 +54,9 @@ public final class StreamsStructureShieldMixinPlugin implements IMixinConfigPlug
                 || simpleName.equals("StreamsSeagrassFeature2171Mixin") || simpleName.equals("StreamsLandGrass2171Mixin")) {
             return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2171);
         }
-        if (simpleName.equals("StreamsInference2173Mixin") || simpleName.equals("StreamsNaturalNetwork2173Mixin")
+        if (simpleName.equals("StreamsInference2173Mixin") || simpleName.equals("StreamsNaturalNetwork2173Mixin") || simpleName.equals("StreamsMarshMouthStore2173Mixin")
                 || simpleName.equals("StreamsSeagrassFeature2173Mixin") || simpleName.equals("StreamsLandGrass2173Mixin")
+                || simpleName.equals("StreamsWetlandHandoffEngine2173Mixin") || simpleName.equals("StreamsWetlandHandoffPlan2173Mixin") || simpleName.equals("StreamsWetlandHandoffLake2173Mixin")
                 || simpleName.equals("StreamsBankMaterial2173Mixin") || simpleName.equals("StreamsShallowBed2173Mixin")) {
             return hasStreamsVersion(StreamsStructureShieldMixinPlugin::is2173);
         }

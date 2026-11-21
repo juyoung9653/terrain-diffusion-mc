@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.world.river;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -19,9 +20,45 @@ public final class NaturalRiverShallowProfile {
 
     private NaturalRiverShallowProfile() {}
 
+    /**
+     * Returns the local lowland surface used to limit an uplift. One or two
+     * isolated lower columns must not anchor a dry route to a side ditch, while
+     * three connected low columns retain a genuine wetland or valley floor.
+     */
+    public static double localGroundFloor(NaturalRiverMorphology.Ground ground, int x, int z) {
+        if (ground == null) throw new NullPointerException("ground");
+        double[] heights = new double[9];
+        int index = 0;
+        for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) {
+            double height = ground.height(x + dx, z + dz);
+            if (Double.isFinite(height)) heights[index++] = height;
+        }
+        if (index < 3) return Double.NaN;
+        Arrays.sort(heights, 0, index);
+        return heights[Math.min(2, index - 1)];
+    }
+
     public static List<NaturalRiverMorphology.Reach> refine(List<NaturalRiverMorphology.Reach> input,
                                                               NaturalRiverMorphology.Ground ground,
                                                               int seaLevel, int plannerInset) {
+        return refine(input, ground, seaLevel, plannerInset, false);
+    }
+
+    /**
+     * Uses the same bounded grade solver for a model-confirmed dry inland route.
+     * The caller must reject marine and wetland-water cells before enabling the
+     * near-sea override.
+     */
+    public static List<NaturalRiverMorphology.Reach> refineDry(List<NaturalRiverMorphology.Reach> input,
+                                                                 NaturalRiverMorphology.Ground ground,
+                                                                 int seaLevel, int plannerInset) {
+        return refine(input, ground, seaLevel, plannerInset, true);
+    }
+
+    private static List<NaturalRiverMorphology.Reach> refine(List<NaturalRiverMorphology.Reach> input,
+                                                               NaturalRiverMorphology.Ground ground,
+                                                               int seaLevel, int plannerInset,
+                                                               boolean allowNearSeaDryGrade) {
         if (input == null) throw new NullPointerException("input");
         if (ground == null) throw new NullPointerException("ground");
         if (input.isEmpty()) return List.of();
@@ -42,7 +79,8 @@ public final class NaturalRiverShallowProfile {
             edges.add(new Edge(upstream, downstream, length, reach.y1(), reach.y2()));
         }
 
-        for (Node node : nodes.values()) configure(node, ground, seaLevel, plannerInset);
+        for (Node node : nodes.values()) configure(node, ground, seaLevel, plannerInset,
+                allowNearSeaDryGrade);
         for (Edge edge : edges) {
             if (!(edge.length > EPSILON) || edge.nativeUpstream < edge.nativeDownstream) {
                 edge.upstream.pinned = true;
@@ -91,14 +129,16 @@ public final class NaturalRiverShallowProfile {
         return List.copyOf(output);
     }
 
-    private static void configure(Node node, NaturalRiverMorphology.Ground ground, int seaLevel, int plannerInset) {
+    private static void configure(Node node, NaturalRiverMorphology.Ground ground, int seaLevel,
+                                  int plannerInset, boolean allowNearSeaDryGrade) {
         node.grade = node.grades.get(0);
         for (double grade : node.grades) if (Double.doubleToLongBits(grade) != Double.doubleToLongBits(node.grade)) node.pinned = true;
         for (double width : node.halfWidths) {
             if (!(width > 0.0)) node.pinned = true;
             node.maxHalfWidth = Math.max(node.maxHalfWidth, width);
         }
-        if (node.grade <= (double) seaLevel + plannerInset + 2.0) node.pinned = true;
+        if (!allowNearSeaDryGrade && node.grade <= (double) seaLevel + plannerInset + 2.0)
+            node.pinned = true;
         if (node.pinned || node.outdegree == 0 || node.maxHalfWidth >= ZERO_HALF_WIDTH) return;
         double height = ground.height((int) Math.floor(node.x), (int) Math.floor(node.z));
         if (!Double.isFinite(height)) {

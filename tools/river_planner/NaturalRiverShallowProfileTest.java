@@ -18,12 +18,16 @@ public final class NaturalRiverShallowProfileTest {
         capsHighEndpointsAtLowInteriorSaddle();
         pinsProtectedInteriorCrossing();
         staysBelowSampledGroundClearance();
+        ignoresOneOrTwoSideDitchesWhenFindingDryGround();
+        retainsAConnectedLowlandFloor();
         doesNotRaiseExistingOvergroundReach();
         invalidInputIsConservative();
         pinsZeroLengthEdges();
         preventsUphillFromInconsistentSharedGrade();
         handlesSourceFreeCycles();
         keepsIntegerBoundaryMonotonicAfterFloor();
+        raisesConfirmedDryNearSeaApproachButPinsOutlet();
+        separatesDryOutletFromFlatWetApproach();
         flattensArtificialSteepDropBeforeOutlet();
         keepsGradesIndependentOfInputOrder();
         randomDagPreservesBoundsAndShape();
@@ -104,6 +108,16 @@ public final class NaturalRiverShallowProfileTest {
         List<Reach> before = List.of(r(0, 0, 90, 1, 10, 0, 89, 1));
         check(refine(before, (x, z) -> 85.0).equals(before), "existing overground reach was raised");
     }
+    private static void ignoresOneOrTwoSideDitchesWhenFindingDryGround() {
+        double floor = NaturalRiverShallowProfile.localGroundFloor((x, z) ->
+                (x == -1 && (z == 0 || z == 1)) ? 65.0 : 74.0, 0, 0);
+        check(floor == 74.0, "one-cell side ditch anchored dry grade");
+    }
+    private static void retainsAConnectedLowlandFloor() {
+        double floor = NaturalRiverShallowProfile.localGroundFloor((x, z) ->
+                x == -1 ? 65.0 : 74.0, 0, 0);
+        check(floor == 65.0, "three-cell lowland floor was lifted");
+    }
     private static void invalidInputIsConservative() {
         List<Reach> badWidth = List.of(r(0, 0, 80, -1, 10, 0, 78, 1));
         check(refine(badWidth, HIGH_GROUND).equals(badWidth), "negative width changed node");
@@ -133,6 +147,35 @@ public final class NaturalRiverShallowProfileTest {
         List<Reach> after = refine(before, HIGH_GROUND);
         check(after.get(0).y1() >= after.get(0).y2(), "final 1/64 floor introduced uphill edge");
         check(after.get(0).y1() >= before.get(0).y1(), "final floor lowered source grade");
+    }
+    private static void raisesConfirmedDryNearSeaApproachButPinsOutlet() {
+        List<Reach> before = List.of(r(0, 0, 65, 1, 10, 0, 63, 1));
+        check(refine(before, (x, z) -> 74.0).equals(before),
+                "normal near-sea profile changed without a dry-model confirmation");
+        List<Reach> after = NaturalRiverShallowProfile.refineDry(before, (x, z) -> 74.0, 63, 0);
+        check(after.getFirst().y1() == 70.0, "dry near-sea approach ignored downhill ramp");
+        check(after.getFirst().y2() == 63.0, "dry near-sea outlet changed");
+        check(after.getFirst().y1() - before.getFirst().y1() <= 10 * .5 + 1e-9,
+                "dry near-sea lift exceeded ramp limit");
+        check(NaturalRiverShallowProfile.refineDry(before, (x, z) ->
+                x == 0 ? Double.NaN : 74.0, 63, 0).equals(before),
+                "unconfirmed dry source changed");
+    }
+    private static void separatesDryOutletFromFlatWetApproach() {
+        List<Reach> wetAndDry = List.of(
+                r(-10, 0, 65, 1, 0, 0, 65, 1),
+                r(0, 0, 65, 1, 10, 0, 65, 1),
+                r(10, 0, 65, 1, 20, 0, 65, 1));
+        List<Reach> blocked = NaturalRiverShallowProfile.refineDry(wetAndDry,
+                (x, z) -> x < 0 ? Double.NaN : 67.0, 63, 3);
+        check(blocked.equals(wetAndDry), "wet flat approach leaked its old low grade into dry outlet");
+        List<Reach> dryOutlet = wetAndDry.subList(1, 3);
+        List<Reach> after = NaturalRiverShallowProfile.refineDry(dryOutlet,
+                (x, z) -> 67.0, 63, 3);
+        check(after.getFirst().y1() == 68.0 && after.getFirst().y2() == 68.0,
+                "dry outlet did not anchor to pond-height approach target");
+        check(after.getLast().y2() == 65.0, "dry outlet terminal changed");
+        nonAscending(after);
     }
     private static void flattensArtificialSteepDropBeforeOutlet() {
         List<Reach> before = List.of(

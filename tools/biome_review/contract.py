@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -18,6 +19,37 @@ from build_evidence import source_fingerprint, input_fingerprint
 from biome_review import budget
 
 VIEWS = {"aerial", "side", "detail"}
+
+
+def fixed_camera_poses(plan):
+    poses = {}
+    for field in ("explicitSites", "regressionSites"):
+        for site in plan.get(field, []):
+            if "fixedCamera" not in site:
+                continue
+            pose = site["fixedCamera"]
+            if (not isinstance(pose, dict) or set(pose) != {"x", "y", "z", "yaw", "pitch"}
+                    or not all(type(v) in (float, int) and math.isfinite(v) for v in pose.values())
+                    or abs(pose["pitch"]) > 90 or abs(pose["yaw"]) > 360
+                    or math.floor(pose["x"]) != site["x"] or math.floor(pose["z"]) != site["z"]):
+                raise ValueError("Invalid fixed camera at " + site["id"])
+            poses[site["id"]] = pose
+    return poses
+
+
+def matches_site_views(site, poses):
+    images = site.get("images", [])
+    pose = poses.get(site.get("id"))
+    expected = VIEWS | ({"reference"} if pose is not None else set())
+    if (not isinstance(images, list) or len(images) != len(expected)
+            or {i.get("view") for i in images if isinstance(i, dict)} != expected):
+        return False
+    if pose is None:
+        return True
+    actual = next(i for i in images if i["view"] == "reference").get("camera", {})
+    return isinstance(actual, dict) and all(type(actual.get(k)) in (float, int)
+            and math.isclose(v, actual[k], rel_tol=0., abs_tol=1e-4) for k, v in pose.items())
+
 REASONS = {"interior", "boundary", "random"}
 INSPECTION_KINDS = {"root", "bank", "underwater", "boundary"}
 # Hash the producers of each artifact. Tests and offline verdict rules never
@@ -426,7 +458,7 @@ def _validate_bundle(bundle_path: Path | str, root: Path, *, historical_source: 
             raise ValueError("Duplicate or absent review image ID")
         seen.add(image["id"])
         path = checked_file(image, root)
-        if path.stat().st_size < 1024 or image.get("view") not in VIEWS:
+        if path.stat().st_size < 1024 or image.get("view") not in VIEWS | {"reference"}:
             raise ValueError("Missing usable rendered view")
         native_pair = (image.get("siteId"), image["view"])
         if native_images.get(native_pair) != str(path):
@@ -440,10 +472,11 @@ def _validate_bundle(bundle_path: Path | str, root: Path, *, historical_source: 
         image["path"] = str(path)
     if seen_native_pairs != set(native_images):
         raise ValueError("Review omitted native captured images")
+    poses = fixed_camera_poses(plan)
     for site in native_sites.values():
         if site.get("reachedServerTicks", 0) < 100 or site.get("tickEligible") is not True:
             raise ValueError("Review site did not settle under ticking tickets")
-        if {i["view"] for i in site.get("images", [])} != VIEWS:
+        if not matches_site_views(site, poses):
             raise ValueError("Review site lacks required viewpoints")
     if not reduced:
         for biome in required_biomes:

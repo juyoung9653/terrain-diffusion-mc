@@ -56,6 +56,20 @@ final class Streams2162NetworkAccess {
     }
 
     static Object reassemble(Object network, List<?> segments, Object config, boolean filterSinks) {
+        return reassemble(network, segments, config,
+                filterSinks ? retainedSinks(network, segments) : sinks(network));
+    }
+
+    /** Rebuilds with only the specifically displaced native terminal sinks removed. */
+    static Object reassemble(Object network, List<?> segments, Object config, Set<Long> displacedSinks) {
+        List<Object> retained = new ArrayList<>();
+        for (Object sink : sinks(network)) {
+            if (!displacedSinks.contains(endpoint(sink, "x", "z"))) retained.add(sink);
+        }
+        return reassemble(network, segments, config, retained);
+    }
+
+    private static Object reassemble(Object network, List<?> segments, Object config, List<?> sinks) {
         try {
             ClassLoader loader = network.getClass().getClassLoader();
             Class<?> builder = Class.forName(BUILDER, false, loader);
@@ -63,8 +77,7 @@ final class Streams2162NetworkAccess {
             Class<?> reliefType = Class.forName("dev.streamsreflowing.core.NoDecompilePermissionEver_001", false, loader);
             Method assemble = builder.getMethod("proprietary1", keyType, List.class, List.class,
                     List.class, reliefType, config.getClass());
-            return assemble.invoke(null, key(network), segments, lakes(network),
-                    filterSinks ? retainedSinks(network, segments) : sinks(network), relief(network), config);
+            return assemble.invoke(null, key(network), segments, lakes(network), sinks, relief(network), config);
         } catch (ReflectiveOperationException error) {
             throw new IllegalStateException("Streams 2.16.2 graph reassembly contract changed", error);
         }
@@ -81,7 +94,7 @@ final class Streams2162NetworkAccess {
         return retained;
     }
 
-    private static long endpoint(Object value, String xName, String zName) {
+    static long endpoint(Object value, String xName, String zName) {
         try {
             double x = ((Number) value.getClass().getMethod(xName).invoke(value)).doubleValue();
             double z = ((Number) value.getClass().getMethod(zName).invoke(value)).doubleValue();

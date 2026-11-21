@@ -17,6 +17,18 @@ from memory_probe import disk_libraries
 
 
 class ReviewContractTest(unittest.TestCase):
+    def test_reported_pose_is_additional_and_cannot_be_replaced_by_another_view(self):
+        pose = {"x": 555.342, "y": 73.461, "z": 227.11, "yaw": -12.3, "pitch": 30.3}
+        poses = contract.fixed_camera_poses({"explicitSites": [
+            {"id": "reported", "x": 555, "z": 227, "fixedCamera": pose}]})
+        images = [{"view": view} for view in ("aerial", "side", "detail")]
+        site = {"id": "reported", "images": images}
+        self.assertFalse(contract.matches_site_views(site, poses))
+        images.append({"view": "reference", "camera": dict(pose)})
+        self.assertTrue(contract.matches_site_views(site, poses))
+        images[-1]["camera"]["yaw"] += 90
+        self.assertFalse(contract.matches_site_views(site, poses))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(dir=ROOT / ".tmp")
         self.addCleanup(temporary.cleanup)

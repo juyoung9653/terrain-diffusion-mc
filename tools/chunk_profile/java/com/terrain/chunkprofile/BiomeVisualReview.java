@@ -412,6 +412,9 @@ public final class BiomeVisualReview {
             Column observed = columns.stream().filter(column -> column.x == site.x && column.z == site.z).findFirst()
                     .orElseThrow(() -> new IllegalStateException("regression point was not observed"));
             add(selected, observed, site.id, "regression");
+            if (site.fixedCamera != null) {
+                selected.stream().filter(s -> s.id.equals(site.id)).findFirst().orElseThrow().fixedCamera = site.fixedCamera;
+            }
         }
         if (plan.scoped()) {
             for (String biome : plan.requiredBiomes)
@@ -697,6 +700,11 @@ public final class BiomeVisualReview {
                     server.submit(() -> server.getPlayerList().getPlayers().getFirst().setGameMode(GameType.SPECTATOR)).get(30, TimeUnit.SECONDS);
                     if (!awaitClientSpectator()) throw new IllegalStateException("client did not confirm spectator mode for underwater detail");
                 }
+                if (selected.fixedCamera != null) {
+                    FixedCamera camera = selected.fixedCamera;
+                    images.add(capture(selected, runId, "reference", camera.x, camera.y, camera.z,
+                            camera.yaw, camera.pitch, "fixed reference", null, null, null));
+                }
                 double aerialX = selected.x + 16.5, aerialZ = selected.z + 16.5;
                 double aerialY = actual.groundY + Math.max(32D, actual.waterDepth + 32D);
                 images.add(capture(selected, runId, "aerial", aerialX, aerialY, aerialZ,
@@ -711,20 +719,27 @@ public final class BiomeVisualReview {
                         aimYaw(side.x, side.z, sideTarget.x + .5, sideTarget.z + .5),
                         aimPitch(side.x, side.y + 1.62, side.z, sideTarget.x + .5, sideTarget.y, sideTarget.z + .5), side.obstruction, side.lineOfSight,
                         side.visibilityClearRays, side.visibilityRayCount));
-                CrownSample waterlineCrown = selected.inspection != null
-                        && "waterline".equals(selected.inspection.request.detailView)
+                boolean waterline = selected.inspection != null
+                        && "waterline".equals(selected.inspection.request.detailView);
+                CrownSample waterlineCrown = waterline
                         ? server.submit(() -> coralCrown(level, captureActual)).get(30, TimeUnit.SECONDS) : null;
-                if (selected.inspection != null && "waterline".equals(selected.inspection.request.detailView)
-                        && waterlineCrown == null)
-                    throw new IllegalStateException("waterline detail found no coral crown near " + selected.id);
-                ViewTarget detailTarget = waterlineCrown == null
-                        ? inspectionTarget(selected.inspection, actual, currentInspectionEndpoints, true)
-                        : new ViewTarget(waterlineCrown.x, waterlineCrown.z, waterlineCrown.y + .5);
+                ViewTarget detailTarget;
+                if (waterlineCrown != null) {
+                    detailTarget = new ViewTarget(waterlineCrown.x, waterlineCrown.z, waterlineCrown.y + .5);
+                } else if (waterline) {
+                    int surface = server.submit(() -> topWater(level, captureActual.x, captureActual.z,
+                            captureActual.surfaceY)).get(30, TimeUnit.SECONDS);
+                    if (surface == Integer.MIN_VALUE)
+                        throw new IllegalStateException("waterline detail found no water at " + selected.id);
+                    detailTarget = new ViewTarget(actual.x, actual.z, surface + .9);
+                } else {
+                    detailTarget = inspectionTarget(selected.inspection, actual, currentInspectionEndpoints, true);
+                }
                 List<Vec3> detailContext = !currentProfile.isEmpty() ? detailProfileTargets(currentProfile)
                         : server.submit(() -> rootTargets(level, captureActual, selected.inspection)).get(30, TimeUnit.SECONDS);
                 List<Column> detailProfile = currentProfile;
                 Camera detail = server.submit(() -> openDetailCamera(level, detailTarget.x, detailTarget.z, captureActual.groundY,
-                        underwaterDetail, detailTarget.y, detailContext, detailProfile, waterlineCrown != null)).get(30, TimeUnit.SECONDS);
+                        underwaterDetail, detailTarget.y, detailContext, detailProfile, waterline)).get(30, TimeUnit.SECONDS);
                 Map<String, Object> detailImage = capture(selected, runId, "detail", detail.x, detail.y, detail.z,
                         aimYaw(detail.x, detail.z, detailTarget.x + .5, detailTarget.z + .5),
                         aimPitch(detail.x, detail.y + 1.62, detail.z, detailTarget.x + .5, detailTarget.y, detailTarget.z + .5), detail.obstruction, detail.lineOfSight,
@@ -1039,7 +1054,20 @@ public final class BiomeVisualReview {
     private static void atomic(Path path, Object value) throws IOException { Path temp = path.resolveSibling(path.getFileName() + ".tmp"); Files.writeString(temp, JSON.toJson(value)); Files.move(temp, path, java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE); }
 
     private record Window(String id, int minX, int maxX, int minZ, int maxZ) { }
-    private record Explicit(String id, int x, int z) { }
+    private record Explicit(String id, int x, int z, FixedCamera fixedCamera) { }
+    private record FixedCamera(double x, double y, double z, float yaw, float pitch) {
+        static FixedCamera parse(Object raw) {
+            if (raw == null) return null;
+            if (!(raw instanceof Map<?,?> pose)) throw new IllegalArgumentException("invalid fixedCamera");
+            return new FixedCamera(value(pose, "x"), value(pose, "y"), value(pose, "z"),
+                    (float) value(pose, "yaw"), (float) value(pose, "pitch"));
+        }
+        private static double value(Map<?,?> pose, String key) {
+            if (!(pose.get(key) instanceof Number value) || !Double.isFinite(value.doubleValue()))
+                throw new IllegalArgumentException("invalid fixedCamera." + key);
+            return value.doubleValue();
+        }
+    }
     private record InspectionRequest(String id, int x, int z, String kind, String detailView) { }
     private record CrownSample(int x, int y, int z, String block, int waterTop) {
         int distance(Column column) { return Math.max(Math.abs(x-column.x),Math.abs(z-column.z)); }
@@ -1104,7 +1132,7 @@ public final class BiomeVisualReview {
     private record Column(int x, int z, String biome, int groundY, int surfaceY, int waterDepth, String bedBlock, String substrateClassification, boolean exposedWaterBed, boolean covered, String coveringBlock, LogSupport support, int cardinalHeightDelta, boolean boundary, boolean anomaly) {
         Map<String,Object> toMap() { Map<String,Object> result = new LinkedHashMap<>(); result.put("x",x); result.put("z",z); result.put("biome",biome); result.put("groundY",groundY); result.put("surfaceY",surfaceY); result.put("waterDepth",waterDepth); result.put("bedBlock",bedBlock); result.put("substrateClassification",substrateClassification); result.put("exposedWaterBed",exposedWaterBed); result.put("covered",covered); result.put("coveringBlock",coveringBlock); result.put("lowestLogY",support.lowestLogY); result.put("lowestLogBlock",support.lowestLogBlock); result.put("supportBlock",support.supportBlock); result.put("treeOnMud",support.treeOnMud); result.put("cardinalHeightDelta",cardinalHeightDelta); result.put("boundary",boundary); result.put("anomaly",anomaly); return result; }
     }
-    private static final class Selected { final String id; int x,z; String biome; final List<String> reasons; Column column; InspectionResolution inspection; Selected(String id,int x,int z,String biome,List<String> reasons,Column column){this(id,x,z,biome,reasons,column,null);} Selected(String id,int x,int z,String biome,List<String> reasons,Column column,InspectionResolution inspection){this.id=id;this.x=x;this.z=z;this.biome=biome;this.reasons=reasons;this.column=column;this.inspection=inspection;} void reanchor(Column anchor, InspectionResolution resolution){x=anchor.x;z=anchor.z;biome=anchor.biome;column=anchor;inspection=resolution;} }
+    private static final class Selected { FixedCamera fixedCamera; final String id; int x,z; String biome; final List<String> reasons; Column column; InspectionResolution inspection; Selected(String id,int x,int z,String biome,List<String> reasons,Column column){this(id,x,z,biome,reasons,column,null);} Selected(String id,int x,int z,String biome,List<String> reasons,Column column,InspectionResolution inspection){this.id=id;this.x=x;this.z=z;this.biome=biome;this.reasons=reasons;this.column=column;this.inspection=inspection;} void reanchor(Column anchor, InspectionResolution resolution){x=anchor.x;z=anchor.z;biome=anchor.biome;column=anchor;inspection=resolution;} }
     private record Selection(List<Selected> sites, List<String> gaps) {
         Map<String,Object> toMap(){ Map<String,Object> out=new LinkedHashMap<>(); out.put("schema",1);out.put("coverageGaps",gaps);out.put("sites",sites.stream().map(Selection::siteMap).toList());return out; }
         private static Map<String,Object> siteMap(Selected site){ Map<String,Object> out=new LinkedHashMap<>();out.put("id",site.id);out.put("x",site.x);out.put("z",site.z);out.put("biome",site.biome);out.put("reasons",site.reasons);out.put("column",site.column.toMap());if(site.inspection!=null)out.put("inspectionRequest",site.inspection.toMap());return out; }
@@ -1131,7 +1159,7 @@ public final class BiomeVisualReview {
         }
         @SuppressWarnings("unchecked") static List<String> strings(Object raw,String name){ if (!(raw instanceof List<?> rows)) throw new IllegalArgumentException(name+" must be an array"); List<String> out=new ArrayList<>(); for(Object v:rows){if(!(v instanceof String s)||s.isBlank())throw new IllegalArgumentException(name+" contains invalid id");out.add(s);} return out; }
         @SuppressWarnings("unchecked") static List<Window> windows(Object raw){ if (!(raw instanceof List<?> rows)) throw new IllegalArgumentException("windows must be an array"); List<Window> out=new ArrayList<>(); Set<String> ids=new LinkedHashSet<>(); for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException("window must be an object");String id=text(map.get("id"),"window id");int minX=num(map.get("minX"),"minX"),maxX=num(map.get("maxX"),"maxX"),minZ=num(map.get("minZ"),"minZ"),maxZ=num(map.get("maxZ"),"maxZ");if(!ids.add(id)||minX>maxX||minZ>maxZ||Math.floorMod(minX,16)!=0||Math.floorMod(minZ,16)!=0||Math.floorMod(maxX+1,16)!=0||Math.floorMod(maxZ+1,16)!=0)throw new IllegalArgumentException("window bounds must be unique inclusive whole chunks");out.add(new Window(id,minX,maxX,minZ,maxZ));}return out; }
-        @SuppressWarnings("unchecked") static List<Explicit> explicit(Object raw,String name){if(raw==null)return new ArrayList<>();if(!(raw instanceof List<?> rows))throw new IllegalArgumentException(name+" must be an array");List<Explicit> out=new ArrayList<>();for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException(name+" entry must object");out.add(new Explicit(text(map.get("id"),name+" id"),num(map.get("x"),"x"),num(map.get("z"),"z")));}return out;}
+        @SuppressWarnings("unchecked") static List<Explicit> explicit(Object raw,String name){if(raw==null)return new ArrayList<>();if(!(raw instanceof List<?> rows))throw new IllegalArgumentException(name+" must be an array");List<Explicit> out=new ArrayList<>();for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException(name+" entry must object");out.add(new Explicit(text(map.get("id"),name+" id"),num(map.get("x"),"x"),num(map.get("z"),"z"),FixedCamera.parse(map.get("fixedCamera"))));}return out;}
         @SuppressWarnings("unchecked") static List<InspectionRequest> inspectionRequests(Object raw, List<Window> windows){if(raw==null)return List.of();if(!(raw instanceof List<?> rows))throw new IllegalArgumentException("inspectionRequests must be an array");List<InspectionRequest> out=new ArrayList<>();Set<String> ids=new LinkedHashSet<>();for(Object row:rows){if(!(row instanceof Map<?,?> map))throw new IllegalArgumentException("inspection request must object");String id=text(map.get("id"),"inspection request id"),kind=text(map.get("kind"),"inspection request kind"),detail=map.get("detailView")==null?"bed":text(map.get("detailView"),"inspection detailView");if(!Set.of("root","bank","underwater","boundary").contains(kind))throw new IllegalArgumentException("unsupported inspection request kind "+kind);if(!Set.of("bed","waterline").contains(detail)||("waterline".equals(detail)&&!"underwater".equals(kind)))throw new IllegalArgumentException("waterline detailView requires underwater inspection");int x=num(map.get("x"),"inspection request x"),z=num(map.get("z"),"inspection request z");if(!ids.add(id)||!windows.stream().anyMatch(w->x>=w.minX&&x<=w.maxX&&z>=w.minZ&&z<=w.maxZ))throw new IllegalArgumentException("inspection request id must be unique and inside a window");out.add(new InspectionRequest(id,x,z,kind,detail));}return out;}
         @SuppressWarnings("unchecked")
         static Set<String> scopeSiteIds(Object raw) {

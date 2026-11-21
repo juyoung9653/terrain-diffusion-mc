@@ -116,6 +116,11 @@ public final class StreamsNaturalRiverAdapter {
         LocalTerrainProvider.setLargeRiverPlanningCache(false);
     }
 
+    /** Immutable TD model binding used by bounded network transforms; never reads live chunks. */
+    public static LocalTerrainProvider providerForNaturalGraph(Object config) {
+        return provider(config);
+    }
+
     private static LocalTerrainProvider provider(Object config) {
         LocalTerrainProvider provider = PROVIDERS.get(config);
         if (provider == null) throw new java.util.concurrent.CancellationException("Streams world has stopped");

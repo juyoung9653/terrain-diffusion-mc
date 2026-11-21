@@ -644,6 +644,56 @@ The earlier chunk-local `WetlandPools` feature is no longer invoked: it cannot
 produce a continuous flooded landscape across chunk boundaries. Existing chunks
 retain saved terrain and vegetation; inspect fresh chunks for this change.
 
+When investigating a river crossing a perched marsh, read the full column from
+the bed through both water surfaces. A Streams block is flowing water; an air gap
+or dirt cap can sit between it and a higher vanilla source. Compare the native
+river feature's input and output before checking the settled save. For a blunt
+end, follow the saved segments downstream to the actual terminal: the visible
+water wall can be several blocks upstream of it.
+
+For the November 21 reed-marsh report, reproduce with the player's **copied**
+V14 routing cache in a fresh fixture. Rebuilding that cache with the same seed
+moved the channel away from the reported bank. Count detached soil in the saved
+world and inspect its silhouette separately: a supported column can still look
+like a spire. Check the settled surface as well as feature completion; a nearby
+elevated stream source can refill the terminal after the carver returns.
+At the reported tip, trace the adjacent source column `(912,559)`, not only
+the terminal centre `(912,560)`. Streams 2.17.3 places a source above the
+planned channel, then its bank helper lines the four blocks beneath it with
+cobblestone. Later flowing blocks around the tip are a symptom of that source.
+Prepare each candidate clone with `--td-jar`; compare the manifest and the
+actual TD JAR in the clone's `mods` directory to the candidate hash. The run
+command rebuilds the diagnostic mod, not Terrain Diffusion.
+The [paired sections](build/marsh-river-nov21/before-after-r2.png) and
+[scoped review](build/biome-review-marsh-river-nov21-r2-copied/review.json)
+record the remaining stepped banks; this candidate was not visually accepted.
+The subsequent R6 experiment graded **connected** pond water to the channel,
+retained the divide around separate pools and lowered water beneath a canopy. Check
+full fluid properties: waterlogged seagrass is not an open face, and a falling
+column beside a high source is not itself a source. Count literal open faces
+under trees as well as in open terrain. In the later copied-cache
+[saved-block comparison](build/marsh-river-nov21/r6-spatial-physical-after.json),
+the overlap and terminal windows each went from three exposed fluid faces
+at least two blocks high to zero. The tip source settled at Y62 and the separate
+control pond stayed at Y65. The [height maps](build/marsh-river-nov21/marsh-confluence-r6.png)
+show those measurements. The player's subsequent ground-level view at
+`(555,73,227)` revealed long one-block steps that this metric cannot detect.
+For crossings, use the original wetland surface **and bed** as the reference:
+matching the river's level by lowering the pond is a failure. Check the dry
+approach separately against nearby soil banks, excluding trees and vegetation.
+
+In Streams 2.17.3 the saved graph around `(572,224)` runs **north out of**
+the pond. The model water level is exclusive; a level of 67 corresponds to
+Streams `ColumnPlan.waterSurfaceY=66` and saved water at Y66. Fit the dry
+reach before carving and leave the original wet bed alone. The
+[fixed outlet check](tools/biome_iteration/fixed_marsh_outlet.py) tests a
+continuous water path through both formerly dry rows. In the save-16
+[comparison](build/marsh-river-nov21/paired-reference-vs-r2-final.json),
+all 2,887 originally wet columns in the 96×96 reference area kept their water
+and bed heights. The [independent review](build/biome-review-marsh-channel-crossing-nov21-r2/review.json)
+passed the reported crossing, with minor observations about straight bank edges
+and sediment. These results describe the fixed sites, not all swamp biomes.
+
 The pictured `structory:swamp_ruin` uses native beard terrain adaptation outside
 its fixed stone templates. TD worlds now exclude that structure's native beard
 from `StructureBeardifierMixin`, removing the broad artificial terrain halo while
@@ -2256,6 +2306,16 @@ For isolated Streams material reproductions, copied TD markers belong under
 the run-directory root. Verify those locations and hashes before launch. Fresh
 chunks with a copied graph test material changes against old routing; they do
 not validate a routing fix. Use a separate fixture without that graph for it.
+For a full-modpack saved-route diagnosis, prepare the private client fixture with
+`--copy-streams-cache`; it copies every source `streamsreflowing` file and records
+its hash in the fixture manifest. It is incompatible with `--without-streams`.
+The first launch rechecks that copied starting state. A later review restart
+uses the post-generation cache frozen in `restart-input-manifest.json`, because
+Streams legitimately writes new plates while generating the first lifecycle.
+Use `--generation-trace-sites x,z;x,z` (at most eight columns) on the subsequent
+fresh run to record ordinary generation-stage profiles, actual writes and native
+Streams plans without a biome-review capture plan. The selected regions must
+generate those columns. Do not treat a copied-cache fixture as routing-fix evidence.
 The Streams suite checks this layout before launching any job, under the shared
 lock. It verifies declared mod hashes, and unrun fixtures' declared config and
 copied-state hashes. Use `--expect-river-cache fresh` for an unrun world without
@@ -2264,7 +2324,8 @@ graphs, or `present` to require saved graphs. New fixtures prepared with
 the actual copied-cache policy automatically; missing runtime metadata fails before
 copying. The first launch checks all copied hashes even when `level.dat` was copied.
 An explicit conflicting cache option is rejected. Later generated-world restarts
-inspect current cache state and continue checking mod hashes. For older fixtures,
+verify the post-generation state frozen after the first lifecycle and continue
+checking mod hashes. For older fixtures,
 omitting the option leaves cache state unconstrained. `--preflight-only` runs the
 same checks without starting Gradle or Minecraft (some checks use JDK tools).
 

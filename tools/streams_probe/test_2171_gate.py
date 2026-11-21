@@ -23,12 +23,14 @@ public class Gate2171Harness {
   public static void main(String[] ignored) {
     for (String version : new String[]{"2.13.8", "2.15.2", "2.16.2", "2.17.1", "2.17.2", "2.17.3", "2.17.4"}) {
       versions("streamsreflowing@"+version);
-      for (String name : new String[]{"StreamsBankMaterial2173Mixin", "StreamsShallowBed2173Mixin"})
+      for (String name : new String[]{"StreamsBankMaterial2173Mixin", "StreamsShallowBed2173Mixin", "StreamsMarshMouthStore2173Mixin", "StreamsWetlandHandoffEngine2173Mixin", "StreamsWetlandHandoffPlan2173Mixin", "StreamsWetlandHandoffLake2173Mixin"})
         ok(applies(name)==version.equals("2.17.3"),version+" exact bank/bed gate "+name);
     }
     versions();
     ok(!applies("StreamsBankMaterial2173Mixin"),"no Streams bank hook denied");
+    ok(!applies("StreamsMarshMouthStore2173Mixin"),"no Streams marsh mouth hook denied");
     ok(!applies("StreamsShallowBed2173Mixin"),"no Streams bed hook denied");
+    ok(!applies("StreamsWetlandHandoffPlan2173Mixin"),"no Streams wetland handoff denied");
     versions("streamsreflowing@2.17.1");
     ok(StreamsStructureShieldMixinPlugin.hasStartupAdapter(),"2.17.1 startup adapter");
     ok(StreamsStructureShieldMixinPlugin.isAuditedVersion("2.17.1"),"2.17.1 V14 audited");
@@ -80,6 +82,9 @@ public class Gate2171Harness {
     ok(applies("StreamsNaturalNetwork2173Mixin"),"2.17.3 network refinement");
     ok(applies("StreamsLandGrass2173Mixin"),"2.17.3 land-grass policy");
     ok(applies("StreamsSeagrassFeature2173Mixin"),"2.17.3 seagrass guard");
+    ok(applies("StreamsWetlandHandoffEngine2173Mixin"),"2.17.3 wetland engine handoff");
+    ok(applies("StreamsWetlandHandoffPlan2173Mixin"),"2.17.3 wetland plan handoff");
+    ok(applies("StreamsWetlandHandoffLake2173Mixin"),"2.17.3 wetland lake handoff");
     versions("streamsreflowing@2.17.4");
     ok(!StreamsStructureShieldMixinPlugin.hasStartupAdapter(),"2.17.4 startup denied");
     ok(!StreamsStructureShieldMixinPlugin.isAuditedVersion("2.17.4"),"2.17.4 audit denied");

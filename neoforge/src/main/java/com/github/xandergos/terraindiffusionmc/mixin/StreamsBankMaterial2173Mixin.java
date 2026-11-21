@@ -15,7 +15,7 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Pseudo;
 import org.spongepowered.asm.mixin.injection.At;
 
-/** Exact Streams 2.17.3 exposed-cap repair; native bank geometry otherwise remains native. */
+/** Terrain Diffusion's exposed-bank material integration for Streams 2.17.3. */
 @Pseudo
 @Mixin(targets = "dev.streamsreflowing.worldgen.RiverCarverFeature", remap = false)
 public final class StreamsBankMaterial2173Mixin {

@@ -38,6 +38,41 @@ class JavaWorkloadTest(unittest.TestCase):
                 self.assertEqual(RUN.active_java_workload(), blocking)
 
 
+class StreamsCacheAndGenerationTraceTest(unittest.TestCase):
+    def setUp(self):
+        root = ROOT / 'build/chunk-profile'
+        root.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(prefix='test-streams-cache-', dir=root)
+        self.path = Path(self.temp.name)
+
+    def tearDown(self):
+        RUN.manifest_root = None
+        self.temp.cleanup()
+
+    def test_generation_trace_sites_are_bounded_coordinate_pairs(self):
+        self.assertEqual(RUN._generation_trace_sites('582,254;-3,-4'), [(582, 254), (-3, -4)])
+        for value in ('', '1,2;', 'one,2', ';'.join(f'{n},0' for n in range(9))):
+            with self.assertRaisesRegex(RuntimeError, 'generation-trace-sites'):
+                RUN._generation_trace_sites(value)
+
+    def test_copy_streams_cache_hashes_each_staged_file_and_detects_mutation(self):
+        source = self.path / 'source'; output = self.path / 'target'
+        output_world = output / 'saves/chunk-profile'
+        cache = source / 'streamsreflowing/minecraft_overworld'
+        cache.mkdir(parents=True); output_world.mkdir(parents=True)
+        (cache / 'r.1.0.srn').write_bytes(b'route')
+        (cache / 't.1.0.srt').write_bytes(b'terrain')
+        RUN.manifest_root = output
+        files = {}
+        receipt = RUN._copy_streams_cache(source, output_world, files)
+        manifest = {'streams_cache': receipt}
+        RUN._verify_staged_streams_cache(output, manifest)
+        self.assertIn('saves/chunk-profile/streamsreflowing/minecraft_overworld/r.1.0.srn', files)
+        (output / 'saves/chunk-profile/streamsreflowing/minecraft_overworld/r.1.0.srn').write_bytes(b'changed')
+        with self.assertRaisesRegex(RuntimeError, 'copied Streams cache changed'):
+            RUN._verify_staged_streams_cache(output, manifest)
+
+
 class TdJarIdentityTest(unittest.TestCase):
     def setUp(self):
         root = ROOT / "build/chunk-profile"
@@ -332,6 +367,24 @@ class FastNoiseAuditReceiptTest(unittest.TestCase):
             RUN._verify_restart_inputs(target, snapshot)
             (target / 'config/settings').write_bytes(b'changed-after-first-run')
             with self.assertRaisesRegex(RuntimeError, 'config'):
+                RUN._verify_restart_inputs(target, snapshot)
+
+    def test_restart_snapshot_accepts_generated_streams_cache_then_freezes_it(self):
+        fixture_root = ROOT / 'build/chunk-profile'
+        fixture_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='test-restart-streams-cache-', dir=fixture_root) as raw:
+            target = Path(raw)
+            cache = target / 'saves/chunk-profile/streamsreflowing/minecraft_overworld'
+            cache.mkdir(parents=True)
+            # This is the cache state after the first lifecycle, including a
+            # plate Streams legitimately generated after the boot hash check.
+            (cache / 'r.1.0.srn').write_bytes(b'generated-route')
+            (target / 'config').mkdir()
+            (target / 'mods').mkdir()
+            snapshot = RUN._freeze_restart_inputs(target)
+            RUN._verify_restart_inputs(target, snapshot)
+            (cache / 'r.1.0.srn').write_bytes(b'changed-after-freeze')
+            with self.assertRaisesRegex(RuntimeError, 'saves/chunk-profile'):
                 RUN._verify_restart_inputs(target, snapshot)
 
 
